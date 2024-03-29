@@ -14,6 +14,7 @@ import org.elasticsearch.compute.operator.EvalOperator.ExpressionEvaluator;
 import org.elasticsearch.xpack.esql.expression.function.FunctionInfo;
 import org.elasticsearch.xpack.esql.expression.function.Param;
 import org.elasticsearch.xpack.esql.expression.function.scalar.EsqlScalarFunction;
+import org.elasticsearch.xpack.esql.type.EsqlDataTypes;
 import org.elasticsearch.xpack.ql.InvalidArgumentException;
 import org.elasticsearch.xpack.ql.expression.Expression;
 import org.elasticsearch.xpack.ql.expression.function.OptionalArgument;
@@ -35,10 +36,11 @@ import java.util.Set;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 
+import static org.elasticsearch.xpack.esql.type.EsqlDataTypeConverter.castStringLiteralToDatetime;
+import static org.elasticsearch.xpack.esql.type.EsqlDataTypeConverter.isStringOrDate;
 import static org.elasticsearch.xpack.ql.expression.TypeResolutions.ParamOrdinal.FIRST;
 import static org.elasticsearch.xpack.ql.expression.TypeResolutions.ParamOrdinal.SECOND;
 import static org.elasticsearch.xpack.ql.expression.TypeResolutions.ParamOrdinal.THIRD;
-import static org.elasticsearch.xpack.ql.expression.TypeResolutions.isDate;
 import static org.elasticsearch.xpack.ql.expression.TypeResolutions.isString;
 import static org.elasticsearch.xpack.ql.type.DataTypeConverter.safeToInt;
 
@@ -155,8 +157,12 @@ public class DateDiff extends EsqlScalarFunction implements OptionalArgument {
 
     @Override
     public ExpressionEvaluator.Factory toEvaluator(Function<Expression, ExpressionEvaluator.Factory> toEvaluator) {
-        ExpressionEvaluator.Factory startTimestampEvaluator = toEvaluator.apply(startTimestamp);
-        ExpressionEvaluator.Factory endTimestampEvaluator = toEvaluator.apply(endTimestamp);
+        ExpressionEvaluator.Factory startTimestampEvaluator = toEvaluator.apply(
+            EsqlDataTypes.isString(startTimestamp.dataType()) ? castStringLiteralToDatetime(startTimestamp) : startTimestamp
+        );
+        ExpressionEvaluator.Factory endTimestampEvaluator = toEvaluator.apply(
+            EsqlDataTypes.isString(endTimestamp.dataType()) ? castStringLiteralToDatetime(endTimestamp) : endTimestamp
+        );
 
         if (unit.foldable()) {
             try {
@@ -176,8 +182,8 @@ public class DateDiff extends EsqlScalarFunction implements OptionalArgument {
             return new TypeResolution("Unresolved children");
         }
 
-        TypeResolution resolution = isString(unit, sourceText(), FIRST).and(isDate(startTimestamp, sourceText(), SECOND))
-            .and(isDate(endTimestamp, sourceText(), THIRD));
+        TypeResolution resolution = isString(unit, sourceText(), FIRST).and(isStringOrDate(startTimestamp, sourceText(), SECOND))
+            .and(isStringOrDate(endTimestamp, sourceText(), THIRD));
 
         if (resolution.unresolved()) {
             return resolution;

@@ -31,8 +31,9 @@ import java.util.function.Function;
 
 import static org.elasticsearch.xpack.esql.expression.EsqlTypeResolutions.isStringAndExact;
 import static org.elasticsearch.xpack.esql.type.EsqlDataTypeConverter.EsqlConverter.STRING_TO_CHRONO_FIELD;
+import static org.elasticsearch.xpack.esql.type.EsqlDataTypeConverter.castStringLiteralToDatetime;
 import static org.elasticsearch.xpack.esql.type.EsqlDataTypeConverter.chronoToLong;
-import static org.elasticsearch.xpack.ql.expression.TypeResolutions.isDate;
+import static org.elasticsearch.xpack.esql.type.EsqlDataTypeConverter.isStringOrDate;
 
 public class DateExtract extends EsqlConfigurationFunction {
 
@@ -58,7 +59,10 @@ public class DateExtract extends EsqlConfigurationFunction {
 
     @Override
     public ExpressionEvaluator.Factory toEvaluator(Function<Expression, ExpressionEvaluator.Factory> toEvaluator) {
-        var fieldEvaluator = toEvaluator.apply(children().get(1));
+        Expression dateField = children().get(1);
+        var fieldEvaluator = toEvaluator.apply(
+            EsqlDataTypes.isString(dateField.dataType()) ? castStringLiteralToDatetime(dateField) : dateField
+        );
         if (children().get(0).foldable()) {
             ChronoField chrono = chronoField();
             if (chrono == null) {
@@ -118,7 +122,7 @@ public class DateExtract extends EsqlConfigurationFunction {
             return new TypeResolution("Unresolved children");
         }
         return isStringAndExact(children().get(0), sourceText(), TypeResolutions.ParamOrdinal.FIRST).and(
-            isDate(children().get(1), sourceText(), TypeResolutions.ParamOrdinal.SECOND)
+            isStringOrDate(children().get(1), sourceText(), TypeResolutions.ParamOrdinal.SECOND)
         );
     }
 

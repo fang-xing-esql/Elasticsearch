@@ -27,9 +27,10 @@ import java.time.ZoneId;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
+import static org.elasticsearch.xpack.esql.type.EsqlDataTypeConverter.castStringLiteralToDatetime;
+import static org.elasticsearch.xpack.esql.type.EsqlDataTypeConverter.isStringOrDate;
 import static org.elasticsearch.xpack.ql.expression.TypeResolutions.ParamOrdinal.FIRST;
 import static org.elasticsearch.xpack.ql.expression.TypeResolutions.ParamOrdinal.SECOND;
-import static org.elasticsearch.xpack.ql.expression.TypeResolutions.isDate;
 import static org.elasticsearch.xpack.ql.expression.TypeResolutions.isType;
 
 public class DateTrunc extends BinaryDateTimeFunction implements EvaluatorMapper {
@@ -55,7 +56,7 @@ public class DateTrunc extends BinaryDateTimeFunction implements EvaluatorMapper
             return new TypeResolution("Unresolved children");
         }
 
-        return isDate(timestampField(), sourceText(), FIRST).and(
+        return isStringOrDate(timestampField(), sourceText(), FIRST).and(
             isType(interval(), EsqlDataTypes::isTemporalAmount, sourceText(), SECOND, "dateperiod", "timeduration")
         );
     }
@@ -146,7 +147,9 @@ public class DateTrunc extends BinaryDateTimeFunction implements EvaluatorMapper
 
     @Override
     public ExpressionEvaluator.Factory toEvaluator(Function<Expression, ExpressionEvaluator.Factory> toEvaluator) {
-        var fieldEvaluator = toEvaluator.apply(timestampField());
+        var fieldEvaluator = toEvaluator.apply(
+            EsqlDataTypes.isString(timestampField().dataType()) ? castStringLiteralToDatetime(timestampField()) : timestampField()
+        );
         Expression interval = interval();
         if (interval.foldable() == false) {
             throw new IllegalArgumentException("Function [" + sourceText() + "] has invalid interval [" + interval().sourceText() + "].");

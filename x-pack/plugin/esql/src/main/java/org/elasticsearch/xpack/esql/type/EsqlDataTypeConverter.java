@@ -16,10 +16,15 @@ import org.elasticsearch.search.DocValueFormat;
 import org.elasticsearch.xpack.esql.parser.ParsingException;
 import org.elasticsearch.xpack.ql.InvalidArgumentException;
 import org.elasticsearch.xpack.ql.QlIllegalArgumentException;
+import org.elasticsearch.xpack.ql.expression.Expression;
+import org.elasticsearch.xpack.ql.expression.Foldables;
+import org.elasticsearch.xpack.ql.expression.Literal;
+import org.elasticsearch.xpack.ql.expression.TypeResolutions;
 import org.elasticsearch.xpack.ql.tree.Source;
 import org.elasticsearch.xpack.ql.type.Converter;
 import org.elasticsearch.xpack.ql.type.DataType;
 import org.elasticsearch.xpack.ql.type.DataTypeConverter;
+import org.elasticsearch.xpack.ql.type.DataTypes;
 import org.elasticsearch.xpack.ql.util.NumericUtils;
 import org.elasticsearch.xpack.ql.util.StringUtils;
 import org.elasticsearch.xpack.versionfield.Version;
@@ -40,6 +45,7 @@ import static org.elasticsearch.xpack.ql.type.DataTypeConverter.safeToInt;
 import static org.elasticsearch.xpack.ql.type.DataTypeConverter.safeToLong;
 import static org.elasticsearch.xpack.ql.type.DataTypeConverter.safeToUnsignedLong;
 import static org.elasticsearch.xpack.ql.type.DataTypes.NULL;
+import static org.elasticsearch.xpack.ql.type.DataTypes.isDateTime;
 import static org.elasticsearch.xpack.ql.type.DataTypes.isPrimitive;
 import static org.elasticsearch.xpack.ql.type.DataTypes.isString;
 import static org.elasticsearch.xpack.ql.util.NumericUtils.ONE_AS_UNSIGNED_LONG;
@@ -69,6 +75,9 @@ public class EsqlDataTypeConverter {
 
     public static Converter converterFor(DataType from, DataType to) {
         // TODO move EXPRESSION_TO_LONG here if there is no regression
+        if (isString(from) && isDateTime(to)) {
+            return EsqlConverter.STRING_TO_DATETIME;
+        }
         Converter converter = DataTypeConverter.converterFor(from, to);
         if (converter != null) {
             return converter;
@@ -349,7 +358,8 @@ public class EsqlDataTypeConverter {
 
         STRING_TO_DATE_PERIOD(x -> EsqlDataTypeConverter.parseTemporalAmount(x, EsqlDataTypes.DATE_PERIOD)),
         STRING_TO_TIME_DURATION(x -> EsqlDataTypeConverter.parseTemporalAmount(x, EsqlDataTypes.TIME_DURATION)),
-        STRING_TO_CHRONO_FIELD(EsqlDataTypeConverter::stringToChrono);
+        STRING_TO_CHRONO_FIELD(EsqlDataTypeConverter::stringToChrono),
+        STRING_TO_DATETIME(x -> EsqlDataTypeConverter.dateTimeToLong((String) x));
 
         private static final String NAME = "esql-converter";
         private final Function<Object, Object> converter;
@@ -378,6 +388,30 @@ public class EsqlDataTypeConverter {
                 return null;
             }
             return converter.apply(l);
+        }
+    }
+
+    public static Expression.TypeResolution isStringOrDate(Expression e, String operationName, TypeResolutions.ParamOrdinal paramOrd) {
+        return TypeResolutions.isType(
+            e,
+            exp -> DataTypes.isString(exp) || DataTypes.isDateTime(exp),
+            operationName,
+            paramOrd,
+            "datetime",
+            "string"
+        );
+    }
+
+    public static Literal castStringLiteralToDatetime(Expression field) {
+        if (field.foldable()) {
+            Object value = Foldables.valueOf(field);
+            return new Literal(
+                Source.EMPTY,
+                EsqlDataTypeConverter.convert(((BytesRef) value).utf8ToString(), DataTypes.DATETIME),
+                DataTypes.DATETIME
+            );
+        } else {
+            throw new InvalidArgumentException("Cannot cast a String field to " + DataTypes.DATETIME);
         }
     }
 }

@@ -88,7 +88,7 @@ public class DateDiffTests extends AbstractFunctionTestCase {
                             new TestCaseSupplier.TypedData(zdtStart.toInstant().toEpochMilli(), DataTypes.INTEGER, "startTimestamp"),
                             new TestCaseSupplier.TypedData(zdtEnd.toInstant().toEpochMilli(), DataTypes.DATETIME, "endTimestamp")
                         ),
-                        "second argument of [] must be [datetime], found value [startTimestamp] type [integer]"
+                        "second argument of [] must be [datetime or string], found value [startTimestamp] type [integer]"
                     )
                 ),
                 new TestCaseSupplier(
@@ -100,7 +100,7 @@ public class DateDiffTests extends AbstractFunctionTestCase {
                             new TestCaseSupplier.TypedData(zdtStart.toInstant().toEpochMilli(), DataTypes.DATETIME, "startTimestamp"),
                             new TestCaseSupplier.TypedData(zdtEnd.toInstant().toEpochMilli(), DataTypes.INTEGER, "endTimestamp")
                         ),
-                        "third argument of [] must be [datetime], found value [endTimestamp] type [integer]"
+                        "third argument of [] must be [datetime or string], found value [endTimestamp] type [integer]"
                     )
                 )
             )

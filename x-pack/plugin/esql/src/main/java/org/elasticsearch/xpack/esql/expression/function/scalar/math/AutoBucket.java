@@ -19,6 +19,7 @@ import org.elasticsearch.xpack.esql.expression.function.scalar.EsqlScalarFunctio
 import org.elasticsearch.xpack.esql.expression.function.scalar.date.DateTrunc;
 import org.elasticsearch.xpack.esql.expression.predicate.operator.arithmetic.Div;
 import org.elasticsearch.xpack.esql.expression.predicate.operator.arithmetic.Mul;
+import org.elasticsearch.xpack.esql.type.EsqlDataTypeConverter;
 import org.elasticsearch.xpack.ql.common.Failures;
 import org.elasticsearch.xpack.ql.expression.Expression;
 import org.elasticsearch.xpack.ql.expression.Foldables;
@@ -177,7 +178,7 @@ public class AutoBucket extends EsqlScalarFunction implements Validatable {
         }
 
         if (field.dataType() == DataTypes.DATETIME) {
-            return resolveType((e, o) -> isStringOrDate(e, sourceText(), o));
+            return resolveType((e, o) -> EsqlDataTypeConverter.isStringOrDate(e, sourceText(), o));
         }
         if (field.dataType().isNumeric()) {
             return resolveType((e, o) -> isNumeric(e, sourceText(), o));
@@ -191,17 +192,6 @@ public class AutoBucket extends EsqlScalarFunction implements Validatable {
             return resolution;
         }
         return checkThirdAndForth.apply(from, THIRD).and(checkThirdAndForth.apply(to, FOURTH));
-    }
-
-    public static TypeResolution isStringOrDate(Expression e, String operationName, TypeResolutions.ParamOrdinal paramOrd) {
-        return TypeResolutions.isType(
-            e,
-            exp -> DataTypes.isString(exp) || DataTypes.isDateTime(exp),
-            operationName,
-            paramOrd,
-            "datetime",
-            "string"
-        );
     }
 
     @Override

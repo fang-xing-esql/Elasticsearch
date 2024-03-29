@@ -180,6 +180,9 @@ public abstract class AbstractScalarFunctionTestCase extends AbstractFunctionTes
         if (withoutNull.equals(List.of(DataTypes.IP))) {
             return "ip";
         }
+        if (withoutNull.equals(List.of(DataTypes.DATETIME, DataTypes.KEYWORD, DataTypes.TEXT))) {
+            return "datetime or string";
+        }
         List<DataType> negations = Stream.concat(Stream.of(numerics()), Stream.of(EsqlDataTypes.DATE_PERIOD, EsqlDataTypes.TIME_DURATION))
             .sorted(Comparator.comparing(DataType::name))
             .toList();

@@ -129,7 +129,7 @@ public class DateExtractTests extends AbstractScalarFunctionTestCase {
 
     @Override
     protected List<ArgumentSpec> argSpec() {
-        return List.of(required(strings()), required(DataTypes.DATETIME));
+        return List.of(required(strings()), required(DataTypes.DATETIME, DataTypes.KEYWORD, DataTypes.TEXT));
     }
 
     @Override

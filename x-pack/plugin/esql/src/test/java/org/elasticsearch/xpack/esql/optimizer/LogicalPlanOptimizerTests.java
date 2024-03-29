@@ -11,6 +11,7 @@ import org.elasticsearch.common.logging.LoggerMessageFormat;
 import org.elasticsearch.common.lucene.BytesRefs;
 import org.elasticsearch.compute.aggregation.QuantileStates;
 import org.elasticsearch.test.ESTestCase;
+import org.elasticsearch.test.junit.annotations.TestLogging;
 import org.elasticsearch.xpack.esql.EsqlTestUtils;
 import org.elasticsearch.xpack.esql.TestBlockFactory;
 import org.elasticsearch.xpack.esql.VerificationException;
@@ -160,7 +161,7 @@ import static org.hamcrest.Matchers.instanceOf;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.startsWith;
 
-//@TestLogging(value = "org.elasticsearch.xpack.esql:TRACE", reason = "debug")
+@TestLogging(value = "org.elasticsearch.xpack.esql:TRACE", reason = "debug")
 public class LogicalPlanOptimizerTests extends ESTestCase {
 
     private static final Literal ONE = L(1);
@@ -216,9 +217,8 @@ public class LogicalPlanOptimizerTests extends ESTestCase {
 
     public void testEmptyProjections() {
         var plan = plan("""
-            from test
-            | keep salary
-            | drop salary
+            ROW date1="2023-12-02", date2="2023-12-03T11:00:00.001Z"
+            | EVAL dd_ns1=date_diff("second", date1, date2)
             """);
 
         var relation = as(plan, LocalRelation.class);

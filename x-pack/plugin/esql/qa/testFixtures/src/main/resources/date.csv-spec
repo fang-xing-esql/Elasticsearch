@@ -477,6 +477,15 @@ date1:date          |         date2:date          |    dd_ms:integer
 // end::docsDateDiff-result[]
 ;
 
+evalDateDiffCast#[skip:-8.13.99, reason:date_diff added in 8.14]
+ROW date1 = "2023-12-02T11:00:00.000Z"
+| EVAL dd_s = DATE_DIFF("second", date1, "2023-12-03T11:00:00.000Z")
+;
+
+date1:keyword            | dd_s:integer
+2023-12-02T11:00:00.000Z | 86400
+;
+
 evalDateParseWithSimpleDate
 row a = "2023-02-01" | eval b = date_parse("yyyy-MM-dd", a) | keep b;
 
@@ -1062,6 +1071,15 @@ FROM sample_data
 // tag::docsDateExtractBusinessHours-result[]
 @timestamp:date       |   client_ip:ip   |event_duration:long |       message:keyword
 // end::docsDateExtractBusinessHours-result[]
+;
+
+dateExtractCast
+ROW date = "2022-05-06"
+| EVAL year = DATE_EXTRACT("year", date)
+;
+
+date:keyword              | year:long
+2022-05-06                | 2022
 ;
 
 docsDateFormat
