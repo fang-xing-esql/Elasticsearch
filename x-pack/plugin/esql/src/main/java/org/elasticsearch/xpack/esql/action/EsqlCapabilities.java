@@ -453,7 +453,12 @@ public class EsqlCapabilities {
          * - Introduce BinaryPlan and co
          * - Refactor INLINESTATS and LOOKUP as a JOIN block
          */
-        JOIN_PLANNING_V1(Build.current().isSnapshot());
+        JOIN_PLANNING_V1(Build.current().isSnapshot()),
+
+        /**
+         * Support implicit casting from string literal to boolean for AND, OR and NOT.
+         */
+        IMPLICIT_CASTING_STRING_LITERAL_TO_BOOLEAN_FOR_LOGICAL_OPERATORS;
 
         private final boolean enabled;
 

@@ -32,10 +32,12 @@ import java.util.Set;
 
 import static org.elasticsearch.xpack.esql.EsqlTestUtils.paramAsConstant;
 import static org.elasticsearch.xpack.esql.EsqlTestUtils.withDefaultLimitWarning;
+import static org.elasticsearch.xpack.esql.analysis.AnalyzerTestUtils.analyze;
 import static org.elasticsearch.xpack.esql.analysis.AnalyzerTestUtils.loadMapping;
 import static org.elasticsearch.xpack.esql.core.type.DataType.COUNTER_DOUBLE;
 import static org.elasticsearch.xpack.esql.core.type.DataType.COUNTER_INTEGER;
 import static org.elasticsearch.xpack.esql.core.type.DataType.COUNTER_LONG;
+import static org.elasticsearch.xpack.esql.core.type.DataType.NULL;
 import static org.elasticsearch.xpack.esql.core.type.DataType.UNSIGNED_LONG;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
@@ -298,6 +300,123 @@ public class VerifierTests extends ESTestCase {
         );
         String error = error("from test | eval x = func(languages) | eval y = coalesce(x, languages, 0 )");
         assertThat(error, containsString("function [func]"));
+    }
+
+    public void testImplicitCastingForLogicalOperators() {
+        // negative
+        // AND
+        for (Object bool : List.of(1, 2.0)) {
+            var e = expectThrows(VerificationException.class, () -> analyze("from test | where 1==1 and " + bool));
+            assertThat(
+                e.getMessage(),
+                containsString(
+                    "line 1:19: second argument of [1==1 and "
+                        + bool
+                        + "] must be [boolean], found value ["
+                        + bool
+                        + "] type ["
+                        + DataType.fromJava(bool).toString().toLowerCase(Locale.ROOT)
+                        + "]"
+                )
+            );
+            e = expectThrows(VerificationException.class, () -> analyze("from test | stats count(*) where 1==1 and " + bool));
+            assertThat(
+                e.getMessage(),
+                containsString(
+                    "line 1:34: second argument of [1==1 and "
+                        + bool
+                        + "] must be [boolean], found value ["
+                        + bool
+                        + "] type ["
+                        + DataType.fromJava(bool).toString().toLowerCase(Locale.ROOT)
+                        + "]"
+                )
+            );
+        }
+        // OR
+        for (Object bool : List.of(1, 2.0)) {
+            var e = expectThrows(VerificationException.class, () -> analyze("from test | where 1==0 or " + bool));
+            assertThat(
+                e.getMessage(),
+                containsString(
+                    "line 1:19: second argument of [1==0 or "
+                        + bool
+                        + "] must be [boolean], found value ["
+                        + bool
+                        + "] type ["
+                        + DataType.fromJava(bool).toString().toLowerCase(Locale.ROOT)
+                        + "]"
+                )
+            );
+            e = expectThrows(VerificationException.class, () -> analyze("from test | stats count(*) where 1==0 or " + bool));
+            assertThat(
+                e.getMessage(),
+                containsString(
+                    "line 1:34: second argument of [1==0 or "
+                        + bool
+                        + "] must be [boolean], found value ["
+                        + bool
+                        + "] type ["
+                        + DataType.fromJava(bool).toString().toLowerCase(Locale.ROOT)
+                        + "]"
+                )
+            );
+        }
+        // NOT
+        for (Object bool : List.of(1, 2.0)) {
+            var e = expectThrows(VerificationException.class, () -> analyze("from test | where not " + bool));
+            assertThat(
+                e.getMessage(),
+                containsString(
+                    "line 1:19: argument of [not "
+                        + bool
+                        + "] must be [boolean], found value ["
+                        + bool
+                        + "] type ["
+                        + DataType.fromJava(bool).toString().toLowerCase(Locale.ROOT)
+                        + "]"
+                )
+            );
+            e = expectThrows(VerificationException.class, () -> analyze("from test | stats count(*) where not " + bool));
+            assertThat(
+                e.getMessage(),
+                containsString(
+                    "line 1:34: argument of [not "
+                        + bool
+                        + "] must be [boolean], found value ["
+                        + bool
+                        + "] type ["
+                        + DataType.fromJava(bool).toString().toLowerCase(Locale.ROOT)
+                        + "]"
+                )
+            );
+        }
+
+        // There is no implicit casting for non logical operators
+        for (Object bool : List.of("\"true\"", "\"false\"", "\"nonBoolString\"", 1, 2.0, "Null")) {
+            var e = expectThrows(VerificationException.class, () -> analyze("from test | where " + bool));
+            assertThat(
+                e.getMessage(),
+                containsString(
+                    "line 1:19: Condition expression needs to be boolean, found ["
+                        + (bool.equals("Null") ? NULL.toString().toUpperCase(Locale.ROOT) :
+                        DataType.fromJava(bool).toString().toUpperCase(Locale.ROOT))
+                        + "]"
+                )
+            );
+            // The test below fails until #116116 is resolved.
+            /*
+            e = expectThrows(VerificationException.class, () -> analyze("from test | stats count(*) where " + bool));
+            assertThat(
+                e.getMessage(),
+                containsString(
+                    "line 1:34: Condition expression needs to be boolean, found ["
+                        + DataType.fromJava(bool).toString().toUpperCase(Locale.ROOT)
+                        + "]"
+                )
+            );
+             */
+        }
     }
 
     public void testAggsExpressionsInStatsAggs() {

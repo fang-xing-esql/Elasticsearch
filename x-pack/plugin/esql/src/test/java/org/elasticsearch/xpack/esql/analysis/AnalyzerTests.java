@@ -25,10 +25,14 @@ import org.elasticsearch.xpack.esql.core.expression.Literal;
 import org.elasticsearch.xpack.esql.core.expression.NamedExpression;
 import org.elasticsearch.xpack.esql.core.expression.ReferenceAttribute;
 import org.elasticsearch.xpack.esql.core.expression.UnresolvedAttribute;
+import org.elasticsearch.xpack.esql.core.expression.predicate.logical.And;
+import org.elasticsearch.xpack.esql.core.expression.predicate.logical.Not;
+import org.elasticsearch.xpack.esql.core.expression.predicate.logical.Or;
 import org.elasticsearch.xpack.esql.core.type.DataType;
 import org.elasticsearch.xpack.esql.enrich.ResolvedEnrichPolicy;
 import org.elasticsearch.xpack.esql.expression.function.EsqlFunctionRegistry;
 import org.elasticsearch.xpack.esql.expression.function.aggregate.Count;
+import org.elasticsearch.xpack.esql.expression.function.aggregate.FilteredExpression;
 import org.elasticsearch.xpack.esql.expression.function.aggregate.Max;
 import org.elasticsearch.xpack.esql.expression.function.aggregate.Min;
 import org.elasticsearch.xpack.esql.index.EsIndex;
@@ -54,6 +58,7 @@ import org.elasticsearch.xpack.esql.session.IndexResolver;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
@@ -2049,6 +2054,121 @@ public class AnalyzerTests extends ESTestCase {
             """));
 
         assertThat(e.getMessage(), containsString("[+] has arguments with incompatible types [datetime] and [datetime]"));
+    }
+
+    public void testImplicitCastingForLogicalOperators() {
+        // positive
+        // AND
+        for (String boolLeft : List.of("true", "False", "\"True\"", "\"false\"", "\"nonBoolString\"")) {
+            for (String boolRight : List.of("True", "false", "\"true\"", "\"False\"", "\"nonBoolString\"")) {
+                Literal ll = boolLeft.toLowerCase(Locale.ROOT).contains("true") ? Literal.TRUE : Literal.FALSE;
+                Literal rl = boolRight.toLowerCase(Locale.ROOT).contains("true") ? Literal.TRUE : Literal.FALSE;
+
+                LogicalPlan plan = analyze("from test | where " + boolLeft + " and " + boolRight);
+                var limit = as(plan, Limit.class);
+                var filter = as(limit.child(), Filter.class);
+                var and = as(filter.condition(), And.class);
+                var left = as(and.left(), Literal.class);
+                var right = as(and.right(), Literal.class);
+                assertEquals(ll, left);
+                assertEquals(rl, right);
+
+                plan = analyze("from test | stats count(*) where " + boolLeft + " and " + boolRight);
+                limit = as(plan, Limit.class);
+                var aggregate = as(limit.child(), Aggregate.class);
+                var alias = as(aggregate.aggregates().get(0), Alias.class);
+                var filteredExp = as(alias.child(), FilteredExpression.class);
+                and = as(filteredExp.filter(), And.class);
+                left = as(and.left(), Literal.class);
+                right = as(and.right(), Literal.class);
+                assertEquals(ll, left);
+                assertEquals(rl, right);
+            }
+        }
+        // OR
+        for (String boolLeft : List.of("true", "False", "\"True\"", "\"false\"", "\"nonBoolString\"")) {
+            for (String boolRight : List.of("True", "false", "\"true\"", "\"False\"", "\"nonBoolString\"")) {
+                Literal ll = boolLeft.toLowerCase(Locale.ROOT).contains("true") ? Literal.TRUE : Literal.FALSE;
+                Literal rl = boolRight.toLowerCase(Locale.ROOT).contains("true") ? Literal.TRUE : Literal.FALSE;
+
+                LogicalPlan plan = analyze("from test | where " + boolLeft + " or " + boolRight);
+                var limit = as(plan, Limit.class);
+                var filter = as(limit.child(), Filter.class);
+                var or = as(filter.condition(), Or.class);
+                var left = as(or.left(), Literal.class);
+                var right = as(or.right(), Literal.class);
+                assertEquals(ll, left);
+                assertEquals(rl, right);
+
+                plan = analyze("from test | stats count(*) where " + boolLeft + " or " + boolRight);
+                limit = as(plan, Limit.class);
+                var aggregate = as(limit.child(), Aggregate.class);
+                var alias = as(aggregate.aggregates().get(0), Alias.class);
+                var filteredExp = as(alias.child(), FilteredExpression.class);
+                or = as(filteredExp.filter(), Or.class);
+                left = as(or.left(), Literal.class);
+                right = as(or.right(), Literal.class);
+                assertEquals(ll, left);
+                assertEquals(rl, right);
+            }
+        }
+        // NOT
+        for (String bool : List.of("\"true\"", "\"False\"", "\"nonBoolString\"")) {
+            LogicalPlan plan = analyze("from test | where not " + bool);
+            Literal l = bool.toLowerCase(Locale.ROOT).contains("true") ? Literal.TRUE : Literal.FALSE;
+            var limit = as(plan, Limit.class);
+            var filter = as(limit.child(), Filter.class);
+            var not = as(filter.condition(), Not.class);
+            var field = as(not.field(), Literal.class);
+            assertEquals(l, field);
+
+            plan = analyze("from test | stats count(*) where not " + bool);
+            limit = as(plan, Limit.class);
+            var aggregate = as(limit.child(), Aggregate.class);
+            var alias = as(aggregate.aggregates().get(0), Alias.class);
+            var filteredExp = as(alias.child(), FilteredExpression.class);
+            not = as(filteredExp.filter(), Not.class);
+            field = as(not.field(), Literal.class);
+            assertEquals(l, field);
+        }
+        // Mixed
+        for (String boolLeft : List.of("true", "False", "\"True\"", "\"false\"", "\"nonBoolString\"")) {
+            for (String boolRight : List.of("True", "false", "\"true\"", "\"False\"", "\"nonBoolString\"")) {
+                LogicalPlan plan = analyze(
+                    "from test | where "
+                        + boolLeft
+                        + " and "
+                        + boolRight
+                        + " or "
+                        + boolLeft
+                        + " and not "
+                        + boolRight
+                        + " or not "
+                        + boolLeft
+                );
+                var limit = as(plan, Limit.class);
+                var filter = as(limit.child(), Filter.class);
+                assertThat(filter.condition(), instanceOf(Or.class));
+
+                plan = analyze(
+                    "from test | stats count(*) where "
+                        + boolLeft
+                        + " and "
+                        + boolRight
+                        + " or "
+                        + boolLeft
+                        + " and not "
+                        + boolRight
+                        + " or not "
+                        + boolLeft
+                );
+                limit = as(plan, Limit.class);
+                var aggregate = as(limit.child(), Aggregate.class);
+                var alias = as(aggregate.aggregates().get(0), Alias.class);
+                var filteredExp = as(alias.child(), FilteredExpression.class);
+                assertThat(filteredExp.filter(), instanceOf(Or.class));
+            }
+        }
     }
 
     public void testRateRequiresCounterTypes() {

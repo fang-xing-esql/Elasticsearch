@@ -33,6 +33,8 @@ import org.elasticsearch.xpack.esql.core.expression.UnresolvedAttribute;
 import org.elasticsearch.xpack.esql.core.expression.UnresolvedStar;
 import org.elasticsearch.xpack.esql.core.expression.function.scalar.ScalarFunction;
 import org.elasticsearch.xpack.esql.core.expression.predicate.BinaryOperator;
+import org.elasticsearch.xpack.esql.core.expression.predicate.logical.BinaryLogic;
+import org.elasticsearch.xpack.esql.core.expression.predicate.logical.Not;
 import org.elasticsearch.xpack.esql.core.expression.predicate.operator.comparison.BinaryComparison;
 import org.elasticsearch.xpack.esql.core.tree.Source;
 import org.elasticsearch.xpack.esql.core.type.DataType;
@@ -984,6 +986,9 @@ public class Analyzer extends ParameterizedRuleExecutor<LogicalPlan, AnalyzerCon
             if (f instanceof EsqlArithmeticOperation || f instanceof BinaryComparison) {
                 return processBinaryOperator((BinaryOperator) f);
             }
+            if (f instanceof BinaryLogic || f instanceof Not) {
+                return processLogicalOperators(f);
+            }
             return f;
         }
 
@@ -1092,6 +1097,30 @@ public class Analyzer extends ParameterizedRuleExecutor<LogicalPlan, AnalyzerCon
             }
             newChildren.add(left);
             return childrenChanged ? in.replaceChildren(newChildren) : in;
+        }
+
+        private static Expression processLogicalOperators(ScalarFunction f) {
+            // Both sides of the operator is a Boolean type
+            boolean childrenChanged = false;
+            List<Expression> newChildren = new ArrayList<>(f.children().size());
+            for (Expression child : f.children()) {
+                if (isStringLiteral(child)) {
+                    Expression boolValue = castStringLiteral(child, BOOLEAN);
+                    if (boolValue.dataType() == BOOLEAN) {
+                        newChildren.add(boolValue);
+                        childrenChanged = true;
+                    } else {
+                        newChildren.add(child);
+                    }
+                } else {
+                    newChildren.add(child);
+                }
+            }
+            return childrenChanged ? f.replaceChildren(newChildren) : f;
+        }
+
+        private static boolean isStringLiteral(Expression e) {
+            return e instanceof Literal l && l.dataType() == KEYWORD;
         }
 
         private static boolean canCastMixedNumericTypes(EsqlScalarFunction f) {

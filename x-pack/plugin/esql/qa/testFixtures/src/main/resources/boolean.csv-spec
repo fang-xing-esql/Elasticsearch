@@ -376,3 +376,77 @@ from employees | where false in ("true", still_hired)  | sort emp_no | keep emp_
 emp_no:integer
 10003
 ;
+
+implicitCastingAndTrue
+required_capability: implicit_casting_string_literal_to_boolean_for_logical_operators
+row x = 1 | where 1 == 1 and "true";
+
+x:integer
+1
+;
+
+implicitCastingAndTrueWithNull
+required_capability: implicit_casting_string_literal_to_boolean_for_logical_operators
+row x = 1 | where 1 == 1 and "true" and null;
+
+x:integer
+;
+
+implicitCastingAndFalse
+required_capability: implicit_casting_string_literal_to_boolean_for_logical_operators
+from employees | where 1 == 1 and "false" and "true" | keep emp_no;
+
+emp_no:integer
+;
+
+implicitCastingAndFalseWithNull
+required_capability: implicit_casting_string_literal_to_boolean_for_logical_operators
+from employees | where 1 == 1 and "false" and "true" and null | keep emp_no;
+
+emp_no:integer
+;
+
+implicitCastingOrTrue
+required_capability: implicit_casting_string_literal_to_boolean_for_logical_operators
+row x = 1 | where 1 > 1 or "false" or "true";
+
+x:integer
+1
+;
+
+implicitCastingOrTrueWithNull
+required_capability: implicit_casting_string_literal_to_boolean_for_logical_operators
+row x = 1 | where 1 > 1 or "false" or null or "true";
+
+x:integer
+1
+;
+
+implicitCastingOrFalse
+required_capability: implicit_casting_string_literal_to_boolean_for_logical_operators
+from employees | where 1 > 1 or "false" or "false" | keep emp_no;
+
+emp_no:integer
+;
+
+implicitCastingOrFalseWithNull
+required_capability: implicit_casting_string_literal_to_boolean_for_logical_operators
+from employees | where 1 > 1 or "false" or "false" or null | keep emp_no;
+
+emp_no:integer
+;
+
+implicitCastingMixedLogicalOperatorsTrue
+required_capability: implicit_casting_string_literal_to_boolean_for_logical_operators
+row x = 1 | where "false" or 1 == 1 and "true" and "true" and not "false";
+
+x:integer
+1
+;
+
+implicitCastingMixedLogicalOperatorsFalse
+required_capability: implicit_casting_string_literal_to_boolean_for_logical_operators
+from employees | where "false" or 1 == 1 and "true" and "true" and not "true" | keep emp_no;
+
+emp_no:integer
+;
