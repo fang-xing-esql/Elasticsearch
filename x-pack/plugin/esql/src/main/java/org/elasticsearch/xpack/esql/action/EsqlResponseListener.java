@@ -95,26 +95,39 @@ public final class EsqlResponseListener extends RestRefCountedChunkedToXContentL
      */
     private final ThreadSafeStopWatch stopWatch = new ThreadSafeStopWatch();
 
+    private static final String HEADER_NAME_CLIENT_ID = "Client-id";
+
+    private final String clientId;
+
+    private static final String HEADER_NAME_PARTICIPATING_NODES_SHARDS = "Participating-nodes-shards";
+
     /**
      * To correctly time the execution of a request, a {@link EsqlResponseListener} must be constructed immediately before execution begins.
      */
     public EsqlResponseListener(RestChannel channel, RestRequest restRequest, EsqlQueryRequest esqlRequest) {
-        this(channel, restRequest, esqlRequest.query(), EsqlMediaTypeParser.getResponseMediaType(restRequest, esqlRequest));
+        this(
+            channel,
+            restRequest,
+            esqlRequest.query(),
+            EsqlMediaTypeParser.getResponseMediaType(restRequest, esqlRequest),
+            esqlRequest.clientId()
+        );
     }
 
     /**
      * Async query GET API does not have an EsqlQueryRequest.
      */
     public EsqlResponseListener(RestChannel channel, RestRequest getRequest) {
-        this(channel, getRequest, getRequest.param("id"), EsqlMediaTypeParser.getResponseMediaType(getRequest, XContentType.JSON));
+        this(channel, getRequest, getRequest.param("id"), EsqlMediaTypeParser.getResponseMediaType(getRequest, XContentType.JSON), null);
     }
 
-    private EsqlResponseListener(RestChannel channel, RestRequest restRequest, String esqlQueryOrId, MediaType mediaType) {
+    private EsqlResponseListener(RestChannel channel, RestRequest restRequest, String esqlQueryOrId, MediaType mediaType, String clientId) {
         super(channel);
         this.channel = channel;
         this.restRequest = restRequest;
         this.esqlQueryOrId = esqlQueryOrId;
         this.mediaType = mediaType;
+        this.clientId = clientId;
         checkDelimiter();
     }
 
@@ -149,6 +162,11 @@ public final class EsqlResponseListener extends RestRefCountedChunkedToXContentL
                 );
             }
             restResponse.addHeader(HEADER_NAME_TOOK_NANOS, Long.toString(getTook(esqlResponse, TimeUnit.NANOSECONDS)));
+            if (clientId != null) {
+                restResponse.addHeader(HEADER_NAME_CLIENT_ID, clientId);
+            }
+            // TODO how to retrieve participating nodes and shards?
+            // restResponse.addHeader(HEADER_NAME_PARTICIPATING_NODES_SHARDS, null);
             success = true;
             return restResponse;
         } finally {

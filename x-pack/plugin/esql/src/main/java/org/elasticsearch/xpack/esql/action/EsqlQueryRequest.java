@@ -52,6 +52,7 @@ public class EsqlQueryRequest extends org.elasticsearch.xpack.core.esql.action.E
     private boolean keepOnCompletion;
     private boolean onSnapshotBuild = Build.current().isSnapshot();
     private boolean acceptedPragmaRisks = false;
+    private String clientId;
 
     /**
      * "Tables" provided in the request for use with things like {@code LOOKUP}.
@@ -199,6 +200,14 @@ public class EsqlQueryRequest extends org.elasticsearch.xpack.core.esql.action.E
 
     public void keepOnCompletion(boolean keepOnCompletion) {
         this.keepOnCompletion = keepOnCompletion;
+    }
+
+    public void clientId(String clientId) {
+        this.clientId = clientId;
+    }
+
+    public String clientId() {
+        return this.clientId;
     }
 
     /**

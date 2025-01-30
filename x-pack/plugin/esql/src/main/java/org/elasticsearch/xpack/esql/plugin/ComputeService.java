@@ -20,6 +20,7 @@ import org.elasticsearch.action.support.RefCountingRunnable;
 import org.elasticsearch.cluster.node.DiscoveryNode;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.util.BigArrays;
+import org.elasticsearch.common.util.Maps;
 import org.elasticsearch.compute.EsqlRefCountingListener;
 import org.elasticsearch.compute.data.BlockFactory;
 import org.elasticsearch.compute.data.Page;
@@ -335,58 +336,76 @@ public class ComputeService {
         QueryBuilder requestFilter = PlannerUtils.requestTimestampFilter(dataNodePlan);
         var lookupListener = ActionListener.releaseAfter(computeListener.acquireAvoid(), exchangeSource.addEmptySink());
         // SearchShards API can_match is done in lookupDataNodes
-        lookupDataNodes(parentTask, clusterAlias, requestFilter, concreteIndices, originalIndices, ActionListener.wrap(dataNodeResult -> {
-            try (EsqlRefCountingListener refs = new EsqlRefCountingListener(lookupListener)) {
-                // update ExecutionInfo with shard counts (total and skipped)
-                executionInfo.swapCluster(
-                    clusterAlias,
-                    (k, v) -> new EsqlExecutionInfo.Cluster.Builder(v).setTotalShards(dataNodeResult.totalShards())
-                        // do not set successful or failed shard count here - do it when search is done
-                        .setSkippedShards(dataNodeResult.skippedShards())
-                        .build()
-                );
-
-                // For each target node, first open a remote exchange on the remote node, then link the exchange source to
-                // the new remote exchange sink, and initialize the computation on the target node via data-node-request.
-                for (DataNode node : dataNodeResult.dataNodes()) {
-                    var queryPragmas = configuration.pragmas();
-                    var childSessionId = newChildSession(sessionId);
-                    ExchangeService.openExchange(
-                        transportService,
-                        node.connection,
-                        childSessionId,
-                        queryPragmas.exchangeBufferSize(),
-                        esqlExecutor,
-                        refs.acquire().delegateFailureAndWrap((l, unused) -> {
-                            var remoteSink = exchangeService.newRemoteSink(parentTask, childSessionId, transportService, node.connection);
-                            exchangeSource.addRemoteSink(remoteSink, true, queryPragmas.concurrentExchangeClients(), ActionListener.noop());
-                            ActionListener<ComputeResponse> computeResponseListener = computeListener.acquireCompute(clusterAlias);
-                            var dataNodeListener = ActionListener.runBefore(computeResponseListener, () -> l.onResponse(null));
-                            final boolean sameNode = transportService.getLocalNode().getId().equals(node.connection.getNode().getId());
-                            var dataNodeRequest = new DataNodeRequest(
-                                childSessionId,
-                                configuration,
-                                clusterAlias,
-                                node.shardIds,
-                                node.aliasFilters,
-                                dataNodePlan,
-                                originalIndices.indices(),
-                                originalIndices.indicesOptions(),
-                                sameNode == false && queryPragmas.nodeLevelReduction()
-                            );
-                            transportService.sendChildRequest(
-                                node.connection,
-                                DATA_ACTION_NAME,
-                                dataNodeRequest,
-                                parentTask,
-                                TransportRequestOptions.EMPTY,
-                                new ActionListenerResponseHandler<>(dataNodeListener, ComputeResponse::new, esqlExecutor)
-                            );
-                        })
+        lookupDataNodes(
+            parentTask,
+            clusterAlias,
+            requestFilter,
+            concreteIndices,
+            originalIndices,
+            configuration,
+            ActionListener.wrap(dataNodeResult -> {
+                try (EsqlRefCountingListener refs = new EsqlRefCountingListener(lookupListener)) {
+                    // update ExecutionInfo with shard counts (total and skipped)
+                    executionInfo.swapCluster(
+                        clusterAlias,
+                        (k, v) -> new EsqlExecutionInfo.Cluster.Builder(v).setTotalShards(dataNodeResult.totalShards())
+                            // do not set successful or failed shard count here - do it when search is done
+                            .setSkippedShards(dataNodeResult.skippedShards())
+                            .build()
                     );
+
+                    // For each target node, first open a remote exchange on the remote node, then link the exchange source to
+                    // the new remote exchange sink, and initialize the computation on the target node via data-node-request.
+                    for (DataNode node : dataNodeResult.dataNodes()) {
+                        var queryPragmas = configuration.pragmas();
+                        var childSessionId = newChildSession(sessionId);
+                        ExchangeService.openExchange(
+                            transportService,
+                            node.connection,
+                            childSessionId,
+                            queryPragmas.exchangeBufferSize(),
+                            esqlExecutor,
+                            refs.acquire().delegateFailureAndWrap((l, unused) -> {
+                                var remoteSink = exchangeService.newRemoteSink(
+                                    parentTask,
+                                    childSessionId,
+                                    transportService,
+                                    node.connection
+                                );
+                                exchangeSource.addRemoteSink(
+                                    remoteSink,
+                                    true,
+                                    queryPragmas.concurrentExchangeClients(),
+                                    ActionListener.noop()
+                                );
+                                ActionListener<ComputeResponse> computeResponseListener = computeListener.acquireCompute(clusterAlias);
+                                var dataNodeListener = ActionListener.runBefore(computeResponseListener, () -> l.onResponse(null));
+                                final boolean sameNode = transportService.getLocalNode().getId().equals(node.connection.getNode().getId());
+                                var dataNodeRequest = new DataNodeRequest(
+                                    childSessionId,
+                                    configuration,
+                                    clusterAlias,
+                                    node.shardIds,
+                                    node.aliasFilters,
+                                    dataNodePlan,
+                                    originalIndices.indices(),
+                                    originalIndices.indicesOptions(),
+                                    sameNode == false && queryPragmas.nodeLevelReduction()
+                                );
+                                transportService.sendChildRequest(
+                                    node.connection,
+                                    DATA_ACTION_NAME,
+                                    dataNodeRequest,
+                                    parentTask,
+                                    TransportRequestOptions.EMPTY,
+                                    new ActionListenerResponseHandler<>(dataNodeListener, ComputeResponse::new, esqlExecutor)
+                                );
+                            })
+                        );
+                    }
                 }
-            }
-        }, lookupListener::onFailure));
+            }, lookupListener::onFailure)
+        );
     }
 
     private void startComputeOnRemoteClusters(
@@ -599,6 +618,7 @@ public class ComputeService {
         QueryBuilder filter,
         Set<String> concreteIndices,
         OriginalIndices originalIndices,
+        Configuration configuration,
         ActionListener<DataNodeResult> listener
     ) {
         ActionListener<SearchShardsResponse> searchShardsListener = listener.map(resp -> {
@@ -630,6 +650,9 @@ public class ComputeService {
                     nodeToAliasFilters.computeIfAbsent(targetNode, k -> new HashMap<>()).put(shardId.getIndex(), aliasFilter);
                 }
             }
+            for (Map.Entry<String, List<ShardId>> entry: nodeToShards.entrySet()){
+                LOGGER.debug("Participating nodes/shards: {}/{}", entry.getKey(), Arrays.toString(entry.getValue().toArray()));
+            }
             List<DataNode> dataNodes = new ArrayList<>(nodeToShards.size());
             for (Map.Entry<String, List<ShardId>> e : nodeToShards.entrySet()) {
                 DiscoveryNode node = nodes.get(e.getKey());
@@ -638,15 +661,19 @@ public class ComputeService {
             }
             return new DataNodeResult(dataNodes, totalShards, skippedShards);
         });
+        LOGGER.debug("Set clientId/preference in searchShardsRequest: {}", configuration.clientId());
         SearchShardsRequest searchShardsRequest = new SearchShardsRequest(
             originalIndices.indices(),
             originalIndices.indicesOptions(),
             filter,
             null,
-            null,
+            configuration.clientId(), // set the preference string here
             false,
             clusterAlias
         );
+        LOGGER.debug("SearchShardsRequest received clientId:\n{}", searchShardsRequest.preference());
+        LOGGER.debug("SearchShardsRequest:\n{}", searchShardsRequest);
+
         transportService.sendChildRequest(
             transportService.getLocalNode(),
             EsqlSearchShardsAction.TYPE.name(),

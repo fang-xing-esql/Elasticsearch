@@ -452,8 +452,7 @@ required_capability: enrich_load
 
 FROM sample_data
 | ENRICH client_cidr_policy ON client_ip WITH env
-| EVAL max_env = MV_MAX(env), count_env = MV_COUNT(env)
-| KEEP client_ip, count_env, max_env
+| KEEP client_ip, env
 | SORT client_ip
 ;
 

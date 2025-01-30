@@ -54,6 +54,8 @@ public class Configuration implements Writeable {
     private final Map<String, Map<String, Column>> tables;
     private final long queryStartTimeNanos;
 
+    private final String clientId;
+
     public Configuration(
         ZoneId zi,
         Locale locale,
@@ -66,6 +68,36 @@ public class Configuration implements Writeable {
         boolean profile,
         Map<String, Map<String, Column>> tables,
         long queryStartTimeNanos
+    ) {
+        this(
+            zi,
+            locale,
+            username,
+            clusterName,
+            pragmas,
+            resultTruncationMaxSize,
+            resultTruncationDefaultSize,
+            query,
+            profile,
+            tables,
+            queryStartTimeNanos,
+            null
+        );
+    }
+
+    public Configuration(
+        ZoneId zi,
+        Locale locale,
+        String username,
+        String clusterName,
+        QueryPragmas pragmas,
+        int resultTruncationMaxSize,
+        int resultTruncationDefaultSize,
+        String query,
+        boolean profile,
+        Map<String, Map<String, Column>> tables,
+        long queryStartTimeNanos,
+        String clientId
     ) {
         this.zoneId = zi.normalized();
         this.now = ZonedDateTime.now(Clock.tick(Clock.system(zoneId), Duration.ofNanos(1)));
@@ -80,6 +112,7 @@ public class Configuration implements Writeable {
         this.tables = tables;
         assert tables != null;
         this.queryStartTimeNanos = queryStartTimeNanos;
+        this.clientId = clientId;
     }
 
     public Configuration(BlockStreamInput in) throws IOException {
@@ -107,6 +140,7 @@ public class Configuration implements Writeable {
         } else {
             this.queryStartTimeNanos = -1;
         }
+        this.clientId = in.readString();
     }
 
     @Override
@@ -131,6 +165,7 @@ public class Configuration implements Writeable {
         if (out.getTransportVersion().onOrAfter(TransportVersions.V_8_16_0)) {
             out.writeLong(queryStartTimeNanos);
         }
+        out.writeString(clientId);
     }
 
     public ZoneId zoneId() {
@@ -182,6 +217,10 @@ public class Configuration implements Writeable {
      */
     public long getQueryStartTimeNanos() {
         return queryStartTimeNanos;
+    }
+
+    public String clientId() {
+        return clientId;
     }
 
     /**

@@ -19,6 +19,7 @@ import org.elasticsearch.xcontent.XContentParser;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static org.elasticsearch.rest.RestRequest.Method.POST;
@@ -47,11 +48,16 @@ public class RestEsqlAsyncQueryAction extends BaseRestHandler {
     @Override
     protected RestChannelConsumer prepareRequest(RestRequest request, NodeClient client) throws IOException {
         EsqlQueryRequest esqlRequest;
+        for (Map.Entry<String, List<String>> entry : request.getHeaders().entrySet()) {
+            LOGGER.debug("Header: key = {}, value = {}", entry.getKey(), entry.getValue());
+        }
         try (XContentParser parser = request.contentOrSourceParamParser()) {
             esqlRequest = RequestXContent.parseAsync(parser);
+            esqlRequest.clientId(request.header("X-Opaque-Id"));
         }
 
-        LOGGER.debug("Beginning execution of ESQL async query.\nQuery string: [{}]", esqlRequest.query());
+        LOGGER.debug("Beginning execution of ESQL async query. Query string: [{}]", esqlRequest.query());
+        LOGGER.debug("Beginning execution of ESQL async query. Client ID: [{}]", esqlRequest.clientId());
 
         return channel -> {
             RestCancellableNodeClient cancellableClient = new RestCancellableNodeClient(client, request.getHttpChannel());
