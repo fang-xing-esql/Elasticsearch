@@ -215,6 +215,10 @@ public class SearchContextStats implements SearchStats {
                         min[0] = minValue;
                         foundMinValue.set(true);
                     }
+                    System.out.println("minValue:" + minValue);
+                    System.out.println("min[0]:" + min[0]);
+                } else {
+                    System.out.println("minPackedValue is null");
                 }
                 return true;
             }, true);
@@ -242,6 +246,10 @@ public class SearchContextStats implements SearchStats {
                         max[0] = maxValue;
                         foundMaxValue.set(true);
                     }
+                    System.out.println("maxValue:" + maxValue);
+                    System.out.println("max[0]:" + max[0]);
+                } else {
+                    System.out.println("maxPackedValue is null");
                 }
                 return true;
             }, true);

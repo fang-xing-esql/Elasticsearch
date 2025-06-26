@@ -50,6 +50,7 @@ import static org.elasticsearch.xpack.esql.core.expression.TypeResolutions.isTyp
 import static org.elasticsearch.xpack.esql.core.type.DataType.DATETIME;
 import static org.elasticsearch.xpack.esql.core.type.DataType.DATE_NANOS;
 import static org.elasticsearch.xpack.esql.core.type.DataType.isDateTime;
+import static org.elasticsearch.xpack.esql.type.EsqlDataTypeConverter.dateWithTypeToString;
 
 public class DateTrunc extends EsqlScalarFunction implements SurrogateExpression {
     public static final NamedWriteableRegistry.Entry ENTRY = new NamedWriteableRegistry.Entry(
@@ -295,15 +296,25 @@ public class DateTrunc extends EsqlScalarFunction implements SurrogateExpression
             var min = searchStats.min(fieldName);
             var max = searchStats.max(fieldName);
             // If min/max is available create rounding with them
+            System.out.println("field: " + fieldName + ", min: " + min);
+            System.out.println("field: " + fieldName + ", max: " + max);
             if (min != null && max != null && interval().foldable()) {
-                // System.out.println("field: "+ fieldName + ", min string: " + dateWithTypeToString((Long) min, fieldType));
-                // System.out.println("field: "+ fieldName + ", max string: " + dateWithTypeToString((Long) max, fieldType));
+                System.out.println("field: " + fieldName + ", min string: " + dateWithTypeToString((Long) min, fieldType));
+                System.out.println("field: " + fieldName + ", max string: " + dateWithTypeToString((Long) max, fieldType));
                 Object foldedInterval = interval().fold(FoldContext.small() /* TODO remove me */);
                 Rounding.Prepared rounding = createRounding(foldedInterval, DEFAULT_TZ, (Long) min, (Long) max);
                 long[] roundingPoints = rounding.fixedRoundingPoints();
                 // the min/max long values for date and date_nanos are correct, however the roundingPoints for date_nanos is null
-                // System.out.println("field name = " + fieldName + ", min = " + min + ", max = " + max + ", roundingPoints = " +
-                // Arrays.toString(roundingPoints));
+                System.out.println(
+                    "field name = "
+                        + fieldName
+                        + ", min = "
+                        + min
+                        + ", max = "
+                        + max
+                        + ", roundingPoints = "
+                        + Arrays.toString(roundingPoints)
+                );
                 if (roundingPoints == null) {
                     return null; // TODO log this case
                 }
