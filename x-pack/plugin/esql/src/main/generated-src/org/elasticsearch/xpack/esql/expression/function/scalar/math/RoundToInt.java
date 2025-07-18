@@ -39,8 +39,28 @@ class RoundToInt {
              * Break point of 10 experimentally derived on Nik's laptop (13th Gen Intel(R) Core(TM) i7-1370P)
              * on 2025-05-22.
              */
-            case 5, 6, 7, 8, 9, 10 -> new RoundToIntLinearSearchEvaluator.Factory(source, field, f);
+            // case 5, 6, 7, 8, 9, 10 -> new RoundToIntLinearSearchEvaluator.Factory(source, field, f);
             default -> new RoundToIntBinarySearchEvaluator.Factory(source, field, f);
+        };
+    };
+
+    static final RoundToLinear.Build LINEAR_BUILD = (source, field, points) -> {
+        int[] f = points.stream().mapToInt(p -> ((Number) p).intValue()).toArray();
+        Arrays.sort(f);
+        return switch (f.length) {
+            // TODO should be a consistent way to do the 0 version - is CASE(MV_COUNT(f) == 1, f[0])
+            case 1 -> new RoundToInt1Evaluator.Factory(source, field, f[0]);
+            /*
+             * These hand-unrolled implementations are even faster than the linear scan implementations.
+             */
+            case 2 -> new RoundToInt2Evaluator.Factory(source, field, f[0], f[1]);
+            case 3 -> new RoundToInt3Evaluator.Factory(source, field, f[0], f[1], f[2]);
+            case 4 -> new RoundToInt4Evaluator.Factory(source, field, f[0], f[1], f[2], f[3]);
+            /*
+             * Break point of 10 experimentally derived on Nik's laptop (13th Gen Intel(R) Core(TM) i7-1370P)
+             * on 2025-05-22.
+             */
+            default -> new RoundToIntLinearSearchEvaluator.Factory(source, field, f);
         };
     };
 

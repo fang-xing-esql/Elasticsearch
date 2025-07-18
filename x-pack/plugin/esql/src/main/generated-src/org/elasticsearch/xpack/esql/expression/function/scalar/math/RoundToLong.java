@@ -39,8 +39,28 @@ class RoundToLong {
              * Break point of 10 experimentally derived on Nik's laptop (13th Gen Intel(R) Core(TM) i7-1370P)
              * on 2025-05-22.
              */
-            case 5, 6, 7, 8, 9, 10 -> new RoundToLongLinearSearchEvaluator.Factory(source, field, f);
+            // case 5, 6, 7, 8, 9, 10 -> new RoundToLongLinearSearchEvaluator.Factory(source, field, f);
             default -> new RoundToLongBinarySearchEvaluator.Factory(source, field, f);
+        };
+    };
+
+    static final RoundToLinear.Build LINEAR_BUILD = (source, field, points) -> {
+        long[] f = points.stream().mapToLong(p -> ((Number) p).longValue()).toArray();
+        Arrays.sort(f);
+        return switch (f.length) {
+            // TODO should be a consistent way to do the 0 version - is CASE(MV_COUNT(f) == 1, f[0])
+            case 1 -> new RoundToLong1Evaluator.Factory(source, field, f[0]);
+            /*
+             * These hand-unrolled implementations are even faster than the linear scan implementations.
+             */
+            case 2 -> new RoundToLong2Evaluator.Factory(source, field, f[0], f[1]);
+            case 3 -> new RoundToLong3Evaluator.Factory(source, field, f[0], f[1], f[2]);
+            case 4 -> new RoundToLong4Evaluator.Factory(source, field, f[0], f[1], f[2], f[3]);
+            /*
+             * Break point of 10 experimentally derived on Nik's laptop (13th Gen Intel(R) Core(TM) i7-1370P)
+             * on 2025-05-22.
+             */
+            default -> new RoundToLongLinearSearchEvaluator.Factory(source, field, f);
         };
     };
 
