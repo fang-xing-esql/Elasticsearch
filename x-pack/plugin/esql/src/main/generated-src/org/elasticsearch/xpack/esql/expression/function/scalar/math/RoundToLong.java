@@ -39,7 +39,7 @@ class RoundToLong {
              * Break point of 10 experimentally derived on Nik's laptop (13th Gen Intel(R) Core(TM) i7-1370P)
              * on 2025-05-22.
              */
-            case 5, 6, 7, 8, 9, 10 -> new RoundToLongLinearSearchEvaluator.Factory(source, field, f);
+            // case 5, 6, 7, 8, 9, 10 -> new RoundToLongLinearSearchEvaluator.Factory(source, field, f);
             default -> new RoundToLongBinarySearchEvaluator.Factory(source, field, f);
         };
     };
