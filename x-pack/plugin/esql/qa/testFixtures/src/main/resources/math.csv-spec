@@ -830,6 +830,18 @@ ROW v = 1000000000000::LONG
 1000000000000 | 1000000000000 | 2000000000000 | 1000000000000 | 2.2
 ;
 
+roundToLongManual
+required_capability: round_to
+ROW v = 1000000000000::LONG
+| EVAL r1 = round_to_manual(v, 0, 1000000000000, 2000000000000)
+     , r2 = round_to_manual(v, 2000000000000, 3000000000000)
+     , r3 = round_to_manual(v, 0, 1000000000000, 2000000000000, 3000000000000, 4000000000000, 5000000000000, 6000000000000)
+     , rd = round_to_manual(v, 0, 1.1, 2.2);
+
+   v:long     |    r1:long    |    r2:long    |    r3:long    | rd:double
+1000000000000 | 1000000000000 | 2000000000000 | 1000000000000 | 2.2
+;
+
 roundToDouble
 required_capability: round_to
 ROW v = 1.1
