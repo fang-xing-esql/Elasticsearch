@@ -92,6 +92,7 @@ import org.elasticsearch.xpack.esql.plugin.TransportActionServices;
 import org.elasticsearch.xpack.esql.session.Configuration;
 import org.elasticsearch.xpack.esql.stats.SearchStats;
 import org.elasticsearch.xpack.esql.telemetry.Metrics;
+import org.elasticsearch.xpack.esql.type.EsqlDataTypeConverter;
 import org.elasticsearch.xpack.versionfield.Version;
 import org.junit.Assert;
 
@@ -893,7 +894,15 @@ public final class EsqlTestUtils {
     }
 
     public static QueryParam paramAsConstant(String name, Object value) {
-        return new QueryParam(name, value, DataType.fromJava(value), VALUE);
+        if (value instanceof Object[] values && values.length > 0) {
+            DataType commonType = null;
+            for (Object v : values) {
+                commonType = commonType == null ? DataType.fromJava(v) : EsqlDataTypeConverter.commonType(commonType, DataType.fromJava(v));
+            }
+            return new QueryParam(name, value, commonType, VALUE);
+        } else {
+            return new QueryParam(name, value, DataType.fromJava(value), VALUE);
+        }
     }
 
     public static QueryParam paramAsIdentifier(String name, Object value) {

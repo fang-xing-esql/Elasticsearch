@@ -9,6 +9,7 @@ package org.elasticsearch.xpack.esql.action;
 
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.core.TimeValue;
+import org.elasticsearch.core.Tuple;
 import org.elasticsearch.index.query.AbstractQueryBuilder;
 import org.elasticsearch.xcontent.ObjectParser;
 import org.elasticsearch.xcontent.ParseField;
@@ -20,6 +21,7 @@ import org.elasticsearch.xpack.esql.parser.ParserUtils;
 import org.elasticsearch.xpack.esql.parser.QueryParam;
 import org.elasticsearch.xpack.esql.parser.QueryParams;
 import org.elasticsearch.xpack.esql.plugin.QueryPragmas;
+import org.elasticsearch.xpack.esql.type.EsqlDataTypeConverter;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -184,7 +186,28 @@ final class RequestXContent {
                             paramValue = entry.getValue();
                             classification = VALUE;
                         }
-                        type = DataType.fromJava(paramValue);
+                        if (paramValue instanceof List<?> values) { // multi-values constant
+                            DataType commonType = null;
+                            for (Object v : values) {
+                                DataType currentType = DataType.fromJava(v);
+                                if (commonType == null) {
+                                    commonType = currentType;
+                                } else {
+                                    DataType newCommonType = EsqlDataTypeConverter.commonType(commonType, currentType);
+                                    if (newCommonType != null) {
+                                        commonType = newCommonType;
+                                    } else {
+                                        mixedDataTypeError(commonType, currentType, paramName + ":" + paramValue, loc, errors);
+                                    }
+                                }
+                            }
+                            if (commonType != null) {
+                                type = commonType;
+                            }
+                            paramValue = values.toArray();
+                        } else {
+                            type = DataType.fromJava(paramValue);
+                        }
                         if (type == null) {
                             errors.add(new XContentParseException(loc, entry + " is not supported as a parameter"));
                         }
@@ -196,32 +219,33 @@ final class RequestXContent {
                         );
                         namedParams.add(currentParam);
                     }
-                } else {
-                    paramValue = null;
-                    if (token == XContentParser.Token.VALUE_STRING) {
-                        paramValue = p.text();
-                        type = DataType.KEYWORD;
-                    } else if (token == XContentParser.Token.VALUE_NUMBER) {
-                        XContentParser.NumberType numberType = p.numberType();
-                        if (numberType == XContentParser.NumberType.INT) {
-                            paramValue = p.intValue();
-                            type = DataType.INTEGER;
-                        } else if (numberType == XContentParser.NumberType.LONG) {
-                            paramValue = p.longValue();
-                            type = DataType.LONG;
-                        } else if (numberType == XContentParser.NumberType.DOUBLE) {
-                            paramValue = p.doubleValue();
-                            type = DataType.DOUBLE;
+                } else if (token == XContentParser.Token.START_ARRAY) {
+                    // Support one level array only. Each element is a constant, name value pair is not allowed.
+                    // Mixed string, numeric or boolean types are not allowed.
+                    // Build a QueryParam for the whole array.
+                    DataType commonType = null;
+                    List<Object> values = new ArrayList<>();
+                    while ((token = p.nextToken()) != XContentParser.Token.END_ARRAY) {
+                        loc = p.getTokenLocation();
+                        Tuple<Object, DataType> valueAndType = valueAndType(token, p, loc, errors);
+                        if (commonType == null) {
+                            commonType = valueAndType.v2();
+                            values.add(valueAndType.v1());
+                        } else {
+                            DataType newCommonType = EsqlDataTypeConverter.commonType(commonType, valueAndType.v2());
+                            values.add(valueAndType.v1());
+                            if (newCommonType != null) { // data types are compatible
+                                commonType = newCommonType;
+                            } else {
+                                mixedDataTypeError(commonType, valueAndType.v2(), values.toString(), loc, errors);
+                            }
                         }
-                    } else if (token == XContentParser.Token.VALUE_BOOLEAN) {
-                        paramValue = p.booleanValue();
-                        type = DataType.BOOLEAN;
-                    } else if (token == XContentParser.Token.VALUE_NULL) {
-                        type = DataType.NULL;
-                    } else {
-                        errors.add(new XContentParseException(loc, token + " is not supported as a parameter"));
                     }
-                    currentParam = new QueryParam(null, paramValue, type, VALUE);
+                    currentParam = new QueryParam(null, values.toArray(), commonType, VALUE);
+                    unNamedParams.add(currentParam);
+                } else {
+                    Tuple<Object, DataType> valueAndType = valueAndType(token, p, loc, errors);
+                    currentParam = new QueryParam(null, valueAndType.v1(), valueAndType.v2(), VALUE);
                     unNamedParams.add(currentParam);
                 }
             }
@@ -244,6 +268,55 @@ final class RequestXContent {
             );
         }
         return new QueryParams(namedParams.isEmpty() ? unNamedParams : namedParams);
+    }
+
+    private static Tuple<Object, DataType> valueAndType(
+        XContentParser.Token token,
+        XContentParser p,
+        XContentLocation loc,
+        List<XContentParseException> errors
+    ) throws IOException {
+        Object value = null;
+        DataType type = null;
+        if (token == XContentParser.Token.VALUE_STRING) {
+            value = p.text();
+            type = DataType.KEYWORD;
+        } else if (token == XContentParser.Token.VALUE_NUMBER) {
+            XContentParser.NumberType numberType = p.numberType();
+            if (numberType == XContentParser.NumberType.INT) {
+                value = p.intValue();
+                type = DataType.INTEGER;
+            } else if (numberType == XContentParser.NumberType.LONG) {
+                value = p.longValue();
+                type = DataType.LONG;
+            } else if (numberType == XContentParser.NumberType.DOUBLE) {
+                value = p.doubleValue();
+                type = DataType.DOUBLE;
+            }
+        } else if (token == XContentParser.Token.VALUE_BOOLEAN) {
+            value = p.booleanValue();
+            type = DataType.BOOLEAN;
+        } else if (token == XContentParser.Token.VALUE_NULL) {
+            type = DataType.NULL;
+        } else {
+            errors.add(new XContentParseException(loc, token + " is not supported as a parameter"));
+        }
+        return new Tuple<>(value, type);
+    }
+
+    private static void mixedDataTypeError(
+        DataType type1,
+        DataType type2,
+        String values,
+        XContentLocation loc,
+        List<XContentParseException> errors
+    ) {
+        errors.add(
+            new XContentParseException(
+                loc,
+                "[" + values + "] mixed data types [" + type1 + "] and [" + type2 + "] are not allowed in an array"
+            )
+        );
     }
 
     private static void checkParamNameValidity(String name, List<XContentParseException> errors, XContentLocation loc) {

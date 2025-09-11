@@ -35,6 +35,7 @@ import org.elasticsearch.xcontent.XContentParserConfiguration;
 import org.elasticsearch.xcontent.XContentType;
 import org.elasticsearch.xpack.esql.Column;
 import org.elasticsearch.xpack.esql.core.tree.Source;
+import org.elasticsearch.xpack.esql.core.type.DataType;
 import org.elasticsearch.xpack.esql.parser.ParsingException;
 import org.elasticsearch.xpack.esql.parser.QueryParam;
 import org.elasticsearch.xpack.esql.parser.QueryParams;
@@ -301,12 +302,9 @@ public class EsqlQueryRequestTests extends ESTestCase {
                     + "a valid value for IDENTIFIER parameter is a string; "
                     + "[4:36] n6={identifier={a6.1=v6.1, a6.2=v6.2}} is not supported as a parameter; "
                     + "[4:98] [n7] has no valid param attribute, only one of VALUE, IDENTIFIER, PATTERN can be defined in a param; "
-                    + "[5:1] n8={value=[x, y]} is not supported as a parameter; "
                     + "[5:34] [[x, y]] is not a valid value for IDENTIFIER parameter, a valid value for IDENTIFIER parameter is a string; "
-                    + "[5:34] n9={identifier=[x, y]} is not supported as a parameter; "
                     + "[5:72] [[x*, y*]] is not a valid value for PATTERN parameter, "
                     + "a valid value for PATTERN parameter is a string and contains *; "
-                    + "[5:72] n10={pattern=[x*, y*]} is not supported as a parameter; "
                     + "[6:1] [1] is not a valid value for IDENTIFIER parameter, a valid value for IDENTIFIER parameter is a string; "
                     + "[6:31] [true] is not a valid value for PATTERN parameter, "
                     + "a valid value for PATTERN parameter is a string and contains *; "
@@ -314,6 +312,88 @@ public class EsqlQueryRequestTests extends ESTestCase {
                     + "[6:94] [v14] is not a valid value for PATTERN parameter, "
                     + "a valid value for PATTERN parameter is a string and contains *; "
                     + "[7:1] Cannot parse more than one key:value pair as parameter, found [{n16:{identifier=v16}}, {n15:{pattern=v15*}}]"
+            )
+        );
+    }
+
+    public void testArrayParams() throws IOException {
+        String query = randomAlphaOfLengthBetween(1, 100);
+        boolean columnar = randomBoolean();
+        Locale locale = randomLocale(random());
+        QueryBuilder filter = randomQueryBuilder();
+
+        List<QueryParam> params = randomArrayParameters(randomBoolean());
+        boolean hasParams = params.isEmpty() == false;
+        StringBuilder paramsString = arrayParametersString(params, hasParams);
+        String json = String.format(Locale.ROOT, """
+            {
+                "query": "%s",
+                "columnar": %s,
+                "locale": "%s",
+                "filter": %s
+                %s""", query, columnar, locale.toLanguageTag(), filter, paramsString);
+
+        EsqlQueryRequest request = parseEsqlQueryRequestSync(json);
+
+        assertEquals(query, request.query());
+        assertEquals(columnar, request.columnar());
+        assertEquals(locale.toLanguageTag(), request.locale().toLanguageTag());
+        assertEquals(locale, request.locale());
+        assertEquals(filter, request.filter());
+        assertEquals(params.size(), request.params().size());
+
+        for (int i = 0; i < request.params().size(); i++) {
+            assertEquals(params.get(i), request.params().get(i + 1));
+        }
+    }
+
+    public void testInvalidArrayParams() throws IOException {
+        String query = randomAlphaOfLengthBetween(1, 100);
+        boolean columnar = randomBoolean();
+        Locale locale = randomLocale(random());
+        QueryBuilder filter = randomQueryBuilder();
+
+        // anonymous parameters
+        String anonymousParams = """
+            "params":[1, "v1", [1, "v1"], [1.0, true], [true, "v1"]]""";
+        String anonymousParamsQuery = String.format(Locale.ROOT, """
+            {
+                %s
+                "query": "%s",
+                "columnar": %s,
+                "locale": "%s",
+                "filter": %s
+            }""", anonymousParams, query, columnar, locale.toLanguageTag(), filter);
+
+        Exception e = expectThrows(XContentParseException.class, () -> parseEsqlQueryRequestSync(anonymousParamsQuery));
+        assertThat(
+            e.getCause().getMessage(),
+            containsString(
+                "[2:28] [[1, v1]] mixed data types [INTEGER] and [KEYWORD] are not allowed in an array; "
+                    + "[2:41] [[1.0, true]] mixed data types [DOUBLE] and [BOOLEAN] are not allowed in an array; "
+                    + "[2:55] [[true, v1]] mixed data types [BOOLEAN] and [KEYWORD] are not allowed in an array"
+            )
+        );
+
+        // named parameters
+        String namedParams = """
+            "params":[{"n1":1}, {"n2":"v1"}, {"n3":[1, "v1"]}, {"n4":[1.0, true]}, {"n5":[true, "v1"]}]""";
+        String namedParamsQuery = String.format(Locale.ROOT, """
+            {
+                %s
+                "query": "%s",
+                "columnar": %s,
+                "locale": "%s",
+                "filter": %s
+            }""", namedParams, query, columnar, locale.toLanguageTag(), filter);
+
+        e = expectThrows(XContentParseException.class, () -> parseEsqlQueryRequestSync(namedParamsQuery));
+        assertThat(
+            e.getCause().getMessage(),
+            containsString(
+                "[2:38] [n3:[1, v1]] mixed data types [INTEGER] and [KEYWORD] are not allowed in an array; "
+                    + "[2:56] [n4:[1.0, true]] mixed data types [DOUBLE] and [BOOLEAN] are not allowed in an array; "
+                    + "[2:76] [n5:[true, v1]] mixed data types [BOOLEAN] and [KEYWORD] are not allowed in an array"
             )
         );
     }
@@ -677,6 +757,81 @@ public class EsqlQueryRequestTests extends ESTestCase {
             paramsString.append("}");
         }
         return paramsString;
+    }
+
+    private List<QueryParam> randomArrayParameters(boolean namedParams) {
+        int len = randomIntBetween(1, 10);
+        List<QueryParam> arr = new ArrayList<>(len);
+        for (int i = 0; i < len; i++) {
+            int size = randomIntBetween(1, 10);
+            String name = namedParams ? "n_" + i : null;
+            Supplier<QueryParam> supplier = randomFrom(
+                () -> paramAsConstant(name, randomBoolean()),
+                () -> paramAsConstant(name, randomInt()),
+                () -> paramAsConstant(name, randomLong()),
+                () -> paramAsConstant(name, randomDouble()),
+                () -> paramAsConstant(name, null),
+                () -> paramAsConstant(name, randomAlphaOfLength(10)),
+                () -> paramAsConstant(name, randomArray(1, size, Boolean[]::new, ESTestCase::randomBoolean)),
+                () -> paramAsConstant(name, randomArray(1, size, Integer[]::new, ESTestCase::randomInt)),
+                () -> paramAsConstant(name, randomArray(1, size, Long[]::new, ESTestCase::randomLong)),
+                () -> paramAsConstant(name, randomArray(1, size, Double[]::new, ESTestCase::randomDouble)),
+                () -> paramAsConstant(name, randomArray(1, size, String[]::new, () -> randomAlphaOfLengthOrNull(5)))
+            );
+            arr.add(supplier.get());
+        }
+        return Collections.unmodifiableList(arr);
+    }
+
+    private StringBuilder arrayParametersString(List<QueryParam> params, boolean hasParams) {
+        StringBuilder paramsString = new StringBuilder();
+        if (hasParams) {
+            paramsString.append(",\"params\":[");
+            boolean firstParam = true;
+            for (QueryParam param : params) {
+                if (firstParam == false) {
+                    paramsString.append(", ");
+                }
+                firstParam = false;
+                Object value = param.value();
+                DataType type = param.type();
+                String name = param.name();
+                if (name != null) {
+                    paramsString.append("{\"" + name + "\":");
+                }
+                if (value instanceof Object[] values) {
+                    boolean firstItem = true;
+                    paramsString.append("[");
+                    for (Object v : values) {
+                        if (firstItem == false) {
+                            paramsString.append(", ");
+                        }
+                        firstItem = false;
+                        buildParamsString(paramsString, v, type);
+                    }
+                    paramsString.append("]");
+                } else {
+                    buildParamsString(paramsString, value, type);
+                }
+                if (name != null) {
+                    paramsString.append("}");
+                }
+            }
+            paramsString.append("]}");
+        } else {
+            paramsString.append("}");
+        }
+        return paramsString;
+    }
+
+    private void buildParamsString(StringBuilder stringBuilder, Object value, DataType type) {
+        if (type == KEYWORD && value != null) {
+            stringBuilder.append("\"");
+            stringBuilder.append(value);
+            stringBuilder.append("\"");
+        } else if (type.isNumeric() || type == BOOLEAN || type == NULL || value == null) {
+            stringBuilder.append(value);
+        }
     }
 
     private static void assertParserErrorMessage(String json, String message) {
