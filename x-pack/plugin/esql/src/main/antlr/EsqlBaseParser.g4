@@ -108,8 +108,21 @@ timeSeriesCommand
     : DEV_TIME_SERIES indexPatternAndMetadataFields
     ;
 
-indexPatternAndMetadataFields:
-    indexPattern (COMMA indexPattern)* metadata?
+indexPatternAndMetadataFields
+    :indexPatternOrSubquery (COMMA indexPatternOrSubquery)* metadata?
+    ;
+
+indexPatternOrSubquery
+    : indexPattern
+    | subquery
+    ;
+
+subquery
+    : LP fromCommand (PIPE subqueryProcessingCommand)* RP
+    ;
+
+subqueryProcessingCommand
+    : processingCommand
     ;
 
 indexPattern
