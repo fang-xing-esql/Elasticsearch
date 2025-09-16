@@ -6,58 +6,70 @@
  */
 package org.elasticsearch.xpack.esql.plan.logical;
 
+import org.elasticsearch.common.io.stream.NamedWriteableRegistry;
+import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
+import org.elasticsearch.xpack.esql.capabilities.PostAnalysisVerificationAware;
+import org.elasticsearch.xpack.esql.capabilities.TelemetryAware;
+import org.elasticsearch.xpack.esql.common.Failures;
 import org.elasticsearch.xpack.esql.core.expression.Attribute;
 import org.elasticsearch.xpack.esql.core.tree.NodeInfo;
 import org.elasticsearch.xpack.esql.core.tree.Source;
+import org.elasticsearch.xpack.esql.io.stream.PlanStreamInput;
 
 import java.io.IOException;
 import java.util.List;
 import java.util.Objects;
 
-public class Subquery extends LeafPlan {
+public class Subquery extends UnaryPlan  implements PostAnalysisVerificationAware, TelemetryAware, SortAgnostic {
+    public static final NamedWriteableRegistry.Entry ENTRY = new NamedWriteableRegistry.Entry(LogicalPlan.class, "Subquery", Subquery::new);
 
-    private final LogicalPlan plan;
+    // subquery alias/qualifier could be added in the future if needed
 
-    public Subquery(Source source, LogicalPlan plan) {
-        super(source);
-        this.plan = plan;
+    public Subquery(Source source, LogicalPlan subqueryPlan) {
+        super(source, subqueryPlan);
+    }
+
+    // TODO does Subquery need to be Serializable?
+    private Subquery(StreamInput in) throws IOException {
+        this(Source.readFrom((PlanStreamInput) in), in.readNamedWriteable(LogicalPlan.class));
     }
 
     @Override
     public void writeTo(StreamOutput out) throws IOException {
-        throw new UnsupportedOperationException("not serialized");
+        Source.EMPTY.writeTo(out);
+        out.writeNamedWriteable(child());
     }
 
     @Override
     public String getWriteableName() {
-        throw new UnsupportedOperationException("not serialized");
-    }
-
-    public LogicalPlan plan() {
-        return plan;
+        return ENTRY.name;
     }
 
     @Override
     protected NodeInfo<Subquery> info() {
-        return NodeInfo.create(this, Subquery::new, plan);
+        return NodeInfo.create(this, Subquery::new, child());
+    }
+
+    @Override
+    public UnaryPlan replaceChild(LogicalPlan newChild) {
+        return new Subquery(source(), newChild);
     }
 
     @Override
     public List<Attribute> output() {
-        return plan.output();
+        return child().output();
     }
 
     @Override
     public boolean expressionsResolved() {
-        // For unresolved expressions to exist in EsRelation is fine, as long as they are not used in later operations
-        // This allows for them to be converted to null@unsupported fields in final output, an important feature of ES|QL
+        // TODO add if needed
         return true;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(plan);
+        return Objects.hash(child());
     }
 
     @Override
@@ -71,11 +83,38 @@ public class Subquery extends LeafPlan {
         }
 
         Subquery other = (Subquery) obj;
-        return Objects.equals(plan, other.plan);
+        return Objects.equals(child(), other.child());
     }
 
     @Override
     public String nodeString() {
-        return nodeName() + "[" + plan + "]";
+        return nodeName() + "[]";
+    }
+
+    @Override
+    public void postAnalysisVerification(Failures failures) {
+        // TODO add verification if needed
+    }
+
+    public LogicalPlan plan() {
+        return child();
+    }
+
+    public boolean canMerge() {
+        // if the subquery contains from/eval/where/subquery, it can be merged
+        LogicalPlan child = child();
+        if (child instanceof UnionAll unionAll) {
+            for (LogicalPlan subPlan : unionAll.children()) {
+                if (canMerge(subPlan) == false) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    // more plan types could be added if needed, non-pipeline breakers
+    private boolean canMerge(LogicalPlan plan) {
+       return plan instanceof Subquery || plan instanceof Filter || plan instanceof EsRelation;
     }
 }

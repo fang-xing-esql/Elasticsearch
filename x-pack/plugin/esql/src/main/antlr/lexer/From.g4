@@ -22,7 +22,7 @@ FROM_ASSIGN : ASSIGN -> type(ASSIGN);
 METADATA : 'metadata';
 
 // we need this for EXPLAIN
-// change to double popMode to accommodate subquerys in FROM, when see ')' pop out of subquery mode and from mode
+// change to double popMode to accommodate subquerys in FROM, when see ')' pop out of subquery(default) mode and from mode
 FROM_RP : RP -> type(RP), popMode, popMode;
 
 // accommodate subQuery inside FROM

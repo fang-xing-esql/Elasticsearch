@@ -114,7 +114,9 @@ import org.elasticsearch.xpack.esql.plan.logical.Lookup;
 import org.elasticsearch.xpack.esql.plan.logical.MvExpand;
 import org.elasticsearch.xpack.esql.plan.logical.Project;
 import org.elasticsearch.xpack.esql.plan.logical.Rename;
+import org.elasticsearch.xpack.esql.plan.logical.Subquery;
 import org.elasticsearch.xpack.esql.plan.logical.TimeSeriesAggregate;
+import org.elasticsearch.xpack.esql.plan.logical.UnionAll;
 import org.elasticsearch.xpack.esql.plan.logical.UnresolvedRelation;
 import org.elasticsearch.xpack.esql.plan.logical.fuse.Fuse;
 import org.elasticsearch.xpack.esql.plan.logical.fuse.FuseScoreEval;
@@ -243,12 +245,18 @@ public class Analyzer extends ParameterizedRuleExecutor<LogicalPlan, AnalyzerCon
 
         @Override
         protected LogicalPlan rule(UnresolvedRelation plan, AnalyzerContext context) {
-            return resolveIndex(
-                plan,
-                plan.indexMode().equals(IndexMode.LOOKUP)
-                    ? context.lookupResolution().get(plan.indexPattern().indexPattern())
-                    : context.indexResolution()
-            );
+            String indexPattern = plan.indexPattern().indexPattern();
+            IndexResolution indexResolution;
+            if (plan.indexMode().equals(IndexMode.LOOKUP)) { // index on the RHS of lookup join
+                indexResolution = context.lookupResolution().get(indexPattern);
+            } else { // main index or index in subquery
+                indexResolution = context.indexResolution();
+                if (indexPattern != null && indexResolution.matches(indexPattern) == false) {
+                    // index pattern does not match main index
+                    indexResolution = context.subqueryResolution().getOrDefault(indexPattern, null);
+                }
+            }
+            return resolveIndex(plan,indexResolution);
         }
 
         private LogicalPlan resolveIndex(UnresolvedRelation plan, IndexResolution indexResolution) {
@@ -1366,6 +1374,39 @@ public class Analyzer extends ParameterizedRuleExecutor<LogicalPlan, AnalyzerCon
             }
 
             return plan;
+        }
+    }
+
+    // WIP merge nested UnionAll into a single one for simple cases like: from index1, (from index2, (from index3))
+    private static class MergeNestedUnionAll extends ParameterizedRule<LogicalPlan, LogicalPlan, AnalyzerContext> {
+        @Override
+        public LogicalPlan apply(LogicalPlan logicalPlan, AnalyzerContext context) {
+            return logicalPlan.transformUp(UnionAll.class, ua -> {
+                if (ua.canMerge() == false) {
+                    return ua;
+                }
+                List<LogicalPlan> newChildren = mergeUnionAll(ua.children());
+                if (newChildren.size() == ua.children().size()) {
+                    return ua;
+                } else {
+                    return ua.replaceChildren(newChildren);
+                }
+            });
+        }
+
+        private List<LogicalPlan> mergeUnionAll(List<LogicalPlan> children) {
+            List<LogicalPlan> newChildren = new ArrayList<>();
+            for (LogicalPlan child : children) {
+                if (child instanceof Subquery subquery) {
+                    child = subquery.plan();
+                }
+                if (child instanceof UnionAll ua) {
+                    newChildren.addAll(mergeUnionAll(ua.children()));
+                } else {
+                    newChildren.add(child);
+                }
+            }
+            return newChildren;
         }
     }
 

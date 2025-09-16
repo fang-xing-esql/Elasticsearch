@@ -7,6 +7,7 @@
 
 package org.elasticsearch.xpack.esql.parser;
 
+import org.elasticsearch.common.logging.LoggerMessageFormat;
 import org.elasticsearch.xpack.esql.plan.logical.Aggregate;
 import org.elasticsearch.xpack.esql.plan.logical.Drop;
 import org.elasticsearch.xpack.esql.plan.logical.Eval;
@@ -28,55 +29,63 @@ import static org.hamcrest.Matchers.containsString;
 public class SubqueryTests extends AbstractStatementParserTests {
 
     public void testIndexPatternWithSubquery() {
-        String query = """
-             FROM index1, (FROM index2)
-            """;
+        for (String mainQueryIndexPattern : List.of("index1", "index1,index3")) {
+            for (String subqueryIndexPattern : List.of("index2", "index2,index4", "index1,index2,index4")) {
+                String query = LoggerMessageFormat.format(null, """
+                    FROM {}, (FROM {})
+                    """, mainQueryIndexPattern, subqueryIndexPattern);
 
-        LogicalPlan plan = statement(query);
-        validateSimpleSubqueryPlan(plan);
-    }
-
-    public void testSubqueryWithProcessingCommandsInMainquery() {
-        String query = """
-             FROM index1, (FROM index2)
-             | WHERE a > 10
-             | EVAL b = a * 2
-             | FORK (WHERE c < 100) (WHERE d > 200)
-             | STATS cnt = COUNT(*) BY e
-             | SORT cnt desc
-             | LIMIT 10
-             | DROP f
-             | KEEP g
-            """;
-
-        LogicalPlan plan = statement(query);
-        Keep keep = as(plan, Keep.class);
-        Drop drop = as(keep.child(), Drop.class);
-        Limit limit = as(drop.child(), Limit.class);
-        OrderBy orderBy = as(limit.child(), OrderBy.class);
-        Aggregate aggregate = as(orderBy.child(), Aggregate.class);
-        Fork fork = as(aggregate.child(), Fork.class);
-        List<LogicalPlan> forkChildren = fork.children();
-        assertEquals(2, forkChildren.size());
-        for (Eval forkEval : List.of(as(forkChildren.get(0), Eval.class), as(forkChildren.get(1), Eval.class))) {
-            Filter forkFilter = as(forkEval.child(), Filter.class);
-            Eval eval = as(forkFilter.child(), Eval.class);
-            Filter filter = as(eval.child(), Filter.class);
-            validateSimpleSubqueryPlan(filter.child());
+                LogicalPlan plan = statement(query);
+                validateSimpleSubqueryPlan(plan, mainQueryIndexPattern, subqueryIndexPattern);
+            }
         }
     }
 
-    private void validateSimpleSubqueryPlan(LogicalPlan plan) {
+    public void testSubqueryWithProcessingCommandsInMainquery() {
+        for (String mainQueryIndexPattern : List.of("index1", "index1,index3")) {
+            for (String subqueryIndexPattern : List.of("index2", "index2,index4", "index1,index2,index4")) {
+                String query = LoggerMessageFormat.format(null, """
+                    FROM {}, (FROM {})
+                    | WHERE a > 10
+                    | EVAL b = a * 2
+                    | FORK (WHERE c < 100) (WHERE d > 200)
+                    | STATS cnt = COUNT(*) BY e
+                    | SORT cnt desc
+                    | LIMIT 10
+                    | DROP f
+                    | KEEP g
+                    """, mainQueryIndexPattern, subqueryIndexPattern);
+
+                LogicalPlan plan = statement(query);
+                Keep keep = as(plan, Keep.class);
+                Drop drop = as(keep.child(), Drop.class);
+                Limit limit = as(drop.child(), Limit.class);
+                OrderBy orderBy = as(limit.child(), OrderBy.class);
+                Aggregate aggregate = as(orderBy.child(), Aggregate.class);
+                Fork fork = as(aggregate.child(), Fork.class);
+                List<LogicalPlan> forkChildren = fork.children();
+                assertEquals(2, forkChildren.size());
+                for (Eval forkEval : List.of(as(forkChildren.get(0), Eval.class), as(forkChildren.get(1), Eval.class))) {
+                    Filter forkFilter = as(forkEval.child(), Filter.class);
+                    Eval eval = as(forkFilter.child(), Eval.class);
+                    Filter filter = as(eval.child(), Filter.class);
+                    validateSimpleSubqueryPlan(filter.child(), mainQueryIndexPattern,subqueryIndexPattern);
+                }
+            }
+        }
+    }
+
+    private void validateSimpleSubqueryPlan(LogicalPlan plan, String mainQueryIndexPattern, String subqueryIndexPattern) {
         UnionAll unionAll = as(plan, UnionAll.class);
         List<LogicalPlan> children = unionAll.children();
         assertEquals(2, children.size());
 
         UnresolvedRelation unresolvedRelation = as(children.get(0), UnresolvedRelation.class);
-        assertEquals("index1", unresolvedRelation.indexPattern().indexPattern());
+        assertEquals(mainQueryIndexPattern, unresolvedRelation.indexPattern().indexPattern());
 
         Subquery subquery = as(children.get(1), Subquery.class);
         UnresolvedRelation subqueryRelation = as(subquery.plan(), UnresolvedRelation.class);
-        assertEquals("index2", subqueryRelation.indexPattern().indexPattern());
+        assertEquals(subqueryIndexPattern, subqueryRelation.indexPattern().indexPattern());
     }
 
     public void testWithSubqueryWithProcessingCommandsInSubquery() {
@@ -401,14 +410,70 @@ public class SubqueryTests extends AbstractStatementParserTests {
         }
     }
 
+    // unionAlls can be flattened
     public void testNestedSubquery() {
         String query = """
-             FROM (FROM (FROM (FROM index1)))
+             FROM index1, (FROM index2, (FROM index3, (FROM index4)))
             """;
 
         LogicalPlan plan = statement(query);
-        UnresolvedRelation unresolvedRelation = as(plan, UnresolvedRelation.class);
+        UnionAll unionAll = as(plan, UnionAll.class);
+        List<LogicalPlan> children = unionAll.children();
+        assertEquals(2, children.size());
+        UnresolvedRelation unresolvedRelation = as(children.get(0), UnresolvedRelation.class);
         assertEquals("index1", unresolvedRelation.indexPattern().indexPattern());
+        Subquery subquery1 = as(children.get(1), Subquery.class);
+        unionAll = as(subquery1.plan(), UnionAll.class);
+        children = unionAll.children();
+        assertEquals(2, children.size());
+        unresolvedRelation = as(children.get(0), UnresolvedRelation.class);
+        assertEquals("index2", unresolvedRelation.indexPattern().indexPattern());
+        Subquery subquery2 = as(children.get(1), Subquery.class);
+        unionAll = as(subquery2.plan(), UnionAll.class);
+        children = unionAll.children();
+        assertEquals(2, children.size());
+        unresolvedRelation = as(children.get(0), UnresolvedRelation.class);
+        assertEquals("index3", unresolvedRelation.indexPattern().indexPattern());
+        Subquery subquery3 = as(children.get(1), Subquery.class);
+        unresolvedRelation = as(subquery3.plan(), UnresolvedRelation.class);
+        assertEquals("index4", unresolvedRelation.indexPattern().indexPattern());
+    }
+
+    // unionAlls cannot be flattened at parsing time, try flattening it in Analyzer before resolving fork
+    public void testNestedSubqueryWithProcessingCommands() {
+        String query = """
+             FROM index1, (FROM index2, (FROM index3, (FROM index4
+                                                                                          | WHERE a > 10)
+                                                                | EVAL b = a * 2)
+                                      |STATS cnt = COUNT(*) BY e)
+            | LIMIT 10
+            """;
+
+        LogicalPlan plan = statement(query);
+        Limit limit = as(plan, Limit.class);
+        UnionAll unionAll = as(limit.child(), UnionAll.class);
+        List<LogicalPlan> children = unionAll.children();
+        assertEquals(2, children.size());
+        UnresolvedRelation unresolvedRelation = as(children.get(0), UnresolvedRelation.class);
+        assertEquals("index1", unresolvedRelation.indexPattern().indexPattern());
+        Subquery subquery1 = as(children.get(1), Subquery.class);
+        Aggregate aggregate = as(subquery1.plan(), Aggregate.class);
+        unionAll = as(aggregate.child(), UnionAll.class);
+        children = unionAll.children();
+        assertEquals(2, children.size());
+        unresolvedRelation = as(children.get(0), UnresolvedRelation.class);
+        assertEquals("index2", unresolvedRelation.indexPattern().indexPattern());
+        Subquery subquery2 = as(children.get(1), Subquery.class);
+        Eval eval = as(subquery2.plan(), Eval.class);
+        unionAll = as(eval.child(), UnionAll.class);
+        children = unionAll.children();
+        assertEquals(2, children.size());
+        unresolvedRelation = as(children.get(0), UnresolvedRelation.class);
+        assertEquals("index3", unresolvedRelation.indexPattern().indexPattern());
+        Subquery subquery3 = as(children.get(1), Subquery.class);
+        Filter filter = as(subquery3.plan(), Filter.class);
+        unresolvedRelation = as(filter.child(), UnresolvedRelation.class);
+        assertEquals("index4", unresolvedRelation.indexPattern().indexPattern());
     }
 
     public void testTimeSeriesWithSubquery() {

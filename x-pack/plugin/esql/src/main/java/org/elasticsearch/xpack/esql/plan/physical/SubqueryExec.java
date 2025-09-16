@@ -10,18 +10,18 @@ package org.elasticsearch.xpack.esql.plan.physical;
 import org.elasticsearch.common.io.stream.NamedWriteableRegistry;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
+import org.elasticsearch.xpack.esql.core.expression.Attribute;
 import org.elasticsearch.xpack.esql.core.tree.NodeInfo;
 import org.elasticsearch.xpack.esql.core.tree.Source;
 import org.elasticsearch.xpack.esql.io.stream.PlanStreamInput;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Objects;
 
-/**
- * Physical plan representing a subquery, meaning a section of the plan that needs to be executed independently.
- */
-public class SubqueryExec extends UnaryExec {
+import static org.elasticsearch.xpack.esql.expression.NamedExpressions.mergeOutputAttributes;
 
+public class SubqueryExec extends UnaryExec implements EstimatesRowSize {
     public static final NamedWriteableRegistry.Entry ENTRY = new NamedWriteableRegistry.Entry(
         PhysicalPlan.class,
         "SubqueryExec",
@@ -33,23 +33,28 @@ public class SubqueryExec extends UnaryExec {
     }
 
     private SubqueryExec(StreamInput in) throws IOException {
-        super(Source.readFrom((PlanStreamInput) in), in.readNamedWriteable(PhysicalPlan.class));
+        this(Source.readFrom((PlanStreamInput) in), in.readNamedWriteable(PhysicalPlan.class));
     }
 
     @Override
     public void writeTo(StreamOutput out) throws IOException {
-        source().writeTo(out);
+        Source.EMPTY.writeTo(out);
         out.writeNamedWriteable(child());
-    }
-
-    @Override
-    public SubqueryExec replaceChild(PhysicalPlan newChild) {
-        return new SubqueryExec(source(), newChild);
     }
 
     @Override
     public String getWriteableName() {
         return ENTRY.name;
+    }
+
+    @Override
+    public List<Attribute> output() {
+        return child().output();
+    }
+
+    @Override
+    public UnaryExec replaceChild(PhysicalPlan newChild) {
+        return new SubqueryExec(source(), newChild);
     }
 
     @Override
@@ -59,15 +64,24 @@ public class SubqueryExec extends UnaryExec {
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
-        if (super.equals(o) == false) return false;
-        SubqueryExec that = (SubqueryExec) o;
-        return Objects.equals(child(), that.child());
+        if (this == o) {
+            return true;
+        }
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
+        SubqueryExec subquery = (SubqueryExec) o;
+        return child().equals(subquery.child());
     }
 
     @Override
     public int hashCode() {
-        return super.hashCode();
+        return Objects.hash(child());
+    }
+
+    @Override
+    public PhysicalPlan estimateRowSize(State state) {
+        // TODO what is this??
+        return this;
     }
 }

@@ -77,6 +77,7 @@ import org.elasticsearch.xpack.esql.plugin.TransportActionServices;
 import org.elasticsearch.xpack.esql.telemetry.PlanTelemetry;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -382,6 +383,23 @@ public class EsqlSession {
         }
 
         var preAnalysis = preAnalyzer.preAnalyze(parsed);
+        /*
+        IndexPattern combinedPattern = preAnalysis.index();
+        for (IndexPattern subqueryPattern : preAnalysis.subqueryIndices()) {
+            // combine subquery indices with the main index pattern
+            String pattern = subqueryPattern.indexPattern();
+            if (pattern != null && pattern.isEmpty() == false) {
+                if (combinedPattern == null) {
+                    combinedPattern = subqueryPattern;
+                } else {
+                    String combined = Stream.of(combinedPattern.indexPattern(), pattern).flatMap(s -> Arrays.stream(s.split(",")))
+                        .map(String::trim)
+                        .filter(str -> str.isEmpty()== false).distinct().collect(Collectors.joining(","));
+                    combinedPattern = new IndexPattern(combinedPattern.source(), combined);
+                }
+            }
+        }
+         */
         EsqlCCSUtils.initCrossClusterState(indicesExpressionGrouper, verifier.licenseState(), preAnalysis.index(), executionInfo);
 
         SubscribableListener. //
@@ -390,8 +408,53 @@ public class EsqlSession {
             .<PreAnalysisResult>andThen((l, r) -> resolveInferences(parsed, r, l))
             .<PreAnalysisResult>andThen((l, r) -> preAnalyzeMainIndices(preAnalysis, executionInfo, r, requestFilter, l))
             .<PreAnalysisResult>andThen((l, r) -> preAnalyzeLookupIndices(preAnalysis.lookupIndices().iterator(), r, executionInfo, l))
+            .<PreAnalysisResult>andThen((l, r) -> preAnalyzeSubqueryIndices(preAnalysis.subqueryIndices().iterator(), r, executionInfo, l))
             .<LogicalPlan>andThen((l, r) -> analyzeWithRetry(parsed, requestFilter, preAnalysis, executionInfo, r, l))
             .addListener(logicalPlanListener);
+    }
+
+    private void preAnalyzeSubqueryIndices(
+        Iterator<IndexPattern> subqueryIndices,
+        PreAnalysisResult preAnalysisResult,
+        EsqlExecutionInfo executionInfo,
+        ActionListener<PreAnalysisResult> listener
+    ) {
+        if (subqueryIndices.hasNext()) {
+            preAnalyzeSubqueryIndex(subqueryIndices.next(), preAnalysisResult, executionInfo, listener.delegateFailureAndWrap((l, r) -> {
+                preAnalyzeSubqueryIndices(subqueryIndices, r, executionInfo, l);
+            }));
+        } else {
+            listener.onResponse(preAnalysisResult);
+        }
+    }
+
+    private void preAnalyzeSubqueryIndex(
+        IndexPattern subqueryIndexPattern,
+        PreAnalysisResult result,
+        EsqlExecutionInfo executionInfo,
+        ActionListener<PreAnalysisResult> listener
+    ) {
+        assert ThreadPool.assertCurrentThreadPool(
+            ThreadPool.Names.SEARCH,
+            ThreadPool.Names.SEARCH_COORDINATION,
+            ThreadPool.Names.SYSTEM_READ
+        );
+        // TODO double check CCS call here - I don't think we want to include all indices here for subqueries
+        if (subqueryIndexPattern != null) {
+             // time-series index is not supported in subqueries yet, the grammar does not allow it
+                indexResolver.resolveAsMergedMapping(
+                    subqueryIndexPattern.indexPattern(),
+                    result.fieldNames,
+                    null,
+                    false,
+                    listener.delegateFailure((l, indexResolution) -> {
+                        l.onResponse(result.addSubqueryIndexResolution(subqueryIndexPattern.indexPattern(), indexResolution));
+                    })
+                );
+        } else {
+            // occurs when dealing with local relations (row a = 1)
+            listener.onResponse(result.withIndexResolution(IndexResolution.invalid("[none specified]")));
+        }
     }
 
     private void preAnalyzeLookupIndices(
@@ -764,7 +827,8 @@ public class EsqlSession {
     private LogicalPlan analyzedPlan(LogicalPlan parsed, PreAnalysisResult r, EsqlExecutionInfo executionInfo) throws Exception {
         handleFieldCapsFailures(configuration.allowPartialResults(), executionInfo, r.indices.failures());
         Analyzer analyzer = new Analyzer(
-            new AnalyzerContext(configuration, functionRegistry, r.indices, r.lookupIndices, r.enrichResolution, r.inferenceResolution),
+            new AnalyzerContext(configuration, functionRegistry, r.indices, r.lookupIndices,
+                r.enrichResolution, r.inferenceResolution, r.subqueryIndices),
             verifier
         );
         LogicalPlan plan = analyzer.analyze(parsed);
@@ -807,11 +871,13 @@ public class EsqlSession {
         EnrichResolution enrichResolution,
         Set<String> fieldNames,
         Set<String> wildcardJoinIndices,
-        InferenceResolution inferenceResolution
+        InferenceResolution inferenceResolution,
+        Map<String, IndexResolution> subqueryIndices
     ) {
 
+        //TODO double check here
         public PreAnalysisResult(EnrichResolution enrichResolution, Set<String> fieldNames, Set<String> wildcardJoinIndices) {
-            this(null, new HashMap<>(), enrichResolution, fieldNames, wildcardJoinIndices, InferenceResolution.EMPTY);
+            this(null, new HashMap<>(), enrichResolution, fieldNames, wildcardJoinIndices, InferenceResolution.EMPTY, new HashMap<>());
         }
 
         PreAnalysisResult withInferenceResolution(InferenceResolution newInferenceResolution) {
@@ -821,7 +887,8 @@ public class EsqlSession {
                 enrichResolution(),
                 fieldNames(),
                 wildcardJoinIndices(),
-                newInferenceResolution
+                newInferenceResolution,
+                subqueryIndices()
             );
         }
 
@@ -832,12 +899,18 @@ public class EsqlSession {
                 enrichResolution(),
                 fieldNames(),
                 wildcardJoinIndices(),
-                inferenceResolution()
+                inferenceResolution(),
+                subqueryIndices()
             );
         }
 
         PreAnalysisResult addLookupIndexResolution(String index, IndexResolution newIndexResolution) {
             lookupIndices.put(index, newIndexResolution);
+            return this;
+        }
+
+        PreAnalysisResult addSubqueryIndexResolution(String index, IndexResolution newIndexResolution) {
+            subqueryIndices.put(index, newIndexResolution);
             return this;
         }
     }

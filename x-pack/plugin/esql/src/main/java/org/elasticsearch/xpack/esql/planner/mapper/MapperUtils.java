@@ -23,6 +23,7 @@ import org.elasticsearch.xpack.esql.plan.logical.LogicalPlan;
 import org.elasticsearch.xpack.esql.plan.logical.MvExpand;
 import org.elasticsearch.xpack.esql.plan.logical.Project;
 import org.elasticsearch.xpack.esql.plan.logical.Sample;
+import org.elasticsearch.xpack.esql.plan.logical.Subquery;
 import org.elasticsearch.xpack.esql.plan.logical.TimeSeriesAggregate;
 import org.elasticsearch.xpack.esql.plan.logical.UnaryPlan;
 import org.elasticsearch.xpack.esql.plan.logical.fuse.FuseScoreEval;
@@ -44,6 +45,7 @@ import org.elasticsearch.xpack.esql.plan.physical.PhysicalPlan;
 import org.elasticsearch.xpack.esql.plan.physical.ProjectExec;
 import org.elasticsearch.xpack.esql.plan.physical.SampleExec;
 import org.elasticsearch.xpack.esql.plan.physical.ShowExec;
+import org.elasticsearch.xpack.esql.plan.physical.SubqueryExec;
 import org.elasticsearch.xpack.esql.plan.physical.TimeSeriesAggregateExec;
 import org.elasticsearch.xpack.esql.plan.physical.inference.CompletionExec;
 import org.elasticsearch.xpack.esql.plan.physical.inference.RerankExec;
@@ -141,6 +143,11 @@ public class MapperUtils {
 
         if (p instanceof Sample sample) {
             return new SampleExec(sample.source(), child, sample.probability());
+        }
+
+        if (p instanceof Subquery) {
+            // A Subquery node is just a placeholder for the subquery plan, so we just return the child plan
+            return child;
         }
 
         return unsupported(p);

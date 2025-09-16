@@ -4439,6 +4439,26 @@ public class AnalyzerTests extends ESTestCase {
         assertEquals(oneWeek, literal);
     }
 
+    // TODO
+    public void testSubqueryInFrom() {
+
+    }
+
+    // TODO
+    public void testMultipleSubqueriesInFrom() {
+
+    }
+
+    // TODO
+    public void testNestedSubqueryInFrom() {
+
+    }
+
+    // TODO
+    public void testMultipleNestedSubqueriesInFrom() {
+
+    }
+
     private void verifyNameAndType(String actualName, DataType actualType, String expectedName, DataType expectedType) {
         assertEquals(expectedName, actualName);
         assertEquals(expectedType, actualType);
