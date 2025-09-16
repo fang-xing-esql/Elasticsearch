@@ -1914,7 +1914,7 @@ public class AnalyzerTests extends ESTestCase {
 
     public void testRegularStats() {
         var plan = analyze("""
-            from tests
+            from test
             | stats by salary
             """);
 

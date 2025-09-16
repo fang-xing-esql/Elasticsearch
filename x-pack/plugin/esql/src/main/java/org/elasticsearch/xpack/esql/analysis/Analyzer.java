@@ -251,12 +251,14 @@ public class Analyzer extends ParameterizedRuleExecutor<LogicalPlan, AnalyzerCon
                 indexResolution = context.lookupResolution().get(indexPattern);
             } else { // main index or index in subquery
                 indexResolution = context.indexResolution();
-                if (indexPattern != null && indexResolution.matches(indexPattern) == false) {
+                if (indexPattern != null
+                    && indexResolution.matches(indexPattern) == false
+                    && context.subqueryResolution().isEmpty() == false) {
                     // index pattern does not match main index
-                    indexResolution = context.subqueryResolution().getOrDefault(indexPattern, null);
+                    indexResolution = context.subqueryResolution().getOrDefault(indexPattern, indexResolution);
                 }
             }
-            return resolveIndex(plan,indexResolution);
+            return resolveIndex(plan, indexResolution);
         }
 
         private LogicalPlan resolveIndex(UnresolvedRelation plan, IndexResolution indexResolution) {

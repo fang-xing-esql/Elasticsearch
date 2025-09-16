@@ -77,7 +77,6 @@ import org.elasticsearch.xpack.esql.plugin.TransportActionServices;
 import org.elasticsearch.xpack.esql.telemetry.PlanTelemetry;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -441,16 +440,16 @@ public class EsqlSession {
         );
         // TODO double check CCS call here - I don't think we want to include all indices here for subqueries
         if (subqueryIndexPattern != null) {
-             // time-series index is not supported in subqueries yet, the grammar does not allow it
-                indexResolver.resolveAsMergedMapping(
-                    subqueryIndexPattern.indexPattern(),
-                    result.fieldNames,
-                    null,
-                    false,
-                    listener.delegateFailure((l, indexResolution) -> {
-                        l.onResponse(result.addSubqueryIndexResolution(subqueryIndexPattern.indexPattern(), indexResolution));
-                    })
-                );
+            // time-series index is not supported in subqueries yet, the grammar does not allow it
+            indexResolver.resolveAsMergedMapping(
+                subqueryIndexPattern.indexPattern(),
+                result.fieldNames,
+                null,
+                false,
+                listener.delegateFailure((l, indexResolution) -> {
+                    l.onResponse(result.addSubqueryIndexResolution(subqueryIndexPattern.indexPattern(), indexResolution));
+                })
+            );
         } else {
             // occurs when dealing with local relations (row a = 1)
             listener.onResponse(result.withIndexResolution(IndexResolution.invalid("[none specified]")));
@@ -827,8 +826,15 @@ public class EsqlSession {
     private LogicalPlan analyzedPlan(LogicalPlan parsed, PreAnalysisResult r, EsqlExecutionInfo executionInfo) throws Exception {
         handleFieldCapsFailures(configuration.allowPartialResults(), executionInfo, r.indices.failures());
         Analyzer analyzer = new Analyzer(
-            new AnalyzerContext(configuration, functionRegistry, r.indices, r.lookupIndices,
-                r.enrichResolution, r.inferenceResolution, r.subqueryIndices),
+            new AnalyzerContext(
+                configuration,
+                functionRegistry,
+                r.indices,
+                r.lookupIndices,
+                r.enrichResolution,
+                r.inferenceResolution,
+                r.subqueryIndices
+            ),
             verifier
         );
         LogicalPlan plan = analyzer.analyze(parsed);
@@ -875,7 +881,7 @@ public class EsqlSession {
         Map<String, IndexResolution> subqueryIndices
     ) {
 
-        //TODO double check here
+        // TODO double check here
         public PreAnalysisResult(EnrichResolution enrichResolution, Set<String> fieldNames, Set<String> wildcardJoinIndices) {
             this(null, new HashMap<>(), enrichResolution, fieldNames, wildcardJoinIndices, InferenceResolution.EMPTY, new HashMap<>());
         }

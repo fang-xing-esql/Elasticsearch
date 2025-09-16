@@ -26,8 +26,13 @@ import java.util.Set;
  */
 public class PreAnalyzer {
 
-    public record PreAnalysis(IndexMode indexMode, IndexPattern index, List<Enrich> enriches, List<IndexPattern> lookupIndices,
-                              Set<IndexPattern> subqueryIndices) {
+    public record PreAnalysis(
+        IndexMode indexMode,
+        IndexPattern index,
+        List<Enrich> enriches,
+        List<IndexPattern> lookupIndices,
+        Set<IndexPattern> subqueryIndices
+    ) {
         public static final PreAnalysis EMPTY = new PreAnalysis(null, null, List.of(), List.of(), Set.of());
     }
 
@@ -68,9 +73,9 @@ public class PreAnalyzer {
                     collectSubqueryIndexPattern(unresolvedRelation, subqueryIndices, index.get());
                 }
                 // check each subquery leg and collect index patterns from each subquery
-                if (child instanceof Subquery subquery && subquery.preAnalyzed()==false) {
+                if (child instanceof Subquery subquery && subquery.preAnalyzed() == false) {
                     subquery.forEachUp(UnresolvedRelation.class, unresolvedRelation -> {
-                       collectSubqueryIndexPattern(unresolvedRelation, subqueryIndices, index.get());
+                        collectSubqueryIndexPattern(unresolvedRelation, subqueryIndices, index.get());
                     });
                 }
             });
@@ -83,9 +88,11 @@ public class PreAnalyzer {
         return new PreAnalysis(indexMode.get(), index.get(), unresolvedEnriches, lookupIndices, subqueryIndices);
     }
 
-    private void collectSubqueryIndexPattern(UnresolvedRelation relation,
-                                     Set<IndexPattern> subqueryIndices,
-                                     IndexPattern mainIndexPattern) {
+    private void collectSubqueryIndexPattern(
+        UnresolvedRelation relation,
+        Set<IndexPattern> subqueryIndices,
+        IndexPattern mainIndexPattern
+    ) {
         if (relation.preAnalyzed()) {
             return;
         }

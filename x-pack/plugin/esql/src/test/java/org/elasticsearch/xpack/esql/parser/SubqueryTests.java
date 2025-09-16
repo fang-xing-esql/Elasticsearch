@@ -69,7 +69,7 @@ public class SubqueryTests extends AbstractStatementParserTests {
                     Filter forkFilter = as(forkEval.child(), Filter.class);
                     Eval eval = as(forkFilter.child(), Eval.class);
                     Filter filter = as(eval.child(), Filter.class);
-                    validateSimpleSubqueryPlan(filter.child(), mainQueryIndexPattern,subqueryIndexPattern);
+                    validateSimpleSubqueryPlan(filter.child(), mainQueryIndexPattern, subqueryIndexPattern);
                 }
             }
         }

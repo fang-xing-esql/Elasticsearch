@@ -21,7 +21,7 @@ import java.io.IOException;
 import java.util.List;
 import java.util.Objects;
 
-public class Subquery extends UnaryPlan  implements PostAnalysisVerificationAware, TelemetryAware, SortAgnostic {
+public class Subquery extends UnaryPlan implements PostAnalysisVerificationAware, TelemetryAware, SortAgnostic {
     public static final NamedWriteableRegistry.Entry ENTRY = new NamedWriteableRegistry.Entry(LogicalPlan.class, "Subquery", Subquery::new);
 
     // subquery alias/qualifier could be added in the future if needed
@@ -115,6 +115,6 @@ public class Subquery extends UnaryPlan  implements PostAnalysisVerificationAwar
 
     // more plan types could be added if needed, non-pipeline breakers
     private boolean canMerge(LogicalPlan plan) {
-       return plan instanceof Subquery || plan instanceof Filter || plan instanceof EsRelation;
+        return plan instanceof Subquery || plan instanceof Filter || plan instanceof EsRelation;
     }
 }

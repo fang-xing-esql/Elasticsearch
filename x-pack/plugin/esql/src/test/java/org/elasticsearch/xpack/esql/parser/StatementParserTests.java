@@ -1118,10 +1118,7 @@ public class StatementParserTests extends AbstractStatementParserTests {
         expectError("row a = 1 metadata _index", "line 1:20: extraneous input '_index' expecting <EOF>");
         expectError("show info metadata _index", "line 1:11: token recognition error at: 'm'");
         if (EsqlCapabilities.Cap.EXPLAIN.isEnabled()) {
-            expectError(
-                "explain ( from foo ) metadata _index",
-                "line 1:22: token recognition error at: 'm'"
-            );
+            expectError("explain ( from foo ) metadata _index", "line 1:22: token recognition error at: 'm'");
         }
     }
 
