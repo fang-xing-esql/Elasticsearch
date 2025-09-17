@@ -4547,6 +4547,60 @@ public class AnalyzerTests extends ESTestCase {
         assertEquals("sample_data", subqueryIndex.indexPattern());
     }
 
+    public void testNestedSubqueryInFromWithMetadata() {
+        LogicalPlan plan = analyze("""
+            FROM test, (FROM languages, (FROM sample_data | STATS count(*)) | WHERE language_code > 10) metadata _index
+            | WHERE emp_no > 10000
+            | SORT emp_no, language_code
+            """);
+
+        Limit limit = as(plan, Limit.class);
+        OrderBy orderBy = as(limit.child(), OrderBy.class);
+        Filter filter = as(orderBy.child(), Filter.class);
+        UnionAll unionAll = as(filter.child(), UnionAll.class);
+        assertEquals(2, unionAll.children().size());
+        // leg1
+        Limit subqueryLimit = as(unionAll.children().get(0), Limit.class);
+        EsqlProject subqueryProject = as(subqueryLimit.child(), EsqlProject.class);
+        Eval subqueryEval = as(subqueryProject.child(), Eval.class);
+        EsRelation subqueryIndex = as(subqueryEval.child(), EsRelation.class);
+        assertEquals("test", subqueryIndex.indexPattern());
+        List<Attribute> output = subqueryIndex.output();
+        assertEquals(12, output.size());
+        MetadataAttribute metadataAttribute = as(output.get(11), MetadataAttribute.class);
+        assertEquals("_index", metadataAttribute.name());
+
+        subqueryLimit = as(unionAll.children().get(1), Limit.class);
+        subqueryProject = as(subqueryLimit.child(), EsqlProject.class);
+        subqueryEval = as(subqueryProject.child(), Eval.class);
+        Subquery subquery = as(subqueryEval.child(), Subquery.class);
+        Filter subqueryFilter = as(subquery.child(), Filter.class);
+        unionAll = as(subqueryFilter.child(), UnionAll.class);
+        assertEquals(2, unionAll.children().size());
+        // leg2
+        subqueryLimit = as(unionAll.children().get(0), Limit.class);
+        subqueryProject = as(subqueryLimit.child(), EsqlProject.class);
+        subqueryEval = as(subqueryProject.child(), Eval.class);
+        subqueryIndex = as(subqueryEval.child(), EsRelation.class);
+        assertEquals("languages", subqueryIndex.indexPattern());
+        output = subqueryIndex.output();
+        assertEquals(3, output.size());
+        metadataAttribute = as(output.get(2), MetadataAttribute.class);
+        assertEquals("_index", metadataAttribute.name());
+        // leg3
+        subqueryLimit = as(unionAll.children().get(1), Limit.class);
+        subqueryProject = as(subqueryLimit.child(), EsqlProject.class);
+        subqueryEval = as(subqueryProject.child(), Eval.class);
+        subquery = as(subqueryEval.child(), Subquery.class);
+        Aggregate subqueryAggregate = as(subquery.child(), Aggregate.class);
+        subqueryIndex = as(subqueryAggregate.child(), EsRelation.class);
+        assertEquals("sample_data", subqueryIndex.indexPattern());
+        output = subqueryIndex.output();
+        assertEquals(5, output.size());
+        metadataAttribute = as(output.get(4), MetadataAttribute.class);
+        assertEquals("_index", metadataAttribute.name());
+    }
+
     private void verifyNameAndType(String actualName, DataType actualType, String expectedName, DataType expectedType) {
         assertEquals(expectedName, actualName);
         assertEquals(expectedType, actualType);

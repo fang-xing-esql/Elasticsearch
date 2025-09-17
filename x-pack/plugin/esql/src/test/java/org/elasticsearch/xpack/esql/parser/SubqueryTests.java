@@ -8,6 +8,8 @@
 package org.elasticsearch.xpack.esql.parser;
 
 import org.elasticsearch.common.logging.LoggerMessageFormat;
+import org.elasticsearch.xpack.esql.core.expression.Attribute;
+import org.elasticsearch.xpack.esql.core.expression.MetadataAttribute;
 import org.elasticsearch.xpack.esql.plan.logical.Aggregate;
 import org.elasticsearch.xpack.esql.plan.logical.Drop;
 import org.elasticsearch.xpack.esql.plan.logical.Eval;
@@ -474,6 +476,50 @@ public class SubqueryTests extends AbstractStatementParserTests {
         Filter filter = as(subquery3.plan(), Filter.class);
         unresolvedRelation = as(filter.child(), UnresolvedRelation.class);
         assertEquals("index4", unresolvedRelation.indexPattern().indexPattern());
+    }
+
+    public void testSubqueriesWithMetadada() {
+        String query = """
+             FROM index1, (FROM index2, (FROM index3) metadata _score | WHERE a > 10) metadata _index
+             | STATS cnt = COUNT(*) BY a
+            """;
+
+        LogicalPlan plan = statement(query);
+        Aggregate aggregate = as(plan, Aggregate.class);
+        UnionAll unionAll = as(aggregate.child(), UnionAll.class);
+        List<LogicalPlan> children = unionAll.children();
+        assertEquals(2, children.size());
+
+        UnresolvedRelation mainRelation = as(children.get(0), UnresolvedRelation.class);
+        assertEquals("index1", mainRelation.indexPattern().indexPattern());
+        List<Attribute> metadata = mainRelation.metadataFields();
+        assertEquals(1, metadata.size());
+        MetadataAttribute metadataAttribute = as(metadata.get(0), MetadataAttribute.class);
+        assertEquals("_index", metadataAttribute.name());
+
+        Subquery subquery = as(children.get(1), Subquery.class);
+        Filter filter = as(subquery.plan(), Filter.class);
+        unionAll = as(filter.child(), UnionAll.class);
+        children = unionAll.children();
+        assertEquals(2, children.size());
+        UnresolvedRelation subqueryRelation = as(children.get(0), UnresolvedRelation.class);
+        assertEquals("index2", subqueryRelation.indexPattern().indexPattern());
+        metadata = subqueryRelation.metadataFields();
+        assertEquals(2, metadata.size());
+        metadataAttribute = as(metadata.get(0), MetadataAttribute.class);
+        assertEquals("_score", metadataAttribute.name());
+        metadataAttribute = as(metadata.get(1), MetadataAttribute.class);
+        assertEquals("_index", metadataAttribute.name());
+
+        subquery = as(children.get(1), Subquery.class);
+        subqueryRelation = as(subquery.plan(), UnresolvedRelation.class);
+        assertEquals("index3", subqueryRelation.indexPattern().indexPattern());
+        metadata = subqueryRelation.metadataFields();
+        assertEquals(2, metadata.size());
+        metadataAttribute = as(metadata.get(0), MetadataAttribute.class);
+        assertEquals("_score", metadataAttribute.name());
+        metadataAttribute = as(metadata.get(1), MetadataAttribute.class);
+        assertEquals("_index", metadataAttribute.name());
     }
 
     public void testTimeSeriesWithSubquery() {
