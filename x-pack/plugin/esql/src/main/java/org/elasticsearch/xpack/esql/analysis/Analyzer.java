@@ -114,7 +114,6 @@ import org.elasticsearch.xpack.esql.plan.logical.Lookup;
 import org.elasticsearch.xpack.esql.plan.logical.MvExpand;
 import org.elasticsearch.xpack.esql.plan.logical.Project;
 import org.elasticsearch.xpack.esql.plan.logical.Rename;
-import org.elasticsearch.xpack.esql.plan.logical.Subquery;
 import org.elasticsearch.xpack.esql.plan.logical.TimeSeriesAggregate;
 import org.elasticsearch.xpack.esql.plan.logical.UnionAll;
 import org.elasticsearch.xpack.esql.plan.logical.UnresolvedRelation;
@@ -833,7 +832,11 @@ public class Analyzer extends ParameterizedRuleExecutor<LogicalPlan, AnalyzerCon
                 );
             }
 
-            return changed ? new Fork(fork.source(), newSubPlans, newOutput) : fork;
+            return changed
+                ? fork instanceof UnionAll unionAll
+                    ? new UnionAll(unionAll.source(), newSubPlans, newOutput)
+                    : new Fork(fork.source(), newSubPlans, newOutput)
+                : fork;
         }
 
         private LogicalPlan resolveRerank(Rerank rerank, List<Attribute> childrenOutput) {
@@ -1376,39 +1379,6 @@ public class Analyzer extends ParameterizedRuleExecutor<LogicalPlan, AnalyzerCon
             }
 
             return plan;
-        }
-    }
-
-    // WIP merge nested UnionAll into a single one for simple cases like: from index1, (from index2, (from index3))
-    private static class MergeNestedUnionAll extends ParameterizedRule<LogicalPlan, LogicalPlan, AnalyzerContext> {
-        @Override
-        public LogicalPlan apply(LogicalPlan logicalPlan, AnalyzerContext context) {
-            return logicalPlan.transformUp(UnionAll.class, ua -> {
-                if (ua.canMerge() == false) {
-                    return ua;
-                }
-                List<LogicalPlan> newChildren = mergeUnionAll(ua.children());
-                if (newChildren.size() == ua.children().size()) {
-                    return ua;
-                } else {
-                    return ua.replaceChildren(newChildren);
-                }
-            });
-        }
-
-        private List<LogicalPlan> mergeUnionAll(List<LogicalPlan> children) {
-            List<LogicalPlan> newChildren = new ArrayList<>();
-            for (LogicalPlan child : children) {
-                if (child instanceof Subquery subquery) {
-                    child = subquery.plan();
-                }
-                if (child instanceof UnionAll ua) {
-                    newChildren.addAll(mergeUnionAll(ua.children()));
-                } else {
-                    newChildren.add(child);
-                }
-            }
-            return newChildren;
         }
     }
 

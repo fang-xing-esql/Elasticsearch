@@ -439,6 +439,7 @@ public class EsqlSession {
             ThreadPool.Names.SYSTEM_READ
         );
         // TODO double check CCS call here - I don't think we want to include all indices here for subqueries
+        // executionInfo is built for the main index pattern, not subqueries, do we need to check against executionInfo here?
         if (subqueryIndexPattern != null) {
             // time-series index is not supported in subqueries yet, the grammar does not allow it
             indexResolver.resolveAsMergedMapping(

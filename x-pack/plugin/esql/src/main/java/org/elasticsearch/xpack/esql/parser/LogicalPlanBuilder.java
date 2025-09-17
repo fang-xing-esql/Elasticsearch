@@ -366,7 +366,7 @@ public class LogicalPlanBuilder extends ExpressionBuilder {
      * Recursively unwrap UnionAll children to avoid deep trees of UnionAll, if there is pipeline breaker like stats in between union alls
      * the tree will not be flattened beyond that point. There are some simple patterns that can be detected and flattened here, but
      * a better time to flatten the tree is after Analyzer when we have more information about the plan.
-     * TODO is this a good time to flatten unionAlls? Perhaps this can be deferred to after Analyzer before verifier checks to nested forks
+     * TODO is this a good time to flatten unionAlls? Perhaps this can be deferred to logical planner after analyzer/resolutions
      */
     private List<LogicalPlan> unionAllChildren(List<LogicalPlan> children) {
         List<LogicalPlan> newChildren = new ArrayList<>();
