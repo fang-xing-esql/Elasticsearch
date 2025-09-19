@@ -15,6 +15,7 @@ import org.elasticsearch.xpack.esql.core.expression.Expression;
 import org.elasticsearch.xpack.esql.core.expression.Expressions;
 import org.elasticsearch.xpack.esql.core.expression.FoldContext;
 import org.elasticsearch.xpack.esql.core.expression.Literal;
+import org.elasticsearch.xpack.esql.core.expression.NamedExpression;
 import org.elasticsearch.xpack.esql.core.expression.ReferenceAttribute;
 import org.elasticsearch.xpack.esql.core.util.CollectionUtils;
 import org.elasticsearch.xpack.esql.expression.predicate.Predicates;
@@ -22,11 +23,14 @@ import org.elasticsearch.xpack.esql.optimizer.LogicalOptimizerContext;
 import org.elasticsearch.xpack.esql.plan.logical.Enrich;
 import org.elasticsearch.xpack.esql.plan.logical.Eval;
 import org.elasticsearch.xpack.esql.plan.logical.Filter;
+import org.elasticsearch.xpack.esql.plan.logical.Limit;
 import org.elasticsearch.xpack.esql.plan.logical.LogicalPlan;
 import org.elasticsearch.xpack.esql.plan.logical.OrderBy;
 import org.elasticsearch.xpack.esql.plan.logical.Project;
 import org.elasticsearch.xpack.esql.plan.logical.RegexExtract;
+import org.elasticsearch.xpack.esql.plan.logical.Subquery;
 import org.elasticsearch.xpack.esql.plan.logical.UnaryPlan;
+import org.elasticsearch.xpack.esql.plan.logical.UnionAll;
 import org.elasticsearch.xpack.esql.plan.logical.inference.InferencePlan;
 import org.elasticsearch.xpack.esql.plan.logical.join.InlineJoin;
 import org.elasticsearch.xpack.esql.plan.logical.join.Join;
@@ -109,6 +113,12 @@ public final class PushDownAndCombineFilters extends OptimizerRules.Parameterize
             // See also https://github.com/elastic/elasticsearch/issues/127497
             // Push down past INLINESTATS if the condition is on the groupings
             return pushDownPastJoin(filter, join, ctx.foldCtx());
+        } else if (child instanceof UnionAll unionAll) {
+            // Push down filters that can be evaluated using only the output of the UnionAll
+            plan = maybePushDownPastUnionAll(filter, unionAll);
+        } else if (child instanceof Subquery subquery) {
+            // subquery is a placeholder, push down the filter to the child of the subquery
+            plan = subquery.replaceChild(new Filter(filter.source(), subquery.child(), filter.condition()));
         }
         // cannot push past a Limit, this could change the tailing result set returned
         return plan;
@@ -283,4 +293,226 @@ public final class PushDownAndCombineFilters extends OptimizerRules.Parameterize
         }
         return plan;
     }
+
+    /* Push down filters that can be evaluated by the UnionAll child/leg to each child/leg,
+     * so that the filters can be pushed down further to the data source if possible.
+     * Filters that cannot be pushed down remain above the UnionAll.
+     *
+     * The children of a UnionAll/Fork plan has a similar pattern, asFork adds EsqlProject,
+     * an optional Eval and Limit on top of its actual children.
+     * UnionAll
+     *   EsqlProject
+     *     Eval (optional) if the output of UnionAll children need to be aligned
+     *       Limit
+     *         EsRelation
+     *   EsqlProject
+     *     Eval (optional) if the output of UnionAll children need to be aligned
+     *       Limit
+     *         Subquery
+     *
+     * Push down the filter below limit when possible
+     */
+    private static LogicalPlan maybePushDownPastUnionAll(Filter filter, UnionAll unionAll) {
+        List<Expression> pushable = new ArrayList<>();
+        List<Expression> nonPushable = new ArrayList<>();
+        for (Expression exp : Predicates.splitAnd(filter.condition())) {
+            if (exp.references().subsetOf(unionAll.outputSet())) {
+                pushable.add(exp);
+            } else {
+                nonPushable.add(exp);
+            }
+        }
+        if (pushable.isEmpty()) {
+            return filter; // nothing to push down
+        }
+
+        // Push the filter down to each child of the UnionAll, the child of a UnionAll is always a project
+        // followed by an optional eval and then limit added by fork and then the real child
+        List<LogicalPlan> newChildren = new ArrayList<>();
+        boolean changed = false;
+        for (LogicalPlan child : unionAll.children()) {
+            if (child instanceof Project project) {
+                LogicalPlan newChild = maybePushDownFilterPastEvalAndLimitForUnionAllChild(pushable, project);
+                if (newChild != child) {
+                    changed = true;
+                }
+                newChildren.add(newChild);
+            } else { // unexpected pattern, just add the child as is
+                newChildren.add(child);
+            }
+        }
+
+        if (changed == false) { // nothing changed, return the original plan
+            return filter;
+        }
+
+        LogicalPlan newUnionAll = unionAll.replaceChildren(newChildren);
+        if (nonPushable.isEmpty()) {
+            return newUnionAll;
+        } else {
+            return filter.with(newUnionAll, Predicates.combineAnd(nonPushable));
+        }
+    }
+
+    private static LogicalPlan maybePushDownFilterPastEvalAndLimitForUnionAllChild_Old(List<Expression> pushable, Project project) {
+        List<? extends NamedExpression> projections = project.projections();
+        List<Expression> newPushable = new ArrayList<>();
+        List<Expression> newNonPushable = new ArrayList<>();
+        // the attribute name should match the output of the UnionAll child, but the nameId may be different,
+        // as Fork create a reference to the actual projected attribute in Fork's output with a new nameId
+        // so we need to replace the attribute in the pushable expression with the actual attribute from the child
+
+        // The pattern of a UnionAll child is always:
+        // Project
+        // Eval (optional) if the output of UnionAll children need to be aligned
+        // Limit
+        // EsRelation or Subquery
+        // We push down the filter below the limit when possible.
+        // We cannot reuse PushDownUtils.pushDownPastProject or the logic of pushing down filter under eval
+        // as we need to handle the attribute nameId change by fork.
+        // We also need to handle the case where the child of the project is an eval that creates null values
+        // for some of the attributes, in this case we cannot push down the filter if it references
+        // any of the attributes that are null in the eval
+        // For example:
+        // Project [a, b, c]
+        // Eval [b = null, c = null]
+        // Limit
+        // EsRelation
+        LogicalPlan evalOrLimit = project.child();
+        if (evalOrLimit instanceof Eval eval) {
+            // extract the null aliases from the eval
+            AttributeMap.Builder<Expression> aliasesBuilder = AttributeMap.builder();
+            for (Alias alias : eval.fields()) {
+                aliasesBuilder.put(alias.toAttribute(), alias.child());
+            }
+            AttributeMap<Expression> evalNullAliases = aliasesBuilder.build();
+
+            for (Expression exp : pushable) {
+                // if the expression references any of the eval null aliases, we cannot push down the filter
+                if (exp.references().stream().anyMatch(evalNullAliases::containsKey)) {
+                    newNonPushable.add(exp);
+                    // skip this expression as we cannot push down the filter as it references an attribute that is null in eval
+                    continue;
+                }
+                // the exp is not referenced by any of the eval null aliases, we can try to push down the filter
+                // replace the attribute in the expression with the actual attribute from the projection
+                // we need to do this for each attribute in the expression
+                // as the expression may reference multiple attributes
+
+                Expression replaced = replaceAttributesByNameOrNull(exp, projections);
+                if (replaced == null) {
+                    // if we cannot replace all the attributes in the expression, we cannot push down the filter
+                    newNonPushable.add(exp);
+                    continue;
+                }
+                newPushable.add(replaced);
+            }
+            // there is nothing new to push down
+            if (newPushable.isEmpty()) {
+                return project;
+            }
+
+            // push down the newPushable filters below the eval
+            // the eval should havel a limit below it, we push down the filter below the limit
+            LogicalPlan evalChild = eval.child();
+            if (evalChild instanceof Limit limit) {
+                LogicalPlan newLimit = pushDownFilterPastLimitForUnionAllChild(newPushable, limit);
+                LogicalPlan newEval = eval.replaceChild(newLimit);
+                // create a filter above the eval for the newNonPushable filters if any
+                if (newNonPushable.isEmpty()) {
+                    return project.replaceChild(newEval);
+                } else {
+                    Filter newFilter = new Filter(project.source(), newEval, Predicates.combineAnd(newNonPushable));
+                    return project.replaceChild(newFilter);
+                }
+            }
+        } else if (evalOrLimit instanceof Limit limit) {
+            // the child of the project is not an eval or limit, we cannot push down the filter
+            return project.replaceChild(pushDownFilterPastLimitForUnionAllChild(pushable, limit));
+        }
+        return project;
+    }
+
+    private static LogicalPlan maybePushDownFilterPastEvalAndLimitForUnionAllChild(List<Expression> pushable, Project project) {
+        LogicalPlan child = project.child();
+        if (child instanceof Eval eval) {
+            return pushDownFilterPastEvalForUnionAllChild(pushable, project, eval);
+        } else if (child instanceof Limit limit) {
+            LogicalPlan newLimit = pushDownFilterPastLimitForUnionAllChild(pushable, limit);
+            return project.replaceChild(newLimit);
+        }
+        return project;
+    }
+
+    private static LogicalPlan pushDownFilterPastEvalForUnionAllChild(List<Expression> pushable, Project project, Eval eval) {
+        List<? extends NamedExpression> projections = project.projections();
+        AttributeMap<Expression> evalNullAliases = buildEvaAliases(eval);
+
+        List<Expression> newPushable = new ArrayList<>();
+        List<Expression> newNonPushable = new ArrayList<>();
+
+        for (Expression exp : pushable) {
+            if (exp.references().stream().anyMatch(evalNullAliases::containsKey)) {
+                newNonPushable.add(exp);
+                continue;
+            }
+            Expression replaced = replaceAttributesByNameOrNull(exp, projections);
+            if (replaced == null) {
+                newNonPushable.add(exp);
+            } else {
+                newPushable.add(replaced);
+            }
+        }
+
+        if (newPushable.isEmpty()) {
+            return project;
+        }
+
+        LogicalPlan evalChild = eval.child();
+        if (evalChild instanceof Limit limit) {
+            LogicalPlan newLimit = pushDownFilterPastLimitForUnionAllChild(newPushable, limit);
+            LogicalPlan newEval = eval.replaceChild(newLimit);
+            if (newNonPushable.isEmpty()) {
+                return project.replaceChild(newEval);
+            } else {
+                Filter newFilter = new Filter(project.source(), newEval, Predicates.combineAnd(newNonPushable));
+                return project.replaceChild(newFilter);
+            }
+        }
+        return project;
+    }
+
+    private static LogicalPlan pushDownFilterPastLimitForUnionAllChild(List<Expression> pushable, Limit limit) {
+        Expression combined = Predicates.combineAnd(pushable);
+        Filter pushed = new Filter(limit.source(), limit.child(), combined);
+        return limit.replaceChild(pushed);
+    }
+
+    private static AttributeMap<Expression> buildEvaAliases(Eval eval) {
+        AttributeMap.Builder<Expression> builder = AttributeMap.builder();
+        for (Alias alias : eval.fields()) {
+            builder.put(alias.toAttribute(), alias.child());
+        }
+        return builder.build();
+    }
+
+    private static Expression replaceAttributesByNameOrNull(Expression expr, List<? extends NamedExpression> namedExpressions) {
+        // Collect all referenced attributes
+        for (Attribute attr : expr.references()) {
+            boolean found = namedExpressions.stream().anyMatch(ne -> ne.name().equals(attr.name()));
+            if (found == false) {
+                return null;
+            }
+        }
+        // Replace attributes by name
+        return expr.transformUp(Attribute.class, attr -> {
+            for (NamedExpression ne : namedExpressions) {
+                if (ne.name().equals(attr.name())) {
+                    return ne.toAttribute();
+                }
+            }
+            return attr; // This should not happen due to the check above
+        });
+    }
+
 }

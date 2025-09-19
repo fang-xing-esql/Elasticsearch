@@ -4471,7 +4471,10 @@ public class AnalyzerTests extends ESTestCase {
 
     public void testMultipleSubqueriesInFrom() {
         LogicalPlan plan = analyze("""
-            FROM test, (FROM languages | WHERE language_code > 10), (FROM sample_data | STATS count(*))
+            FROM test
+            , (FROM languages | WHERE language_code > 10)
+            , (FROM sample_data | STATS count(*))
+            , (FROM test | EVAL language_code = languages | LOOKUP JOIN languages_lookup ON language_code)
             | WHERE emp_no > 10000
             | SORT emp_no, language_code
             """);
@@ -4480,7 +4483,7 @@ public class AnalyzerTests extends ESTestCase {
         OrderBy orderBy = as(limit.child(), OrderBy.class);
         Filter filter = as(orderBy.child(), Filter.class);
         UnionAll unionAll = as(filter.child(), UnionAll.class);
-        assertEquals(3, unionAll.children().size());
+        assertEquals(4, unionAll.children().size());
         // leg1
         Limit subqueryLimit = as(unionAll.children().get(0), Limit.class);
         EsqlProject subqueryProject = as(subqueryLimit.child(), EsqlProject.class);

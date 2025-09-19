@@ -62,21 +62,6 @@ public class UnionAll extends Fork implements PostOptimizationPlanVerificationAw
         return Objects.equals(children(), other.children());
     }
 
-    public boolean canMerge() {
-        // if the subquery contains from/eval/where/subquery, it can be merged
-        for (LogicalPlan subPlan : children()) {
-            if (canMerge(subPlan) == false) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    // more plan types could be added if needed, non-pipeline breakers like eval/filter etc.
-    private boolean canMerge(LogicalPlan plan) {
-        return plan instanceof Subquery || plan instanceof EsRelation || plan instanceof UnresolvedRelation;
-    }
-
     @Override
     public BiConsumer<LogicalPlan, Failures> postAnalysisPlanVerification() {
         return UnionAll::checkUnionAll;
@@ -128,7 +113,7 @@ public class UnionAll extends Fork implements PostOptimizationPlanVerificationAw
                 if (unionAll == otherUnionAll) {
                     return;
                 }
-                failures.add(Failure.fail(otherUnionAll, "Only a single FORK command is supported, but found multiple"));
+                failures.add(Failure.fail(otherUnionAll, "Nested subqueries are not supported"));
             });
         }
     }

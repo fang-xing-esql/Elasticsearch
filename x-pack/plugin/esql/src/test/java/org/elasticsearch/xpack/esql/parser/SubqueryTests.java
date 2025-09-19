@@ -22,6 +22,7 @@ import org.elasticsearch.xpack.esql.plan.logical.OrderBy;
 import org.elasticsearch.xpack.esql.plan.logical.Subquery;
 import org.elasticsearch.xpack.esql.plan.logical.UnionAll;
 import org.elasticsearch.xpack.esql.plan.logical.UnresolvedRelation;
+import org.elasticsearch.xpack.esql.plan.logical.join.LookupJoin;
 
 import java.util.List;
 
@@ -348,6 +349,7 @@ public class SubqueryTests extends AbstractStatementParserTests {
              FROM index1, (FROM index2
                                       | WHERE a > 10
                                       | EVAL b = a * 2
+                                      | LOOKUP JOIN index3 ON c
                                       | FORK (WHERE c < 100) (WHERE d > 200)
                                       | STATS cnt = COUNT(*) BY e
                                       | SORT cnt desc
@@ -357,6 +359,7 @@ public class SubqueryTests extends AbstractStatementParserTests {
              , index3, (FROM index4)
               | WHERE a > 10
               | EVAL b = a * 2
+              | LOOKUP JOIN index3 ON c
               | FORK (WHERE c < 100) (WHERE d > 200)
               | STATS cnt = COUNT(*) BY e
               | SORT cnt desc
@@ -376,7 +379,10 @@ public class SubqueryTests extends AbstractStatementParserTests {
         assertEquals(2, forkChildren.size());
         for (Eval forkEval : List.of(as(forkChildren.get(0), Eval.class), as(forkChildren.get(1), Eval.class))) {
             Filter forkFilter = as(forkEval.child(), Filter.class);
-            Eval eval = as(forkFilter.child(), Eval.class);
+            LookupJoin lookupJoin = as(forkFilter.child(), LookupJoin.class);
+            Eval eval = as(lookupJoin.left(), Eval.class);
+            UnresolvedRelation joinRelation = as(lookupJoin.right(), UnresolvedRelation.class);
+            assertEquals("index3", joinRelation.indexPattern().indexPattern());
             Filter filter = as(eval.child(), Filter.class);
 
             UnionAll unionAll = as(filter.child(), UnionAll.class);
@@ -400,7 +406,10 @@ public class SubqueryTests extends AbstractStatementParserTests {
                 as(subqueryForkChildren.get(1), Eval.class)
             )) {
                 Filter subqueryForkFilter = as(subqueryForkEval.child(), Filter.class);
-                Eval subqueryEval = as(subqueryForkFilter.child(), Eval.class);
+                LookupJoin subqueryLookupJoin = as(subqueryForkFilter.child(), LookupJoin.class);
+                Eval subqueryEval = as(subqueryLookupJoin.left(), Eval.class);
+                UnresolvedRelation subqueryJoinRelation = as(subqueryLookupJoin.right(), UnresolvedRelation.class);
+                assertEquals("index3", subqueryJoinRelation.indexPattern().indexPattern());
                 Filter subqueryFilter = as(subqueryEval.child(), Filter.class);
                 UnresolvedRelation subqueryRelation = as(subqueryFilter.child(), UnresolvedRelation.class);
                 assertEquals("index2", subqueryRelation.indexPattern().indexPattern());
@@ -441,7 +450,6 @@ public class SubqueryTests extends AbstractStatementParserTests {
         assertEquals("index4", unresolvedRelation.indexPattern().indexPattern());
     }
 
-    // unionAlls cannot be flattened at parsing time, try flattening it in Analyzer before resolving fork
     public void testNestedSubqueryWithProcessingCommands() {
         String query = """
              FROM index1, (FROM index2, (FROM index3, (FROM index4

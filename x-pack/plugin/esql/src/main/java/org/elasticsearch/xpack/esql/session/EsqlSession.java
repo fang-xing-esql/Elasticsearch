@@ -382,23 +382,6 @@ public class EsqlSession {
         }
 
         var preAnalysis = preAnalyzer.preAnalyze(parsed);
-        /*
-        IndexPattern combinedPattern = preAnalysis.index();
-        for (IndexPattern subqueryPattern : preAnalysis.subqueryIndices()) {
-            // combine subquery indices with the main index pattern
-            String pattern = subqueryPattern.indexPattern();
-            if (pattern != null && pattern.isEmpty() == false) {
-                if (combinedPattern == null) {
-                    combinedPattern = subqueryPattern;
-                } else {
-                    String combined = Stream.of(combinedPattern.indexPattern(), pattern).flatMap(s -> Arrays.stream(s.split(",")))
-                        .map(String::trim)
-                        .filter(str -> str.isEmpty()== false).distinct().collect(Collectors.joining(","));
-                    combinedPattern = new IndexPattern(combinedPattern.source(), combined);
-                }
-            }
-        }
-         */
         EsqlCCSUtils.initCrossClusterState(indicesExpressionGrouper, verifier.licenseState(), preAnalysis.index(), executionInfo);
 
         SubscribableListener. //
@@ -438,12 +421,23 @@ public class EsqlSession {
             ThreadPool.Names.SEARCH_COORDINATION,
             ThreadPool.Names.SYSTEM_READ
         );
-        // TODO double check CCS call here - I don't think we want to include all indices here for subqueries
-        // executionInfo is built for the main index pattern, not subqueries, do we need to check against executionInfo here?
         if (subqueryIndexPattern != null) {
+            // The input executionInfo is built for the main index pattern, not subqueries
+            // create an index pattern with remote clusters for subquery's index pattern
+
+            // make a copy of the main EsqlExecutionInfo for this subquery,
+            // and reuse the existing API to build the subqueryIndexExpression
+            String indexExpressionToResolve = subqueryIndexExpression(executionInfo, subqueryIndexPattern);
+            if (indexExpressionToResolve.isEmpty()) {
+                // no clusters are running, nothing to resolve
+                listener.onResponse(
+                    result.addSubqueryIndexResolution(subqueryIndexPattern.indexPattern(), IndexResolution.invalid("[none available]"))
+                );
+                return;
+            }
             // time-series index is not supported in subqueries yet, the grammar does not allow it
             indexResolver.resolveAsMergedMapping(
-                subqueryIndexPattern.indexPattern(),
+                indexExpressionToResolve,
                 result.fieldNames,
                 null,
                 false,
@@ -455,6 +449,17 @@ public class EsqlSession {
             // occurs when dealing with local relations (row a = 1)
             listener.onResponse(result.withIndexResolution(IndexResolution.invalid("[none specified]")));
         }
+    }
+
+    private String subqueryIndexExpression(EsqlExecutionInfo mainExecutionInfo, IndexPattern subqueryIndexPattern) {
+        // Clone mainInfo (assuming a copy constructor or similar method exists)
+        EsqlExecutionInfo subqueryExecutionInfo = new EsqlExecutionInfo(
+            mainExecutionInfo.skipOnFailurePredicate(),
+            mainExecutionInfo.includeCCSMetadata()
+        );
+        EsqlCCSUtils.initCrossClusterState(indicesExpressionGrouper, verifier.licenseState(), subqueryIndexPattern, subqueryExecutionInfo);
+
+        return EsqlCCSUtils.createIndexExpressionFromAvailableClusters(subqueryExecutionInfo);
     }
 
     private void preAnalyzeLookupIndices(
