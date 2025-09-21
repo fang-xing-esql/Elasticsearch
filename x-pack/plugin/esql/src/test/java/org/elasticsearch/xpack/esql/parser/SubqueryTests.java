@@ -8,6 +8,7 @@
 package org.elasticsearch.xpack.esql.parser;
 
 import org.elasticsearch.common.logging.LoggerMessageFormat;
+import org.elasticsearch.xpack.esql.action.EsqlCapabilities;
 import org.elasticsearch.xpack.esql.core.expression.Attribute;
 import org.elasticsearch.xpack.esql.core.expression.MetadataAttribute;
 import org.elasticsearch.xpack.esql.plan.logical.Aggregate;
@@ -32,6 +33,7 @@ import static org.hamcrest.Matchers.containsString;
 public class SubqueryTests extends AbstractStatementParserTests {
 
     public void testIndexPatternWithSubquery() {
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         for (String mainQueryIndexPattern : List.of("index1", "index1,index3")) {
             for (String subqueryIndexPattern : List.of("index2", "index2,index4", "index1,index2,index4")) {
                 String query = LoggerMessageFormat.format(null, """
@@ -45,6 +47,7 @@ public class SubqueryTests extends AbstractStatementParserTests {
     }
 
     public void testSubqueryWithProcessingCommandsInMainquery() {
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         for (String mainQueryIndexPattern : List.of("index1", "index1,index3")) {
             for (String subqueryIndexPattern : List.of("index2", "index2,index4", "index1,index2,index4")) {
                 String query = LoggerMessageFormat.format(null, """
@@ -79,6 +82,7 @@ public class SubqueryTests extends AbstractStatementParserTests {
     }
 
     private void validateSimpleSubqueryPlan(LogicalPlan plan, String mainQueryIndexPattern, String subqueryIndexPattern) {
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         UnionAll unionAll = as(plan, UnionAll.class);
         List<LogicalPlan> children = unionAll.children();
         assertEquals(2, children.size());
@@ -92,6 +96,7 @@ public class SubqueryTests extends AbstractStatementParserTests {
     }
 
     public void testWithSubqueryWithProcessingCommandsInSubquery() {
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         String query = """
              FROM index1, (FROM index2
                                       | WHERE a > 10
@@ -132,6 +137,7 @@ public class SubqueryTests extends AbstractStatementParserTests {
     }
 
     public void testSubqueryWithProcessingCommandsInSubqueryAndMainquery() {
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         String query = """
              FROM index1, (FROM index2
                                       | WHERE a > 10
@@ -196,6 +202,7 @@ public class SubqueryTests extends AbstractStatementParserTests {
     }
 
     public void testSubqueryOnly() {
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         String query = """
              FROM (FROM index2)
             """;
@@ -206,6 +213,7 @@ public class SubqueryTests extends AbstractStatementParserTests {
     }
 
     public void testSubqueryOnlyWithProcessingCommandInMainquery() {
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         String query = """
              FROM (FROM index2)
              | WHERE a > 10
@@ -237,6 +245,7 @@ public class SubqueryTests extends AbstractStatementParserTests {
     }
 
     public void testSubqueryOnlyWithProcessingCommandsInSubquery() {
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         String query = """
              FROM (FROM index2
                          | WHERE a > 10
@@ -268,6 +277,7 @@ public class SubqueryTests extends AbstractStatementParserTests {
     }
 
     public void testSubqueryOnlyWithProcessingCommandsInSubqueryAndMainquery() {
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         String query = """
              FROM (FROM index2
                          | WHERE a > 10
@@ -323,6 +333,7 @@ public class SubqueryTests extends AbstractStatementParserTests {
     }
 
     public void testMultipleSubqueries() {
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         String query = """
              FROM index1, (FROM index2), index3, (FROM index4)
             """;
@@ -345,6 +356,7 @@ public class SubqueryTests extends AbstractStatementParserTests {
     }
 
     public void testMultipleSubqueriesWithProcessingCommands() {
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         String query = """
              FROM index1, (FROM index2
                                       | WHERE a > 10
@@ -423,6 +435,7 @@ public class SubqueryTests extends AbstractStatementParserTests {
 
     // unionAlls can be flattened
     public void testNestedSubquery() {
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         String query = """
              FROM index1, (FROM index2, (FROM index3, (FROM index4)))
             """;
@@ -451,6 +464,7 @@ public class SubqueryTests extends AbstractStatementParserTests {
     }
 
     public void testNestedSubqueryWithProcessingCommands() {
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         String query = """
              FROM index1, (FROM index2, (FROM index3, (FROM index4
                                                                                           | WHERE a > 10)
@@ -487,6 +501,7 @@ public class SubqueryTests extends AbstractStatementParserTests {
     }
 
     public void testSubqueriesWithMetadada() {
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         String query = """
              FROM index1, (FROM index2, (FROM index3) metadata _score | WHERE a > 10) metadata _index
              | STATS cnt = COUNT(*) BY a
@@ -531,6 +546,7 @@ public class SubqueryTests extends AbstractStatementParserTests {
     }
 
     public void testTimeSeriesWithSubquery() {
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         String query = """
              TS index1, (FROM index2)
             """;

@@ -10,6 +10,7 @@ package org.elasticsearch.xpack.esql.optimizer.rules.logical;
 import org.elasticsearch.index.IndexMode;
 import org.elasticsearch.index.query.QueryBuilder;
 import org.elasticsearch.test.junit.annotations.TestLogging;
+import org.elasticsearch.xpack.esql.action.EsqlCapabilities;
 import org.elasticsearch.xpack.esql.core.expression.Alias;
 import org.elasticsearch.xpack.esql.core.expression.Attribute;
 import org.elasticsearch.xpack.esql.core.expression.Expression;
@@ -847,8 +848,8 @@ public class PushDownAndCombineFiltersTests extends AbstractLogicalPlanOptimizer
         return new Join(EMPTY, left, right, joinConfig);
     }
 
-    // TODO add more tests for pushing down filters past other operators, and/or combinations of operators
     public void testPushDownSimpleFilterPastUnionAll() {
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         var plan = planSubquery("""
             FROM test, (FROM test1), (FROM languages)
             | WHERE emp_no > 10000
@@ -887,6 +888,7 @@ public class PushDownAndCombineFiltersTests extends AbstractLogicalPlanOptimizer
     }
 
     public void testPushDownConjunctiveFilterPastUnionAll() {
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         var plan = planSubquery("""
             FROM test, (FROM test1), (FROM languages)
             | WHERE emp_no > 10000 and salary > 50000
@@ -935,6 +937,7 @@ public class PushDownAndCombineFiltersTests extends AbstractLogicalPlanOptimizer
     }
 
     public void testPushDownDisjunctiveFilterPastUnionAll() {
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         var plan = planSubquery("""
             FROM test, (FROM test1), (FROM languages)
             | WHERE emp_no > 10000 or salary > 50000
@@ -983,6 +986,7 @@ public class PushDownAndCombineFiltersTests extends AbstractLogicalPlanOptimizer
     }
 
     public void testPushDownAndCombineFilterPastUnionAll() {
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         var plan = planSubquery("""
             FROM test, (FROM test1 | where salary < 100000), (FROM languages)
             | WHERE emp_no > 10000 and salary > 50000

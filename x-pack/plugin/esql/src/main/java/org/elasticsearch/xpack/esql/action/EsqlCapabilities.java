@@ -1502,7 +1502,12 @@ public class EsqlCapabilities {
         /**
          * Support absent_over_time aggregation that gets evaluated per time-series
          */
-        ABSENT_OVER_TIME(Build.current().isSnapshot());
+        ABSENT_OVER_TIME(Build.current().isSnapshot()),
+
+        /**
+         * Support subqueries in the FROM clause.
+         */
+        SUBQUERY_IN_FROM_COMMAND(Build.current().isSnapshot());
 
         private final boolean enabled;
 

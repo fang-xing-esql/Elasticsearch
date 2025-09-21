@@ -1,0 +1,25 @@
+//
+// CSV spec for subqueries
+//
+
+subqueryInFrom
+required_capability: subquery_in_from_command
+
+FROM employees, (FROM sample_data) metadata _index
+| WHERE ( emp_no >= 10091 AND emp_no < 10094)  OR emp_no IS NULL
+| SORT emp_no
+| KEEP _index,  emp_no, languages, client_ip
+;
+
+_index:keyword | emp_no:integer | languages:integer | client_ip:ip
+    employees      | 10091          | 3                 | null
+    employees      | 10092          | 1                 | null
+    employees      | 10093          | 3                 | null
+    sample_data    | null           | null              | 172.21.3.15
+    sample_data    | null           | null              | 172.21.2.113
+    sample_data    | null           | null              | 172.21.2.162
+    sample_data    | null           | null              | 172.21.0.5
+    sample_data    | null           | null              | 172.21.3.15
+    sample_data    | null           | null              | 172.21.3.15
+    sample_data    | null           | null              | 172.21.3.15
+;

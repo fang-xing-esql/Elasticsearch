@@ -396,6 +396,9 @@ public class LogicalPlanBuilder extends ExpressionBuilder {
     }
 
     private List<Subquery> visitSubqueriesInFromCommand(List<EsqlBaseParser.SubqueryContext> ctxs) {
+        if (EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled() == false) {
+            throw new IllegalArgumentException("Subquery in FROM command currently requires a snapshot build");
+        }
         if (ctxs == null) {
             return List.of();
         }

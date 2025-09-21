@@ -109,12 +109,12 @@ timeSeriesCommand
     ;
 
 indexPatternAndMetadataFields
-    :indexPatternOrSubquery (COMMA indexPatternOrSubquery)* metadata?
+    : indexPatternOrSubquery (COMMA indexPatternOrSubquery)* metadata?
     ;
 
 indexPatternOrSubquery
     : indexPattern
-    | subquery
+    | {this.isDevVersion()}? subquery
     ;
 
 subquery

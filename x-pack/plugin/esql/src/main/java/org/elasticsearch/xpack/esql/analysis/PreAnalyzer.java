@@ -67,6 +67,7 @@ public class PreAnalyzer {
         plan.forEachUp(Enrich.class, unresolvedEnriches::add);
 
         // walk through the plan to find indices referenced by the FROM command in subqueries
+        // UnionAll should not exist in snapshot mode, LogicalPlanBuilder does not generate it
         plan.forEachUp(UnionAll.class, unionAll -> {
             unionAll.children().forEach(child -> {
                 if (child instanceof UnresolvedRelation unresolvedRelation) {
