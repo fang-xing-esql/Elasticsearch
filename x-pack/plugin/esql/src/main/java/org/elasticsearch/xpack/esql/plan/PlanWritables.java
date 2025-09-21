@@ -52,7 +52,6 @@ import org.elasticsearch.xpack.esql.plan.physical.MvExpandExec;
 import org.elasticsearch.xpack.esql.plan.physical.ProjectExec;
 import org.elasticsearch.xpack.esql.plan.physical.SampleExec;
 import org.elasticsearch.xpack.esql.plan.physical.ShowExec;
-import org.elasticsearch.xpack.esql.plan.physical.SubqueryExec;
 import org.elasticsearch.xpack.esql.plan.physical.TimeSeriesAggregateExec;
 import org.elasticsearch.xpack.esql.plan.physical.TopNExec;
 import org.elasticsearch.xpack.esql.plan.physical.inference.CompletionExec;
@@ -121,7 +120,6 @@ public class PlanWritables {
             RerankExec.ENTRY,
             SampleExec.ENTRY,
             ShowExec.ENTRY,
-            SubqueryExec.ENTRY,
             TimeSeriesAggregateExec.ENTRY,
             TopNExec.ENTRY
         );
