@@ -109,9 +109,9 @@ public final class PushDownAndCombineFilters extends OptimizerRules.Parameterize
             // swap the filter with its child
             plan = orderBy.replaceChild(filter.with(orderBy.child(), condition));
         } else if (child instanceof Join join && child instanceof InlineJoin == false) {
-            // TODO: could we do better here about pushing down filters for inlinestats?
+            // TODO: could we do better here about pushing down filters for inline stats?
             // See also https://github.com/elastic/elasticsearch/issues/127497
-            // Push down past INLINESTATS if the condition is on the groupings
+            // Push down past INLINE STATS if the condition is on the groupings
             return pushDownPastJoin(filter, join, ctx.foldCtx());
         } else if (child instanceof UnionAll unionAll) {
             // Push down filters that can be evaluated using only the output of the UnionAll

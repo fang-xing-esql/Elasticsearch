@@ -28,7 +28,7 @@ public class PreAnalyzer {
 
     public record PreAnalysis(
         IndexMode indexMode,
-        IndexPattern index,
+        IndexPattern indexPattern,
         List<Enrich> enriches,
         List<IndexPattern> lookupIndices,
         Set<IndexPattern> subqueryIndices
