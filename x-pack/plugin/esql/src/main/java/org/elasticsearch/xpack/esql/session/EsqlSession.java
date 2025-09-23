@@ -878,7 +878,6 @@ public class EsqlSession {
         Map<String, IndexResolution> subqueryIndices
     ) {
 
-        // TODO double check here
         public PreAnalysisResult(EnrichResolution enrichResolution, Set<String> fieldNames, Set<String> wildcardJoinIndices) {
             this(null, new HashMap<>(), enrichResolution, fieldNames, wildcardJoinIndices, InferenceResolution.EMPTY, new HashMap<>());
         }

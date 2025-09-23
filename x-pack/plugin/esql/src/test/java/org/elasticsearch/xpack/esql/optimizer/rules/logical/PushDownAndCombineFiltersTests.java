@@ -1013,7 +1013,7 @@ public class PushDownAndCombineFiltersTests extends AbstractLogicalPlanOptimizer
     public void testPushDownSimpleFilterPastUnionAll() {
         assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         var plan = planSubquery("""
-            FROM test, (FROM test1), (FROM languages)
+            FROM test, (FROM test1 | WHERE languages > 0), (FROM languages | WHERE language_code > 0)
             | WHERE emp_no > 10000
             """);
 
@@ -1038,7 +1038,13 @@ public class PushDownAndCombineFiltersTests extends AbstractLogicalPlanOptimizer
         childLimit = as(eval.child(), Limit.class);
         Subquery subquery = as(childLimit.child(), Subquery.class);
         childFilter = as(subquery.child(), Filter.class);
-        greaterThan = as(childFilter.condition(), GreaterThan.class);
+        And and = as(childFilter.condition(), And.class);
+        greaterThan = as(and.left(), GreaterThan.class);
+        empNo = as(greaterThan.left(), FieldAttribute.class);
+        assertEquals("languages", empNo.name());
+        right = as(greaterThan.right(), Literal.class);
+        assertEquals(0, right.value());
+        greaterThan = as(and.right(), GreaterThan.class);
         empNo = as(greaterThan.left(), FieldAttribute.class);
         assertEquals("emp_no", empNo.name());
         right = as(greaterThan.right(), Literal.class);
@@ -1052,7 +1058,7 @@ public class PushDownAndCombineFiltersTests extends AbstractLogicalPlanOptimizer
     public void testPushDownConjunctiveFilterPastUnionAll() {
         assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         var plan = planSubquery("""
-            FROM test, (FROM test1), (FROM languages)
+            FROM test, (FROM test1 | WHERE languages > 0), (FROM languages | WHERE language_code > 0)
             | WHERE emp_no > 10000 and salary > 50000
             """);
 
@@ -1083,6 +1089,12 @@ public class PushDownAndCombineFiltersTests extends AbstractLogicalPlanOptimizer
         Subquery subquery = as(childLimit.child(), Subquery.class);
         childFilter = as(subquery.child(), Filter.class);
         and = as(childFilter.condition(), And.class);
+        GreaterThan greaterThan = as(and.left(), GreaterThan.class);
+        FieldAttribute languages = as(greaterThan.left(), FieldAttribute.class);
+        assertEquals("languages", languages.name());
+        right = as(greaterThan.right(), Literal.class);
+        assertEquals(0, right.value());
+        and = as(and.right(), And.class);
         emp_no = as(and.left(), GreaterThan.class);
         empNo = as(emp_no.left(), FieldAttribute.class);
         assertEquals("emp_no", empNo.name());
@@ -1101,7 +1113,7 @@ public class PushDownAndCombineFiltersTests extends AbstractLogicalPlanOptimizer
     public void testPushDownDisjunctiveFilterPastUnionAll() {
         assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         var plan = planSubquery("""
-            FROM test, (FROM test1), (FROM languages)
+            FROM test, (FROM test1 | WHERE languages > 0), (FROM languages | WHERE language_code > 0)
             | WHERE emp_no > 10000 or salary > 50000
             """);
 
@@ -1131,7 +1143,13 @@ public class PushDownAndCombineFiltersTests extends AbstractLogicalPlanOptimizer
         childLimit = as(eval.child(), Limit.class);
         Subquery subquery = as(childLimit.child(), Subquery.class);
         childFilter = as(subquery.child(), Filter.class);
-        or = as(childFilter.condition(), Or.class);
+        And and = as(childFilter.condition(), And.class);
+        GreaterThan greaterThan = as(and.left(), GreaterThan.class);
+        FieldAttribute languages = as(greaterThan.left(), FieldAttribute.class);
+        assertEquals("languages", languages.name());
+        right = as(greaterThan.right(), Literal.class);
+        assertEquals(0, right.value());
+        or = as(and.right(), Or.class);
         emp_no = as(or.left(), GreaterThan.class);
         empNo = as(emp_no.left(), FieldAttribute.class);
         assertEquals("emp_no", empNo.name());
@@ -1150,7 +1168,7 @@ public class PushDownAndCombineFiltersTests extends AbstractLogicalPlanOptimizer
     public void testPushDownAndCombineFilterPastUnionAll() {
         assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         var plan = planSubquery("""
-            FROM test, (FROM test1 | where salary < 100000), (FROM languages)
+            FROM test, (FROM test1 | where salary < 100000), (FROM languages  | WHERE language_code > 0)
             | WHERE emp_no > 10000 and salary > 50000
             """);
 

@@ -55,6 +55,11 @@ public abstract class GenerativeForkRestTest extends EsqlSpecTestCase {
             testCase.requiredCapabilities.contains(UNMAPPED_FIELDS.capabilityName())
         );
 
+        assumeFalse(
+            "Tests using FORK are skipped since we don't support multiple FORKs",
+            testCase.requiredCapabilities.contains(SUBQUERY_IN_FROM_COMMAND.capabilityName())
+        );
+
         assumeTrue("Cluster needs to support FORK", hasCapabilities(adminClient(), List.of(FORK_V9.capabilityName())));
     }
 }

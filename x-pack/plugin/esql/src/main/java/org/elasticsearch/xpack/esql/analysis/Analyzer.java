@@ -215,7 +215,14 @@ public class Analyzer extends ParameterizedRuleExecutor<LogicalPlan, AnalyzerCon
             new ResolveUnionTypes(),  // Must be after ResolveRefs, so union types can be found
             new ImplicitCastAggregateMetricDoubles()
         ),
-        new Batch<>("Finish Analysis", Limiter.ONCE, new AddImplicitLimit(), new AddImplicitForkLimit(), new UnionTypesCleanup())
+        new Batch<>(
+            "Finish Analysis",
+            Limiter.ONCE,
+            new AddImplicitLimit(),
+            new AddImplicitForkLimit(),
+            new UnionTypesCleanup(),
+            new CastUnionAllOutputs()
+        )
     );
 
     private final Verifier verifier;
@@ -2237,6 +2244,100 @@ public class Analyzer extends ParameterizedRuleExecutor<LogicalPlan, AnalyzerCon
                 return AggregateMetricDoubleBlockBuilder.Metric.COUNT;
             }
             return null;
+        }
+    }
+
+    private static class CastUnionAllOutputs extends Rule<LogicalPlan, LogicalPlan> {
+
+        @Override
+        public LogicalPlan apply(LogicalPlan plan) {
+            return plan.transformUp(UnionAll.class, unionAll -> unionAll.resolved() ? cast(unionAll) : unionAll);
+        }
+
+        private LogicalPlan cast(UnionAll unionAll) {
+            List<List<Attribute>> outputs = unionAll.children().stream().map(LogicalPlan::output).toList();
+
+            int columnCount = outputs.get(0).size();
+            List<DataType> commonTypes = new ArrayList<>(columnCount);
+
+            // Find common type for each column
+            for (int i = 0; i < columnCount; i++) {
+                DataType type = outputs.get(0).get(i).dataType();
+                for (List<Attribute> out : outputs) {
+                    type = commonType(type, out.get(i).dataType());
+                }
+                commonTypes.add(type);
+            }
+
+            // Cast each leg's output to the common type
+            List<LogicalPlan> newLegs = new ArrayList<>();
+            boolean changed = false;
+            for (LogicalPlan leg : unionAll.children()) {
+                List<Alias> newAliases = new ArrayList<>();
+                List<Attribute> legOutput = leg.output();
+                List<Attribute> newLegOutput = new ArrayList<>(legOutput.size());
+                for (int i = 0; i < columnCount; i++) {
+                    Attribute oldOutput = legOutput.get(i);
+                    DataType targetType = commonTypes.get(i);
+                    boolean outputChanged = false;
+                    if (targetType != null && targetType != NULL && oldOutput.dataType() != targetType) {
+                        var converterToFactory = EsqlDataTypeConverter.converterFunctionFactory(targetType);
+                        if (converterToFactory != null) {
+                            // We can convert to the common type
+                            var converterTo = converterToFactory.apply(oldOutput.source(), oldOutput);
+                            if (converterTo != null) {
+                                Alias newAlias = new Alias(oldOutput.source(), oldOutput.name(), converterTo);
+                                newAliases.add(newAlias);
+                                outputChanged = true;
+                                newLegOutput.add(newAlias.toAttribute());
+                            }
+                        }
+                    }
+                    if (outputChanged == false) {
+                        newLegOutput.add(oldOutput);
+                    }
+                }
+                // create a new eval for the casting expressions, and push it down under the EsqlProject
+                if (newAliases.isEmpty() == false && leg instanceof Limit limit && limit.child() instanceof EsqlProject esqlProject) {
+                    LogicalPlan child = esqlProject.child();
+                    Eval eval = new Eval(child.source(), child, newAliases);
+                    EsqlProject newProject = new EsqlProject(esqlProject.source(), eval, newLegOutput);
+                    Limit newLimit = limit.replaceChild(newProject);
+                    newLegs.add(newLimit);
+                    changed = true;
+                } else {
+                    newLegs.add(leg);
+                }
+            }
+
+            if (changed) {
+                // Rebuild the newUnionAll's output to ensure the correct attributes are used
+                List<Attribute> oldOutput = unionAll.output();
+                List<Attribute> newOutput = new ArrayList<>(oldOutput.size());
+
+                for (int i = 0; i < columnCount; i++) {
+                    Attribute old = oldOutput.get(i);
+                    DataType commonType = commonTypes.get(i);
+                    if (commonType == null) {
+                        commonType = UNSUPPORTED;
+                    }
+                    newOutput.add(
+                        new ReferenceAttribute(old.source(), null, old.name(), commonType, Nullability.FALSE, null, old.synthetic())
+                    );
+                }
+                return new UnionAll(unionAll.source(), newLegs, newOutput);
+            }
+            return unionAll;
+        }
+
+        private DataType commonType(DataType t1, DataType t2) {
+            if (t1 == null || t2 == null) {
+                return null;
+            }
+            if (t1.isDate() && t2.isDate() && t1 != t2) {
+                return DATE_NANOS;
+            }
+            return EsqlDataTypeConverter.commonType(t1, t2);
         }
     }
 }

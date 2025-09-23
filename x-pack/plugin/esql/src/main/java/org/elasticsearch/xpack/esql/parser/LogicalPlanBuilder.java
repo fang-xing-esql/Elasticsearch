@@ -97,7 +97,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
-import java.util.stream.Stream;
 
 import static java.util.Collections.emptyList;
 import static org.elasticsearch.xpack.esql.action.EsqlCapabilities.Cap.LOOKUP_JOIN_ON_BOOLEAN_EXPRESSION;
@@ -358,47 +357,44 @@ public class LogicalPlanBuilder extends ExpressionBuilder {
             if (indexMode == IndexMode.TIME_SERIES) {
                 throw new ParsingException(source, "Subqueries are not supported in TS command");
             }
-            List<LogicalPlan> children = new ArrayList<>(subqueries.size() + 1);
+            // If the subquery has only from command and combine the subquery index patterns into the main index pattern
+            List<Subquery> remainingSubqueries = new ArrayList<>(subqueries.size());
+            for (Subquery subquery : subqueries) {
+                String subqueryIndexPattern = getIndexPatternIfOnlyFrom(subquery);
+                boolean canCombine = subqueryIndexPattern != null && metadataFields.isEmpty();
+                if (canCombine) {
+                    // the subquery has only from command without metadata fields, combine the index patterns
+                    String existingIndexPattern = table.indexPattern();
+                    String combinedPattern = existingIndexPattern.isEmpty()
+                        ? subqueryIndexPattern
+                        : existingIndexPattern + "," + subqueryIndexPattern;
+                    table = new IndexPattern(table.source(), combinedPattern);
+                    unresolvedRelation = new UnresolvedRelation(source, table, false, metadataFields, indexMode, null, commandName);
+                } else {
+                    remainingSubqueries.add(subquery);
+                }
+            }
+
+            List<LogicalPlan> children = new ArrayList<>(remainingSubqueries.size() + 1);
             if (table.indexPattern().isEmpty() == false) {
                 children.add(unresolvedRelation);
             }
-            children.addAll(propagateMetadataFields(subqueries, metadataFields));
-            // build a union all with the index pattern and subqueries as children
-            // if there is only one subquery without index pattern, return it directly
-            return children.size() == 1 ? subqueries.get(0).plan() : new UnionAll(source, children, List.of());
+            children.addAll(remainingSubqueries);
+
+            if (children.size() == 1) {
+                return table.indexPattern().isEmpty() ? remainingSubqueries.get(0).plan() : unresolvedRelation;
+            } else {
+                return new UnionAll(source, children, List.of());
+            }
         }
     }
 
-    private List<Subquery> propagateMetadataFields(List<Subquery> subqueries, List<Attribute> metadataFields) {
-        if (metadataFields.isEmpty()) {
-            return subqueries;
+    private String getIndexPatternIfOnlyFrom(Subquery subquery) {
+        LogicalPlan plan = subquery.plan();
+        if (plan instanceof UnresolvedRelation ur) {
+            return ur.indexPattern().indexPattern();
         }
-        List<Subquery> subqueriesWithMetadata = new ArrayList<>(subqueries.size());
-        for (Subquery subquery : subqueries) {
-            // propagate metadata fields to subqueries, is it ok to cast explicitly here?
-            Subquery newSubquery = (Subquery) subquery.transformDown(
-                UnresolvedRelation.class,
-                ur -> propagateMetadataFields(ur, metadataFields)
-            );
-            subqueriesWithMetadata.add(newSubquery);
-        }
-        return subqueriesWithMetadata;
-    }
-
-    private UnresolvedRelation propagateMetadataFields(UnresolvedRelation ur, List<Attribute> metadataFields) {
-        if (ur.indexMode() != IndexMode.STANDARD) {
-            return ur;
-        }
-        List<Attribute> combinedMetadata = Stream.concat(ur.metadataFields().stream(), metadataFields.stream()).toList();
-        return new UnresolvedRelation(
-            ur.source(),
-            ur.indexPattern(),
-            ur.frozen(),
-            combinedMetadata,
-            ur.indexMode(),
-            ur.unresolvedMessage(),
-            ur.telemetryLabel()
-        );
+        return null;
     }
 
     private List<Subquery> visitSubqueriesInFromCommand(List<EsqlBaseParser.SubqueryContext> ctxs) {
