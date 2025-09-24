@@ -1538,10 +1538,14 @@ public class EsqlCapabilities {
          */
         TS_COMMAND_V0(),
 
+        FIX_ALIAS_ID_WHEN_DROP_ALL_AGGREGATES,
+
         /**
          * Support subqueries in the FROM clause.
          */
-        SUBQUERY_IN_FROM_COMMAND(Build.current().isSnapshot());
+        SUBQUERY_IN_FROM_COMMAND(Build.current().isSnapshot())
+
+        ;
 
         private final boolean enabled;
 
