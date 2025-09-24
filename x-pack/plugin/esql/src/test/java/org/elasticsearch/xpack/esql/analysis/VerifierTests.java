@@ -10,7 +10,6 @@ package org.elasticsearch.xpack.esql.analysis;
 import org.elasticsearch.Build;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.test.ESTestCase;
-import org.elasticsearch.test.junit.annotations.TestLogging;
 import org.elasticsearch.xpack.esql.VerificationException;
 import org.elasticsearch.xpack.esql.action.EsqlCapabilities;
 import org.elasticsearch.xpack.esql.core.InvalidArgumentException;
@@ -70,7 +69,7 @@ import static org.hamcrest.Matchers.instanceOf;
 import static org.hamcrest.Matchers.matchesRegex;
 import static org.hamcrest.Matchers.startsWith;
 
-@TestLogging(value = "org.elasticsearch.xpack.esql:TRACE,org.elasticsearch.compute:TRACE", reason = "debug")
+//@TestLogging(value = "org.elasticsearch.xpack.esql:TRACE,org.elasticsearch.compute:TRACE", reason = "debug")
 public class VerifierTests extends ESTestCase {
 
     private static final EsqlParser parser = new EsqlParser();
@@ -2703,6 +2702,26 @@ public class VerifierTests extends ESTestCase {
             before the first aggregation [STATS avg(network.connections)] is not allowed; filter data with a WHERE command instead
             line 1:11: sorting [SORT host] between the time-series source \
             and the first aggregation [STATS avg(network.connections)] is not allowed"""));
+    }
+
+    /**
+     * If there is no common data type for a field in a subquery and the main query, {@code VerificationException} is thrown.
+     */
+    public void testMixedDataTypesInSubquery() {
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
+        assertThat(
+            error("""
+                FROM test, (FROM test_mixed_types | WHERE languages > 0)
+                | WHERE emp_no > 10000
+                | SORT emp_no
+                """),
+            equalTo(
+                "1:1: Column [is_rehired] has conflicting data types in subqueries: [BOOLEAN, KEYWORD]\n"
+                    + "line 1:1: Column [still_hired] has conflicting data types in subqueries: [BOOLEAN, KEYWORD]\n"
+                    + "line 1:13: Column [is_rehired] has conflicting data types in subqueries: [BOOLEAN, KEYWORD]\n"
+                    + "line 1:13: Column [still_hired] has conflicting data types in subqueries: [BOOLEAN, KEYWORD]"
+            )
+        );
     }
 
     private void checkVectorFunctionsNullArgs(String functionInvocation) throws Exception {

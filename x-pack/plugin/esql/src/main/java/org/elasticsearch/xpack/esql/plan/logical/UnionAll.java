@@ -74,16 +74,25 @@ public class UnionAll extends Fork implements PostOptimizationPlanVerificationAw
         UnionAll unionAll = (UnionAll) plan;
 
         Map<String, DataType> outputTypes = unionAll.output().stream().collect(Collectors.toMap(Attribute::name, Attribute::dataType));
+        Map<String, List<DataType>> childrenTypes = unionAll.children()
+            .stream()
+            .flatMap(p -> p.output().stream())
+            .collect(Collectors.groupingBy(Attribute::name, Collectors.mapping(Attribute::dataType, Collectors.toList())));
 
         unionAll.children().forEach(subPlan -> {
             for (Attribute attr : subPlan.output()) {
                 var expected = outputTypes.get(attr.name());
 
-                // If the FORK output has an UNSUPPORTED data type, we know there is no conflict.
-                // We only assign an UNSUPPORTED attribute in the FORK output when there exists no attribute with the
-                // same name and supported data type in any of the FORK branches.
+                // UnionAll with unsupported types should error out here, otherwise runtime couldn't handle it
                 if (expected == DataType.UNSUPPORTED) {
-                    continue;
+                    failures.add(
+                        Failure.fail(
+                            attr,
+                            "Column [{}] has conflicting data types in subqueries: [{}]",
+                            attr.name(),
+                            childrenTypes.get(attr.name()).stream().map(Objects::toString).collect(Collectors.joining(", "))
+                        )
+                    );
                 }
 
                 var actual = attr.dataType();

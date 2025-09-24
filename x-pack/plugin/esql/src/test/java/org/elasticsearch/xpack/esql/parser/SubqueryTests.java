@@ -349,6 +349,44 @@ public class SubqueryTests extends AbstractStatementParserTests {
     }
 
     /**
+     * Verify there is no parsing error if the subquery ends with different modes.
+     */
+    public void testSubqueryEndsWithProcessingCommandsInDifferentMode() {
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
+        List<String> processingCommandInDifferentMode = List.of(
+            "INLINE STATS max_e = MAX(e) BY f",  // inline mode, expression mode
+            "DISSECT g \"%{b} %{c}\"",  // expression mode
+            "LOOKUP JOIN index1 ON n", // join mode
+            "ENRICH clientip_policy ON client_ip WITH env", // enrich mode
+            "CHANGE_POINT count ON @timestamp AS type, pvalue", // change_point mode
+            "FORK (WHERE c < 100) (WHERE d > 200)", // fork mode
+            "MV_EXPAND m", // mv_expand mode
+            "RENAME k AS l", // rename mode
+            "DROP i" // project mode
+        );
+        var mainQueryIndexPattern = randomIndexPatterns();
+        var subqueryIndexPattern = randomIndexPatterns();
+        for (String processingCommand : processingCommandInDifferentMode) {
+            String query = LoggerMessageFormat.format(null, """
+                 FROM {}, (FROM {}
+                                  | {})
+                  | WHERE a > 10
+                """, mainQueryIndexPattern, subqueryIndexPattern, processingCommand);
+
+            LogicalPlan plan = statement(query);
+            Filter filter = as(plan, Filter.class);
+            UnionAll unionAll = as(filter.child(), UnionAll.class);
+            List<LogicalPlan> children = unionAll.children();
+            assertEquals(2, children.size());
+            // leg1
+            UnresolvedRelation unresolvedRelation = as(children.get(0), UnresolvedRelation.class);
+            assertEquals(unquoteIndexPattern(mainQueryIndexPattern), unresolvedRelation.indexPattern().indexPattern());
+            // leg2
+            Subquery subquery = as(children.get(1), Subquery.class);
+        }
+    }
+
+    /**
      * If the FROM command contains only a subquery, the subquery is merged into an index pattern
      */
     public void testSubqueryOnly() {

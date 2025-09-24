@@ -2254,9 +2254,25 @@ public class Analyzer extends ParameterizedRuleExecutor<LogicalPlan, AnalyzerCon
 
     private static class CastUnionAllOutputs extends Rule<LogicalPlan, LogicalPlan> {
 
+        private List<ReferenceAttribute> updatedAttributes = new ArrayList<>();
+
         @Override
         public LogicalPlan apply(LogicalPlan plan) {
-            return plan.transformUp(UnionAll.class, unionAll -> unionAll.resolved() ? cast(unionAll) : unionAll);
+            updatedAttributes = new ArrayList<>();
+            LogicalPlan newPlan = plan.transformUp(UnionAll.class, unionAll -> unionAll.resolved() ? cast(unionAll) : unionAll);
+            if (updatedAttributes.isEmpty()) {
+                return newPlan;
+            } else {
+                Map<Object, ReferenceAttribute> idToUpdatedAttr = updatedAttributes.stream()
+                    .collect(Collectors.toMap(ReferenceAttribute::id, attr -> attr));
+                return newPlan.transformExpressionsUp(ReferenceAttribute.class, expr -> {
+                    ReferenceAttribute updated = idToUpdatedAttr.get(expr.id());
+                    if (updated != null && expr.dataType() != updated.dataType()) {
+                        return updated;
+                    }
+                    return expr;
+                });
+            }
         }
 
         private LogicalPlan cast(UnionAll unionAll) {
@@ -2321,14 +2337,27 @@ public class Analyzer extends ParameterizedRuleExecutor<LogicalPlan, AnalyzerCon
                 List<Attribute> newOutput = new ArrayList<>(oldOutput.size());
 
                 for (int i = 0; i < columnCount; i++) {
-                    Attribute old = oldOutput.get(i);
+                    Attribute oldAttr = oldOutput.get(i);
                     DataType commonType = commonTypes.get(i);
                     if (commonType == null) {
-                        commonType = UNSUPPORTED;
+                        commonType = UNSUPPORTED; // should this be set to NULL if there is no common type?
                     }
-                    newOutput.add(
-                        new ReferenceAttribute(old.source(), null, old.name(), commonType, Nullability.FALSE, null, old.synthetic())
-                    );
+                    // keep the id unchanged, otherwise the downstream operators won't recognize the attribute
+                    if (oldAttr.dataType() != commonType) {
+                        ReferenceAttribute newAttr = new ReferenceAttribute(
+                            oldAttr.source(),
+                            null,
+                            oldAttr.name(),
+                            commonType,
+                            oldAttr.nullable(),
+                            oldAttr.id(),
+                            oldAttr.synthetic()
+                        );
+                        newOutput.add(newAttr);
+                        updatedAttributes.add(newAttr);
+                    } else {
+                        newOutput.add(oldAttr);
+                    }
                 }
                 return new UnionAll(unionAll.source(), newLegs, newOutput);
             }

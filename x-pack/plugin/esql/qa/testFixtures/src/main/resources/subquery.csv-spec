@@ -5,26 +5,48 @@
 subqueryInFrom
 required_capability: subquery_in_from_command
 
-FROM employees, (FROM sample_data) metadata _index
+FROM employees, (FROM sample_data)
 | WHERE ( emp_no >= 10091 AND emp_no < 10094)  OR emp_no IS NULL
 | SORT emp_no, client_ip
-| KEEP _index,  emp_no, languages, client_ip
+| KEEP  emp_no, languages, client_ip
 ;
 
-_index:keyword | emp_no:integer | languages:integer | client_ip:ip
-employees      | 10091          | 3                 | null
-employees      | 10092          | 1                 | null
-employees      | 10093          | 3                 | null
-null           | null           | null              | 172.21.0.5
-null           | null           | null              | 172.21.2.113
-null           | null           | null              | 172.21.2.162
-null           | null           | null              | 172.21.3.15
-null           | null           | null              | 172.21.3.15
-null           | null           | null              | 172.21.3.15
-null           | null           | null              | 172.21.3.15
+emp_no:integer | languages:integer | client_ip:ip
+10091          | 3                 | null
+10092          | 1                 | null
+10093          | 3                 | null
+null           | null              | 172.21.0.5
+null           | null              | 172.21.2.113
+null           | null              | 172.21.2.162
+null           | null              | 172.21.3.15
+null           | null              | 172.21.3.15
+null           | null              | 172.21.3.15
+null           | null              | 172.21.3.15
 ;
 
-subqueryWithWhereInFrom
+subqueryInFromWithEval
+required_capability: subquery_in_from_command
+
+FROM employees, (FROM sample_data | EVAL x = client_ip::keyword ) metadata _index
+| WHERE ( emp_no >= 10091 AND emp_no < 10094)  OR emp_no IS NULL
+| SORT emp_no, client_ip
+| KEEP _index,  emp_no, languages, client_ip, x
+;
+
+_index:keyword | emp_no:integer | languages:integer | client_ip:ip | x:keyword
+employees      | 10091          | 3                 | null | null
+employees      | 10092          | 1                 | null | null
+employees      | 10093          | 3                 | null | null
+null   | null           | null              | 172.21.0.5 | 172.21.0.5
+null   | null           | null              | 172.21.2.113 | 172.21.2.113
+null   | null           | null              | 172.21.2.162 | 172.21.2.162
+null   | null           | null              | 172.21.3.15 | 172.21.3.15
+null   | null           | null              | 172.21.3.15 | 172.21.3.15
+null   | null           | null              | 172.21.3.15 | 172.21.3.15
+null   | null           | null              | 172.21.3.15 | 172.21.3.15
+;
+
+subqueryInFromWithWhere
 required_capability: subquery_in_from_command
 
 FROM employees, (FROM sample_data 
@@ -45,7 +67,7 @@ null           | null           | null              | 172.21.3.15
 null           | null           | null              | 172.21.3.15
 ;
 
-subqueryWithStatsInFrom
+subqueryInFromWithStats
 required_capability: subquery_in_from_command
 
 FROM employees, (FROM sample_data 
@@ -66,7 +88,7 @@ null           | null           | null              | 1        | 172.21.2.162
 null           | null           | null              | 4        | 172.21.3.15
 ;
 
-subqueryWithLookupJoinInFrom
+subqueryInFromWithLookupJoin
 required_capability: subquery_in_from_command
 
 FROM employees, (FROM sample_data 
@@ -89,4 +111,154 @@ null           | null           | null              | 172.21.3.15       | Produc
 null           | null           | null              | 172.21.3.15       | Production
 null           | null           | null              | 172.21.3.15       | Production
 null           | null           | null              | 172.21.3.15       | Production
+;
+
+subqueryInFromWithSample
+required_capability: subquery_in_from_command
+
+FROM employees, (FROM sample_data | SAMPLE 0.999999)
+| WHERE ( emp_no >= 10091 AND emp_no < 10094)  OR emp_no IS NULL
+| SORT emp_no, client_ip
+| KEEP  emp_no, languages, client_ip
+;
+
+emp_no:integer | languages:integer | client_ip:ip
+10091          | 3                 | null
+10092          | 1                 | null
+10093          | 3                 | null
+null           | null              | 172.21.0.5
+null           | null              | 172.21.2.113
+null           | null              | 172.21.2.162
+null           | null              | 172.21.3.15
+null           | null              | 172.21.3.15
+null           | null              | 172.21.3.15
+null           | null              | 172.21.3.15
+;
+
+subqueryInFromWithSort
+required_capability: subquery_in_from_command
+
+FROM employees, (FROM sample_data
+                                | STATS cnt = count(*) by client_ip
+                                | SORT cnt DESC
+                                | LIMIT 1 )
+           metadata _index
+| WHERE ( emp_no >= 10091 AND emp_no < 10094)  OR emp_no IS NULL
+| SORT emp_no, client_ip
+| KEEP _index,  emp_no, languages, cnt, client_ip
+;
+
+_index:keyword | emp_no:integer | languages:integer | cnt:long | client_ip:ip
+employees      | 10091          | 3                 | null     | null
+employees      | 10092          | 1                 | null     | null
+employees      | 10093          | 3                 | null     | null
+null           | null           | null              | 4        | 172.21.3.15
+;
+
+subqueryInFromWithGrok
+required_capability: subquery_in_from_command
+
+FROM employees_incompatible, (FROM employees
+                                                        | GROK concat(first_name, " ", last_name) "%{WORD:a} %{WORD:b}"
+                                                        | KEEP emp_no, a, b )
+           metadata _index
+| WHERE emp_no >= 10091 AND emp_no < 10094
+| SORT emp_no, a, b
+| KEEP  emp_no, a, b
+;
+
+emp_no:long | a:keyword | b:keyword
+    10091       | Amabile   | Gomatam
+    10091       | null      | null
+    10092       | Valdiodio | Niizuma
+    10092       | null      | null
+    10093       | Sailaja   | Desikan
+    10093       | null      | null
+;
+
+subqueryInFromWithDissect
+required_capability: subquery_in_from_command
+
+FROM employees, (FROM employees_incompatible
+                                 | EVAL name = concat(first_name, "1 ", last_name)
+                                 | DISSECT name "%{a} %{b}"
+                                 | KEEP emp_no, a, b )
+| WHERE emp_no >= 10091 AND emp_no < 10094
+| SORT emp_no, a, b
+| KEEP  emp_no, a, b
+;
+
+emp_no:long | a:keyword | b:keyword
+    10091       | Amabile1   | Gomatam
+    10091       | null      | null
+    10092       | Valdiodio1 | Niizuma
+    10092       | null      | null
+    10093       | Sailaja1   | Desikan
+    10093       | null      | null
+;
+
+subqueryInFromWithMvExpand
+required_capability: subquery_in_from_command
+
+FROM employees_incompatible, (FROM employees
+                                                       | MV_EXPAND job_positions
+                                                       | KEEP emp_no, first_name, last_name, job_positions)
+| WHERE emp_no >= 10091 AND emp_no < 10094
+| SORT emp_no, first_name, last_name, job_positions
+| KEEP  emp_no, first_name, last_name, job_positions
+;
+ignoreOrder:true
+
+    emp_no:long | first_name:keyword | last_name:keyword | job_positions:keyword
+    10091       | Amabile         | Gomatam        | Python Developer
+    10091       | Amabile         | Gomatam        | [Reporting Analyst, Python Developer]
+    10091       | Amabile         | Gomatam        | Reporting Analyst
+    10092       | Valdiodio       | Niizuma        | Accountant
+    10092       | Valdiodio       | Niizuma        | [Junior Developer, Accountant]
+    10092       | Valdiodio       | Niizuma        | Junior Developer
+    10093       | Sailaja         | Desikan        | Principal Support Engineer
+    10093       | Sailaja         | Desikan        | Purchase Manager
+    10093       | Sailaja         | Desikan        | [Reporting Analyst, Tech Lead, Principal Support Engineer, Purchase Manager]
+    10093       | Sailaja         | Desikan        | Reporting Analyst
+    10093       | Sailaja         | Desikan        | Tech Lead
+;
+
+subqueryInFromWithInlineStats
+required_capability: subquery_in_from_command
+
+FROM employees, (FROM employees_incompatible
+                                 | INLINE STATS cnt = count(*) by gender
+                                 | KEEP emp_no, first_name, last_name, cnt, gender)
+| WHERE emp_no >= 10091 AND emp_no < 10094
+| SORT emp_no, first_name, last_name, cnt, gender
+| KEEP  emp_no, first_name, last_name, cnt, gender
+;
+
+emp_no:long | first_name:keyword | last_name:keyword | cnt:long | gender:keyword
+    10091       | Amabile         | Gomatam        | 57       | M
+    10091       | Amabile         | Gomatam        | null     | M
+    10092       | Valdiodio       | Niizuma        | 33       | F
+    10092       | Valdiodio       | Niizuma        | null     | F
+    10093       | Sailaja         | Desikan        | 57       | M
+    10093       | Sailaja         | Desikan        | null     | M
+;
+
+subqueryInFromWithRename
+required_capability: subquery_in_from_command
+
+FROM employees_incompatible, (FROM employees
+                                                        | RENAME first_name AS a, last_name AS b
+                                                        | KEEP emp_no, a, b )
+| WHERE emp_no >= 10091 AND emp_no < 10094
+| SORT emp_no, a, b
+| KEEP  emp_no, first_name, last_name, a, b
+;
+
+emp_no:long | first_name:text | last_name:text | a:keyword | b:keyword
+    10091       | null            | null           | Amabile   | Gomatam
+    10091       | Amabile         | Gomatam        | null      | null
+    10092       | null            | null           | Valdiodio | Niizuma
+    10092       | Valdiodio       | Niizuma        | null      | null
+    10093       | null            | null           | Sailaja   | Desikan
+    10093       | Sailaja         | Desikan        | null      | null
 ;
