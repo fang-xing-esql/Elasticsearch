@@ -262,3 +262,28 @@ emp_no:long | first_name:text | last_name:text | a:keyword | b:keyword
     10093       | null            | null           | Sailaja   | Desikan
     10093       | Sailaja         | Desikan        | null      | null
 ;
+
+subqueryInFromWithUnionTypes
+required_capability: subquery_in_from_command
+
+FROM employees, (FROM employees_incompatible, employees
+                                | EVAL emp_no = emp_no::integer
+                                            , first_name = first_name::keyword
+                                            , last_name = last_name::keyword
+                                | WHERE emp_no < 10093
+                                | KEEP emp_no, first_name, last_name)
+           metadata _index
+| WHERE emp_no >= 10091 AND emp_no < 10094
+| SORT _index, emp_no
+| KEEP _index,  emp_no, first_name, last_name
+;
+
+_index:keyword | emp_no:integer | first_name:keyword | last_name:keyword
+    employees      | 10091          | Amabile            | Gomatam
+    employees      | 10092          | Valdiodio          | Niizuma
+    employees      | 10093          | Sailaja            | Desikan
+    null           | 10091          | Amabile            | Gomatam
+    null           | 10091          | Amabile            | Gomatam
+    null           | 10092          | Valdiodio          | Niizuma
+    null           | 10092          | Valdiodio          | Niizuma
+;
