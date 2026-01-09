@@ -148,7 +148,7 @@ class ValuesFromManyReader extends ValuesReader {
         private void read(int doc) throws IOException {
             storedFields.advanceTo(doc);
             for (int f = 0; f < current.length; f++) {
-                rowStride[f].read(doc, storedFields, current[f].builder);
+                rowStride[f].read(doc, storedFields, current[f].builder, blockFactory.factory.breaker());
             }
         }
 

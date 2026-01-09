@@ -13,6 +13,7 @@ import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.SortedDocValues;
 import org.apache.lucene.index.SortedSetDocValues;
 import org.apache.lucene.util.BytesRef;
+import org.elasticsearch.common.breaker.CircuitBreaker;
 import org.elasticsearch.common.breaker.CircuitBreakingException;
 import org.elasticsearch.core.Nullable;
 import org.elasticsearch.core.Releasable;
@@ -228,6 +229,10 @@ public interface BlockLoader {
          * Reads the values of the given document into the builder.
          */
         void read(int docId, StoredFields storedFields, Builder builder) throws IOException;
+
+        default void read(int docId, StoredFields storedFields, Builder builder, CircuitBreaker circuitBreaker) throws IOException {
+            read(docId, storedFields, builder);
+        };
     }
 
     interface AllReader extends ColumnAtATimeReader, RowStrideReader {}

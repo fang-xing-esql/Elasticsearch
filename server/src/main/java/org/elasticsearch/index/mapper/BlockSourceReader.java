@@ -18,6 +18,7 @@ import org.apache.lucene.index.TermsEnum;
 import org.apache.lucene.search.DocIdSetIterator;
 import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.UnicodeUtil;
+import org.elasticsearch.common.breaker.CircuitBreaker;
 import org.elasticsearch.index.mapper.blockloader.ConstantNull;
 import org.elasticsearch.search.fetch.StoredFieldsSpec;
 
@@ -68,7 +69,35 @@ public abstract class BlockSourceReader implements BlockLoader.RowStrideReader {
         builder.endPositionEntry();
     }
 
+    @Override
+    public final void read(int docId, BlockLoader.StoredFields storedFields, BlockLoader.Builder builder, CircuitBreaker circuitBreaker)
+        throws IOException {
+        if (canSkipLoading(docId)) {
+            builder.appendNull();
+            return;
+        }
+        List<Object> values = fetcher.fetchValues(storedFields.source(), docId, ignoredValues);
+        ignoredValues.clear();  // TODO do something with these?
+        if (values == null || values.isEmpty()) {
+            builder.appendNull();
+            return;
+        }
+        if (values.size() == 1) {
+            append(builder, values.get(0), circuitBreaker);
+            return;
+        }
+        builder.beginPositionEntry();
+        for (Object v : values) {
+            append(builder, v, circuitBreaker);
+        }
+        builder.endPositionEntry();
+    }
+
     protected abstract void append(BlockLoader.Builder builder, Object v);
+
+    protected void append(BlockLoader.Builder builder, Object v, CircuitBreaker circuitBreaker) {
+        append(builder, v);
+    };
 
     /**
      * Returns {@code true} if we are <strong>sure</strong> there are no values
@@ -226,7 +255,6 @@ public abstract class BlockSourceReader implements BlockLoader.RowStrideReader {
     }
 
     private static class BytesRefs extends BlockSourceReader {
-        private final BytesRef scratch = new BytesRef();
 
         BytesRefs(ValueFetcher fetcher, DocIdSetIterator iter) {
             super(fetcher, iter);
@@ -234,13 +262,30 @@ public abstract class BlockSourceReader implements BlockLoader.RowStrideReader {
 
         @Override
         protected void append(BlockLoader.Builder builder, Object v) {
+            // TODO throw an exception if there is no circuit breaker
+            append(builder, v, null);
+        }
+
+        @Override
+        protected void append(BlockLoader.Builder builder, Object v, CircuitBreaker circuitBreaker) {
+            BytesRef scratch = new BytesRef();
+            int len = UnicodeUtil.maxUTF8Length((Objects.toString(v)).length());
+            if (circuitBreaker != null) {
+                circuitBreaker.addEstimateBytesAndMaybeBreak(len, "BytesRefs.scratch");
+            }
             ((BlockLoader.BytesRefBuilder) builder).appendBytesRef(toBytesRef(scratch, Objects.toString(v)));
+            if (circuitBreaker != null) {
+                circuitBreaker.addWithoutBreaking(-len);
+            }
         }
 
         @Override
         public String toString() {
             return "BlockSourceReader.Bytes";
         }
+
+        // TODO how to decrease the memory tracked for scratch in circuit breaker?
+        // Better convert the scratch to a BreakingBytesRefBuilder
     }
 
     private static class Geometries extends BlockSourceReader {

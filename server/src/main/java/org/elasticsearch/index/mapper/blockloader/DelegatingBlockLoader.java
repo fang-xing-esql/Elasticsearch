@@ -11,6 +11,7 @@ package org.elasticsearch.index.mapper.blockloader;
 
 import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.SortedSetDocValues;
+import org.elasticsearch.common.breaker.CircuitBreaker;
 import org.elasticsearch.index.mapper.BlockLoader;
 import org.elasticsearch.search.fetch.StoredFieldsSpec;
 
@@ -72,7 +73,12 @@ public abstract class DelegatingBlockLoader implements BlockLoader {
 
         @Override
         public void read(int docId, StoredFields storedFields, Builder builder) throws IOException {
-            reader.read(docId, storedFields, builder);
+            read(docId, storedFields, builder, null); // TODO throw an exception if there is no circuit breaker?
+        }
+
+        @Override
+        public void read(int docId, StoredFields storedFields, Builder builder, CircuitBreaker circuitBreaker) throws IOException {
+            reader.read(docId, storedFields, builder, circuitBreaker);
         }
 
         @Override
