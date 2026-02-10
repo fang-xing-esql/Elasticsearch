@@ -174,6 +174,45 @@ public class ValuesSourceReaderOperator extends AbstractPageMappingToIteratorOpe
     private int lastSegment = -1;
 
     /**
+     * The maximum raw byte size of _source observed so far. This persists across pages so
+     * the pre-reservation for source parsing overhead can protect even the first (and only)
+     * document in a page. On a 512MB JVM, jumboBytes is ~512KB, so each 5MB text field
+     * creates a 1-doc page. Without persisting this, every page starts with 0 reservation.
+     */
+    volatile long lastKnownSourceSize;
+
+    /**
+     * Cumulative bytes tracked on the circuit breaker for estimated GC lagging overhead.
+     * <p>
+     * When loading large text fields from _source, the source parsing creates UTF-16 String
+     * objects that are humongous G1GC objects (&gt;512KB for a 1MB region). These can only be
+     * collected by G1's concurrent marking cycles (not young GC), so they linger in JVM memory
+     * after {@code releaseParsedSource()} drops the reference. This overhead tracks the estimated
+     * amount of uncollected garbage to prevent OOM before the circuit breaker can trip.
+     * <p>
+     * A decay model is used: at the start of each page, a fraction ({@link #GC_DECAY_FACTOR})
+     * of the previous overhead is released, modeling GC gradually catching up between pages.
+     * After loading each document, {@code sourceBytes * GC_OVERHEAD_FACTOR} is added. This
+     * converges to a steady-state value representing the "GC lag window" of uncollected garbage.
+     */
+    private long gcLaggingOverheadBytes;
+
+    /**
+     * Factor applied to source bytes to estimate GC lagging overhead per document.
+     * A factor of 2 represents the UTF-16 expansion: a 5MB UTF-8 source becomes a ~10MB
+     * Java String that lingers as a humongous G1GC object until concurrent marking.
+     */
+    static final double GC_OVERHEAD_FACTOR = 2.0;
+
+    /**
+     * Fraction of GC overhead released at the start of each page, modeling GC catching up
+     * between pages. With a decay of 0.2 (release 20%), the overhead converges to
+     * {@code sourceBytes * GC_OVERHEAD_FACTOR / GC_DECAY_FACTOR} per operator.
+     * For a 5MB source: converges to 5 * 2 / 0.2 = 50MB.
+     */
+    static final double GC_DECAY_FACTOR = 0.2;
+
+    /**
      * Creates a new extractor
      * @param fields fields to load
      * @param docChannel the channel containing the shard, leaf/segment and doc id
@@ -202,11 +241,43 @@ public class ValuesSourceReaderOperator extends AbstractPageMappingToIteratorOpe
 
     @Override
     protected ReleasableIterator<Page> receive(Page page) {
+        decayGcLaggingOverhead();
         DocVector docVector = page.<DocBlock>getBlock(docChannel).asVector();
         return appendBlockArrays(
             page,
             docVector.singleSegment() ? new ValuesFromSingleReader(this, docVector) : new ValuesFromManyReader(this, docVector)
         );
+    }
+
+    /**
+     * Adds GC lagging overhead to the circuit breaker after loading a document from source.
+     * Called after each document is loaded to account for humongous UTF-16 Strings that linger
+     * in JVM memory because G1GC's concurrent marking hasn't collected them yet.
+     *
+     * @param sourceBytes the raw byte size of the loaded _source
+     */
+    void addGcLaggingOverhead(long sourceBytes) {
+        if (sourceBytes <= 0) {
+            return;
+        }
+        long overhead = (long) (sourceBytes * GC_OVERHEAD_FACTOR);
+        driverContext.blockFactory().adjustBreaker(overhead);
+        gcLaggingOverheadBytes += overhead;
+    }
+
+    /**
+     * Decays the GC lagging overhead at the start of each page, modeling GC gradually
+     * collecting the humongous objects between page loads. Releases a fraction
+     * ({@link #GC_DECAY_FACTOR}) of the current overhead from the circuit breaker.
+     */
+    private void decayGcLaggingOverhead() {
+        if (gcLaggingOverheadBytes > 0) {
+            long release = (long) (gcLaggingOverheadBytes * GC_DECAY_FACTOR);
+            if (release > 0) {
+                driverContext.blockFactory().adjustBreaker(-release);
+                gcLaggingOverheadBytes -= release;
+            }
+        }
     }
 
     void positionFieldWork(int shard, int segment, int firstDoc) {
@@ -249,6 +320,16 @@ public class ValuesSourceReaderOperator extends AbstractPageMappingToIteratorOpe
         return true;
     }
 
+    /**
+     * Updates the circuit breaker for all row stride readers' internal buffer overhead.
+     * Called after loading each document to detect scratch buffer growth.
+     */
+    void trackReadersOverhead() {
+        for (FieldWork w : fields) {
+            w.trackReaderOverhead();
+        }
+    }
+
     void trackStoredFields(StoredFieldsSpec spec, boolean sequential) {
         readersBuilt.merge(
             "stored_fields["
@@ -266,7 +347,18 @@ public class ValuesSourceReaderOperator extends AbstractPageMappingToIteratorOpe
 
     @Override
     public void close() {
+        for (FieldWork w : fields) {
+            w.releaseReaderOverhead();
+        }
+        releaseGcLaggingOverhead();
         Releasables.close(super::close, converterEvaluators);
+    }
+
+    private void releaseGcLaggingOverhead() {
+        if (gcLaggingOverheadBytes > 0) {
+            driverContext.blockFactory().adjustBreaker(-gcLaggingOverheadBytes);
+            gcLaggingOverheadBytes = 0;
+        }
     }
 
     protected class FieldWork {
@@ -281,6 +373,13 @@ public class ValuesSourceReaderOperator extends AbstractPageMappingToIteratorOpe
         @Nullable
         BlockLoader.RowStrideReader rowStride;
 
+        /**
+         * Bytes currently tracked on the circuit breaker for the row stride reader's internal buffers
+         * (e.g. scratch buffers in BlockSourceReader). This memory is not tracked by the block
+         * builder, so we track it here to prevent OOM when loading large fields.
+         */
+        private long trackedReaderBytes;
+
         FieldWork(FieldInfo info, int fieldIdx) {
             this.info = info;
             this.fieldIdx = fieldIdx;
@@ -291,12 +390,14 @@ public class ValuesSourceReaderOperator extends AbstractPageMappingToIteratorOpe
                 columnAtATime = null;
             }
             if (rowStride != null && rowStride.canReuse(firstDoc) == false) {
+                releaseReaderOverhead();
                 rowStride = null;
             }
         }
 
         void sameShardNewSegment() {
             columnAtATime = null;
+            releaseReaderOverhead();
             rowStride = null;
         }
 
@@ -306,6 +407,7 @@ public class ValuesSourceReaderOperator extends AbstractPageMappingToIteratorOpe
             converter = l.converter == null ? null : converterEvaluators.get(shard, fieldIdx, info.name, l.converter);
             log.debug("moved to shard {} {} {}", shard, loader, converter);
             columnAtATime = null;
+            releaseReaderOverhead();
             rowStride = null;
         }
 
@@ -332,6 +434,34 @@ public class ValuesSourceReaderOperator extends AbstractPageMappingToIteratorOpe
                 trackReader("row_stride", this.rowStride);
             }
             return rowStride;
+        }
+
+        /**
+         * Updates the circuit breaker to account for changes in the row stride reader's internal
+         * buffer sizes (e.g. scratch buffers that grow when loading large text fields). This should
+         * be called after loading each document so the breaker can trip before OOM.
+         */
+        void trackReaderOverhead() {
+            if (rowStride == null) {
+                return;
+            }
+            long current = rowStride.ramBytesUsed();
+            long delta = current - trackedReaderBytes;
+            if (delta > 0) {
+                driverContext.blockFactory().adjustBreaker(delta);
+                trackedReaderBytes = current;
+            }
+        }
+
+        /**
+         * Releases the circuit breaker reservation for the row stride reader's internal buffers.
+         * Must be called when the reader is replaced or the operator is closed.
+         */
+        void releaseReaderOverhead() {
+            if (trackedReaderBytes > 0) {
+                driverContext.blockFactory().adjustBreaker(-trackedReaderBytes);
+                trackedReaderBytes = 0;
+            }
         }
 
         private void trackReader(String type, BlockLoader.Reader reader) {

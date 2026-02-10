@@ -165,12 +165,44 @@ class ValuesFromSingleReader extends ValuesReader {
         );
         int p = offset;
         long estimated = 0;
+        long sourceReservation = 0;
         while (p < docs.count() && estimated < jumboBytes) {
             int doc = docs.get(p++);
-            storedFields.advanceTo(doc);
-            for (RowStrideReaderWork work : rowStrideReaders) {
-                work.read(doc, storedFields);
+            // Pre-reserve memory on the CB before loading _source. The source loading path
+            // creates several large untracked allocations:
+            //   - SourceFilter.filterBytes() -> BytesStreamOutput -> BigByteArray (~1x source bytes)
+            //   - JSON parsing -> Java String for text values (~2x source bytes, UTF-16)
+            // By reserving 3x the source byte size, the CB can trip BEFORE these untracked
+            // allocations cause OOM. The reservation is released after loading completes.
+            // NOTE: operator.lastKnownSourceSize persists across pages so even a 1-doc page
+            // (common when jumboBytes is small) benefits from a previous page's observation.
+            sourceReservation = operator.lastKnownSourceSize * 3;
+            if (sourceReservation > 0) {
+                operator.driverContext.blockFactory().adjustBreaker(sourceReservation);
             }
+            try {
+                storedFields.advanceTo(doc);
+                for (RowStrideReaderWork work : rowStrideReaders) {
+                    work.read(doc, storedFields);
+                }
+            } finally {
+                // Release the reservation - actual data is now in the tracked builders
+                if (sourceReservation > 0) {
+                    operator.driverContext.blockFactory().adjustBreaker(-sourceReservation);
+                    sourceReservation = 0;
+                }
+            }
+            // Track the source size for future reservations (persists across pages via operator)
+            long sourceBytes = storedFields.lastSourceBytesSize();
+            if (sourceBytes > operator.lastKnownSourceSize) {
+                operator.lastKnownSourceSize = sourceBytes;
+            }
+            // Release parsed source eagerly to allow GC of the large String objects
+            storedFields.releaseParsedSource();
+            // Update breaker tracking for reader scratch buffers that may have grown
+            operator.trackReadersOverhead();
+            // Track GC lagging overhead for humongous G1GC objects from source parsing
+            operator.addGcLaggingOverhead(sourceBytes);
             estimated = estimatedRamBytesUsed(rowStrideReaders);
             log.trace("{}: bytes loaded {}/{}", p, estimated, jumboBytes);
         }
@@ -248,6 +280,9 @@ class ValuesFromSingleReader extends ValuesReader {
         long estimated = 0;
         for (RowStrideReaderWork r : rowStrideReaders) {
             estimated += r.builder.estimatedBytes();
+            // Include reader scratch buffer overhead to make page splitting more conservative
+            // for large fields (e.g. 5MB text fields loaded from _source)
+            estimated += r.reader.ramBytesUsed();
         }
         return estimated;
     }

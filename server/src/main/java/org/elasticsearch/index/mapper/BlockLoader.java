@@ -251,6 +251,15 @@ public interface BlockLoader {
          * Reads the values of the given document into the builder.
          */
         void read(int docId, StoredFields storedFields, Builder builder) throws IOException;
+
+        /**
+         * Returns the estimated heap bytes used by this reader's internal buffers (e.g. scratch buffers
+         * for UTF-8 conversion). This is memory that is not tracked by the circuit breaker and must be
+         * accounted for separately to avoid OOM when loading large fields.
+         */
+        default long ramBytesUsed() {
+            return 0;
+        }
     }
 
     interface AllReader extends ColumnAtATimeReader, RowStrideReader {}

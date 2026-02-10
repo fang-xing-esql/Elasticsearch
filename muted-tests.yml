@@ -261,9 +261,6 @@ tests:
 - class: org.elasticsearch.xpack.esql.qa.single_node.EsqlSpecIT
   method: test {csv-spec:string.Url_encode_component tests with table reads}
   issue: https://github.com/elastic/elasticsearch/issues/140621
-- class: org.elasticsearch.xpack.esql.heap_attack.HeapAttackSubqueryIT
-  method: testManyRandomTextFieldsInSubqueryIntermediateResultsWithSortManyFields
-  issue: https://github.com/elastic/elasticsearch/issues/140664
 - class: org.elasticsearch.xpack.inference.integration.AuthorizationTaskExecutorIT
   method: testCreatesEisChatCompletion_DoesNotRemoveEndpointWhenNoLongerAuthorized
   issue: https://github.com/elastic/elasticsearch/issues/140802
@@ -273,9 +270,6 @@ tests:
 - class: org.elasticsearch.xpack.esql.qa.single_node.GenerativeForkIT
   method: test {csv-spec:string.Url_encode_component tests with table reads}
   issue: https://github.com/elastic/elasticsearch/issues/140809
-- class: org.elasticsearch.xpack.esql.heap_attack.HeapAttackSubqueryIT
-  method: testGiantTextFieldInSubqueryIntermediateResultsWithSort
-  issue: https://github.com/elastic/elasticsearch/issues/141034
 - class: org.elasticsearch.xpack.esql.heap_attack.HeapAttackSubqueryIT
   method: testManyRandomKeywordFieldsInSubqueryIntermediateResultsWithSortManyFields
   issue: https://github.com/elastic/elasticsearch/issues/141083
@@ -291,9 +285,6 @@ tests:
 - class: org.elasticsearch.xpack.esql.heap_attack.HeapAttackSubqueryIT
   method: testManyRandomKeywordFieldsInSubqueryIntermediateResultsWithSortOneField
   issue: https://github.com/elastic/elasticsearch/issues/141202
-- class: org.elasticsearch.xpack.esql.heap_attack.HeapAttackSubqueryIT
-  method: testManyRandomTextFieldsInSubqueryIntermediateResultsWithSortOneField
-  issue: https://github.com/elastic/elasticsearch/issues/141203
 - class: org.elasticsearch.xpack.esql.qa.mixed.MixedClusterEsqlSpecIT
   method: test {csv-spec:spatial-grid.GridGeohexByBoundsDropLocation}
   issue: https://github.com/elastic/elasticsearch/issues/141233
@@ -318,11 +309,6 @@ tests:
 - class: org.elasticsearch.indices.recovery.IndexRecoveryIT
   method: testSourceThrottling
   issue: https://github.com/elastic/elasticsearch/issues/141548
-- class: org.elasticsearch.xpack.esql.heap_attack.HeapAttackIT
-  methods:
-  - testLastAggWithGiantText
-  - testFirstAggWithGiantText
-  issue: https://github.com/elastic/elasticsearch/issues/141550
 - class: org.elasticsearch.xpack.inference.external.http.sender.RequestExecutorServiceTests
   method: testExecute_Throws_WhenRateLimitedQueueIsFull
   issue: https://github.com/elastic/elasticsearch/issues/141231

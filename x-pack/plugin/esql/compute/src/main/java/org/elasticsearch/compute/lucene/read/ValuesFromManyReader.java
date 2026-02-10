@@ -140,15 +140,51 @@ class ValuesFromManyReader extends ValuesReader {
             }
         }
 
+        private long sourceReservation;
+
         private void read(int doc) throws IOException {
-            storedFields.advanceTo(doc);
-            for (int f = 0; f < current.length; f++) {
-                rowStride[f].read(doc, storedFields, current[f].builder);
+            // Pre-reserve memory on the CB before loading _source (see ValuesFromSingleReader
+            // for detailed explanation of the 3x factor covering SourceFilter + String overhead).
+            // Uses operator.lastKnownSourceSize which persists across pages.
+            // NOTE: sourceReservation must only be set AFTER adjustBreaker succeeds.
+            // If adjustBreaker throws CircuitBreakingException, the bytes are NOT added to the
+            // breaker. Setting the field before would cause Run.close() to release bytes that
+            // were never reserved, making the breaker go negative.
+            long reservation = operator.lastKnownSourceSize * 3;
+            if (reservation > 0) {
+                operator.driverContext.blockFactory().adjustBreaker(reservation);
             }
+            sourceReservation = reservation;
+            try {
+                storedFields.advanceTo(doc);
+                for (int f = 0; f < current.length; f++) {
+                    rowStride[f].read(doc, storedFields, current[f].builder);
+                }
+            } finally {
+                if (sourceReservation > 0) {
+                    operator.driverContext.blockFactory().adjustBreaker(-sourceReservation);
+                    sourceReservation = 0;
+                }
+            }
+            long sourceBytes = storedFields.lastSourceBytesSize();
+            if (sourceBytes > operator.lastKnownSourceSize) {
+                operator.lastKnownSourceSize = sourceBytes;
+            }
+            // Release parsed source eagerly to allow GC of the large String objects
+            storedFields.releaseParsedSource();
+            // Update breaker tracking for reader scratch buffers that may have grown
+            operator.trackReadersOverhead();
+            // Track GC lagging overhead for humongous G1GC objects from source parsing
+            operator.addGcLaggingOverhead(sourceBytes);
         }
 
         @Override
         public void close() {
+            // Release any source reservation still held (in case of early exit/exception)
+            if (sourceReservation > 0) {
+                operator.driverContext.blockFactory().adjustBreaker(-sourceReservation);
+                sourceReservation = 0;
+            }
             Releasables.closeExpectNoException(blockFactory, Releasables.wrap(finalBuilders), Releasables.wrap(current));
         }
 
@@ -157,6 +193,10 @@ class ValuesFromManyReader extends ValuesReader {
             for (int f = 0; f < current.length; f++) {
                 sum += finalBuilders[f].estimatedBytes();
                 sum += current[f].builder.estimatedBytes();
+                // Include reader scratch buffer overhead for more accurate estimates
+                if (rowStride[f] != null) {
+                    sum += rowStride[f].ramBytesUsed();
+                }
             }
             return sum;
         }

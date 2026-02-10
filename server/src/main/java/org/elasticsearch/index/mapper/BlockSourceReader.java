@@ -239,6 +239,11 @@ public abstract class BlockSourceReader implements BlockLoader.RowStrideReader {
         }
 
         @Override
+        public long ramBytesUsed() {
+            return scratch.bytes.length;
+        }
+
+        @Override
         public String toString() {
             return "BlockSourceReader.Bytes";
         }
