@@ -206,9 +206,7 @@ public class ValuesSourceReaderOperator extends AbstractPageMappingToIteratorOpe
 
     /**
      * Fraction of GC overhead released at the start of each page, modeling GC catching up
-     * between pages. With a decay of 0.2 (release 20%), the overhead converges to
-     * {@code sourceBytes * GC_OVERHEAD_FACTOR / GC_DECAY_FACTOR} per operator.
-     * For a 5MB source: converges to 5 * 2 / 0.2 = 50MB.
+     * between pages. With a decay of 0.2 (release 20%).
      */
     static final double GC_DECAY_FACTOR = 0.2;
 

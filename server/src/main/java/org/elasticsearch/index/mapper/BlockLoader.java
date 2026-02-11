@@ -255,7 +255,7 @@ public interface BlockLoader {
         /**
          * Returns the estimated heap bytes used by this reader's internal buffers (e.g. scratch buffers
          * for UTF-8 conversion). This is memory that is not tracked by the circuit breaker and must be
-         * accounted for separately to avoid OOM when loading large fields.
+         * accounted to avoid OOM when loading large text fields.
          */
         default long ramBytesUsed() {
             return 0;

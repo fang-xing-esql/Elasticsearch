@@ -130,7 +130,7 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
     }
 
     public void testManyRandomTextFieldsInSubqueryIntermediateResultsWithSortOneField() throws IOException {
-        int docs = 500;
+        int docs = 500; // 500MB random/unique keyword values
         heapAttackIT.initManyBigFieldsIndex(docs, "text", true);
         // the sort of text field is not pushed to lucene, different from keyword
         for (int subquery : List.of(DEFAULT_SUBQUERIES, MAX_SUBQUERIES)) {
@@ -238,7 +238,7 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
     }
 
     public void testGiantTextFieldInSubqueryIntermediateResults() throws IOException {
-        int docs = 100; // 100 docs * 5MB each
+        int docs = 100; // 100 * 5MB
         heapAttackIT.initGiantTextField(docs, false, 5);
         for (int subquery : List.of(DEFAULT_SUBQUERIES, MAX_SUBQUERIES)) {
             assertCircuitBreaks(attempt -> buildSubqueries(subquery, "bigtext", ""));
@@ -246,7 +246,7 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
     }
 
     public void testGiantTextFieldInSubqueryIntermediateResultsWithSort() throws IOException {
-        int docs = 100; // 100 docs * 5MB each
+        int docs = 100; // 100 * 5MB
         heapAttackIT.initGiantTextField(docs, false, 5);
         for (int subquery : List.of(DEFAULT_SUBQUERIES, MAX_SUBQUERIES)) {
             assertCircuitBreaks(attempt -> buildSubqueriesWithSort(subquery, "bigtext", " f "));

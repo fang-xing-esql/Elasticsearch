@@ -165,21 +165,22 @@ class ValuesFromSingleReader extends ValuesReader {
         );
         int p = offset;
         long estimated = 0;
-        long sourceReservation = 0;
         while (p < docs.count() && estimated < jumboBytes) {
+            long sourceReservation = 0;
             int doc = docs.get(p++);
             // Pre-reserve memory on the CB before loading _source. The source loading path
             // creates several large untracked allocations:
-            //   - SourceFilter.filterBytes() -> BytesStreamOutput -> BigByteArray (~1x source bytes)
-            //   - JSON parsing -> Java String for text values (~2x source bytes, UTF-16)
+            // - SourceFilter.filterBytes() -> BytesStreamOutput -> BigByteArray (~1x source bytes)
+            // - JSON parsing -> Java String for text values (~2x source bytes, UTF-16)
             // By reserving 3x the source byte size, the CB can trip BEFORE these untracked
             // allocations cause OOM. The reservation is released after loading completes.
             // NOTE: operator.lastKnownSourceSize persists across pages so even a 1-doc page
             // (common when jumboBytes is small) benefits from a previous page's observation.
-            sourceReservation = operator.lastKnownSourceSize * 3;
-            if (sourceReservation > 0) {
-                operator.driverContext.blockFactory().adjustBreaker(sourceReservation);
+            long reservation = operator.lastKnownSourceSize * 3;
+            if (reservation > 0) {
+                operator.driverContext.blockFactory().adjustBreaker(reservation);
             }
+            sourceReservation = reservation;
             try {
                 storedFields.advanceTo(doc);
                 for (RowStrideReaderWork work : rowStrideReaders) {
@@ -201,7 +202,7 @@ class ValuesFromSingleReader extends ValuesReader {
             storedFields.releaseParsedSource();
             // Update breaker tracking for reader scratch buffers that may have grown
             operator.trackReadersOverhead();
-            // Track GC lagging overhead for humongous G1GC objects from source parsing
+            // Track GC lagging overhead from source parsing
             operator.addGcLaggingOverhead(sourceBytes);
             estimated = estimatedRamBytesUsed(rowStrideReaders);
             log.trace("{}: bytes loaded {}/{}", p, estimated, jumboBytes);
@@ -280,9 +281,6 @@ class ValuesFromSingleReader extends ValuesReader {
         long estimated = 0;
         for (RowStrideReaderWork r : rowStrideReaders) {
             estimated += r.builder.estimatedBytes();
-            // Include reader scratch buffer overhead to make page splitting more conservative
-            // for large fields (e.g. 5MB text fields loaded from _source)
-            estimated += r.reader.ramBytesUsed();
         }
         return estimated;
     }

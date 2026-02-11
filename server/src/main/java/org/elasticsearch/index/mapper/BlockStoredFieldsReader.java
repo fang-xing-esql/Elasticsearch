@@ -110,11 +110,6 @@ public abstract class BlockStoredFieldsReader implements BlockLoader.RowStrideRe
                 protected BytesRef toBytesRef(Object v) {
                     return BlockSourceReader.toBytesRef(scratch, (String) v);
                 }
-
-                @Override
-                public long ramBytesUsed() {
-                    return scratch.bytes.length;
-                }
             };
         }
     }

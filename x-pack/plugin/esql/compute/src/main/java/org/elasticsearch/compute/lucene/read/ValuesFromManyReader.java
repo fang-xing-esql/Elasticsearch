@@ -174,7 +174,7 @@ class ValuesFromManyReader extends ValuesReader {
             storedFields.releaseParsedSource();
             // Update breaker tracking for reader scratch buffers that may have grown
             operator.trackReadersOverhead();
-            // Track GC lagging overhead for humongous G1GC objects from source parsing
+            // Track GC lagging overhead from source parsing
             operator.addGcLaggingOverhead(sourceBytes);
         }
 
@@ -193,10 +193,6 @@ class ValuesFromManyReader extends ValuesReader {
             for (int f = 0; f < current.length; f++) {
                 sum += finalBuilders[f].estimatedBytes();
                 sum += current[f].builder.estimatedBytes();
-                // Include reader scratch buffer overhead for more accurate estimates
-                if (rowStride[f] != null) {
-                    sum += rowStride[f].ramBytesUsed();
-                }
             }
             return sum;
         }
