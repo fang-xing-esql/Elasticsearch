@@ -1139,9 +1139,9 @@ public class TopNOperatorTests extends OperatorTestCase {
                             sortOrders,
                             randomPageSize(),
                             InputOrdering.NOT_SORTED,
-                            0,
-                            0,
-                            0
+                            randomDoubleBetween(0.1, 10.0, true),
+                            randomDoubleBetween(0.1, 1.0, true),
+                            1024L * 1024L
                         )
                     ),
                     new PageConsumerOperator(pages::add)
@@ -1437,9 +1437,9 @@ public class TopNOperatorTests extends OperatorTestCase {
                         List.of(sortOrders),
                         randomPageSize(),
                         InputOrdering.NOT_SORTED,
-                        0,
-                        0,
-                        0
+                        randomDoubleBetween(0.1, 10.0, true),
+                        randomDoubleBetween(0.1, 1.0, true),
+                        1024L * 1024L
                     )
                 ),
                 new PageConsumerOperator(p -> readInto(actualValues, p))
@@ -1579,9 +1579,9 @@ public class TopNOperatorTests extends OperatorTestCase {
                     uniqueOrders.stream().toList(),
                     rows,
                     InputOrdering.NOT_SORTED,
-                    0,
-                    0,
-                    0
+                    randomDoubleBetween(0.1, 10.0, true),
+                    randomDoubleBetween(0.1, 1.0, true),
+                    1024L * 1024L
                 )
             );
         for (Page p : results) {
@@ -1955,9 +1955,9 @@ public class TopNOperatorTests extends OperatorTestCase {
                 List.of(new TopNOperator.SortOrder(0, asc, randomBoolean())),
                 randomPageSize(),
                 InputOrdering.NOT_SORTED,
-                0,
-                0,
-                0
+                randomDoubleBetween(0.1, 10.0, true),
+                randomDoubleBetween(0.1, 1.0, true),
+                1024L * 1024L
             )
         ) {
             int[] blockValues = IntStream.range(0, rows).toArray();

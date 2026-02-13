@@ -118,7 +118,11 @@ public final class ExchangeSinkHandler {
         @Override
         public void addPage(Page page) {
             onPageFetched.run();
-            if (page.ramBytesUsedByBlocks() >= gcOverheadJumboThreshold) {
+            // HeapAttackIT.testFetchMvLongs builds a 80MB giant page with 100 documents in it. How does it happen?
+            // Check the average document size, targeting to giant text fields similar to ValuesFromSingerReader and
+            // ValuesFromManyReader only when adding overhead for gc
+            long averageDocumentSize = page.getPositionCount() > 0 ? page.ramBytesUsedByBlocks() / page.getPositionCount() : 0;
+            if (averageDocumentSize >= gcOverheadJumboThreshold) {
                 boolean success = false;
                 try {
                     addGcLaggingOverhead(page);
@@ -306,7 +310,7 @@ public final class ExchangeSinkHandler {
             // Add new overhead for this page
             long overhead = (long) (pageBytes * gcOverheadFactor);
             if (overhead > 0) {
-                blockFactory.breaker().addEstimateBytesAndMaybeBreak(overhead, "exchange sink add page overhead");
+                blockFactory.breaker().addEstimateBytesAndMaybeBreak(overhead, "exchange sink add page gc overhead");
                 gcLaggingOverheadBytes += overhead;
             }
         }

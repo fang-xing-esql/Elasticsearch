@@ -430,7 +430,9 @@ public class TopNOperator implements Operator, Accountable {
     @Override
     public void addInput(Page page) {
         long start = System.nanoTime();
-        if (page.ramBytesUsedByBlocks() >= gcOverheadJumboThreshold) {
+        // These are similar to ExchangeSinkHandler.addPage
+        long averageDocumentSize = page.getPositionCount() > 0 ? page.ramBytesUsedByBlocks() / page.getPositionCount() : 0;
+        if (averageDocumentSize >= gcOverheadJumboThreshold) {
             boolean success = false;
             try {
                 addGcLaggingOverhead(page);
@@ -640,7 +642,7 @@ public class TopNOperator implements Operator, Accountable {
         // Add new overhead for this page
         long overhead = (long) (pageBytes * gcOverheadFactor);
         if (overhead > 0) {
-            breaker.addEstimateBytesAndMaybeBreak(overhead, "topn input page gc overhead");
+            breaker.addEstimateBytesAndMaybeBreak(overhead, "topn add page gc overhead");
             gcLaggingOverheadBytes += overhead;
         }
     }
