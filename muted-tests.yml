@@ -420,6 +420,12 @@ tests:
 - class: org.elasticsearch.xpack.esql.qa.multi_node.FieldExtractorIT
   method: testTsIndexConflictingTypes {NONE}
   issue: https://github.com/elastic/elasticsearch/issues/142477
+- class: org.elasticsearch.search.aggregations.bucket.terms.TermsAggregatorTests
+  method: testOrderByCardinality
+  issue: https://github.com/elastic/elasticsearch/issues/142484
+- class: org.elasticsearch.blobcache.shared.SharedBytesTests
+  method: testMmapResourcesReleasedOnClose
+  issue: https://github.com/elastic/elasticsearch/issues/142488
 
 # Examples:
 #
