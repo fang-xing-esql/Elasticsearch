@@ -7,6 +7,7 @@
 
 package org.elasticsearch.xpack.esql.enrich;
 
+import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.ByteSizeValue;
 import org.elasticsearch.common.util.BigArrays;
 import org.elasticsearch.compute.data.BlockFactory;
@@ -49,6 +50,7 @@ import org.elasticsearch.xpack.esql.planner.EsPhysicalOperationProviders;
 import org.elasticsearch.xpack.esql.planner.Layout;
 import org.elasticsearch.xpack.esql.planner.LocalExecutionPlanner;
 import org.elasticsearch.xpack.esql.planner.LocalExecutionPlanner.PhysicalOperation;
+import org.elasticsearch.xpack.esql.planner.PlannerSettings;
 import org.elasticsearch.xpack.esql.planner.PlannerUtils;
 import org.elasticsearch.xpack.esql.plugin.EsqlPlugin;
 
@@ -334,7 +336,15 @@ public class LookupExecutionPlanner {
                         EsqlPlugin.STORED_FIELDS_SEQUENTIAL_PROPORTION.getDefault(org.elasticsearch.common.settings.Settings.EMPTY)
                     )
                 );
-                return new ValuesSourceReaderOperator(driverContext, jumboSize.getBytes(), fields, shardContexts, true, docChannel);
+                return new ValuesSourceReaderOperator(
+                    driverContext,
+                    jumboSize.getBytes(),
+                    fields,
+                    shardContexts,
+                    true,
+                    docChannel,
+                    PlannerSettings.SOURCE_RESERVATION_FACTOR.get(Settings.EMPTY)
+                );
             }
 
             @Override

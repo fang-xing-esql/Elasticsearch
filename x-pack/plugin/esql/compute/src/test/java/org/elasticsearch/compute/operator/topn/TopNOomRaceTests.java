@@ -131,7 +131,10 @@ public class TopNOomRaceTests extends ESTestCase {
                 Collections.nCopies(repeats, TopNEncoder.DEFAULT_SORTABLE),
                 List.of(new TopNOperator.SortOrder(0, false, false)),
                 Integer.MAX_VALUE,
-                InputOrdering.NOT_SORTED
+                InputOrdering.NOT_SORTED,
+                randomDoubleBetween(0.1, 10.0, true),
+                randomDoubleBetween(0.1, 1.0, true),
+                1024L * 1024L
             );
             drivers.add(TestDriverFactory.create(driverContext, source, List.of(topn), new PageConsumerOperator(page -> {
                 assertThat(page.getPositionCount(), equalTo(topCount));

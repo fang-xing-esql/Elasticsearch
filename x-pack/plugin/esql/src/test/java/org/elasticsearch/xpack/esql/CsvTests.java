@@ -880,7 +880,14 @@ public class CsvTests extends ESTestCase {
             ByteSizeValue.ofBytes(randomLongBetween(1, BlockFactory.DEFAULT_MAX_BLOCK_PRIMITIVE_ARRAY_SIZE.getBytes() * 2))
         );
         ExchangeSourceHandler exchangeSource = new ExchangeSourceHandler(between(1, 64), executor);
-        ExchangeSinkHandler exchangeSink = new ExchangeSinkHandler(blockFactory, between(1, 64), threadPool::relativeTimeInMillis);
+        ExchangeSinkHandler exchangeSink = new ExchangeSinkHandler(
+            blockFactory,
+            between(1, 64),
+            threadPool::relativeTimeInMillis,
+            PlannerSettings.GC_OVERHEAD_FACTOR.get(Settings.EMPTY),
+            PlannerSettings.GC_DECAY_FACTOR.get(Settings.EMPTY),
+            PlannerSettings.VALUES_LOADING_JUMBO_SIZE.get(Settings.EMPTY).getBytes()
+        );
 
         LocalExecutionPlanner executionPlanner = new LocalExecutionPlanner(
             getTestName(),

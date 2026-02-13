@@ -238,15 +238,6 @@ public abstract class BlockSourceReader implements BlockLoader.RowStrideReader {
             ((BlockLoader.BytesRefBuilder) builder).appendBytesRef(toBytesRef(scratch, Objects.toString(v)));
         }
 
-        /*
-         * scratch takes significant memory when the text field is large, and this is not tracked by circuit breaker, and
-         * even though it is tracked, it may cause GC lagging especially when the size of the text field is huge.
-         */
-        @Override
-        public long ramBytesUsed() {
-            return scratch.bytes.length;
-        }
-
         @Override
         public String toString() {
             return "BlockSourceReader.Bytes";

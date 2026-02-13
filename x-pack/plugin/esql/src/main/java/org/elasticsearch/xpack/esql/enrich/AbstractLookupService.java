@@ -77,6 +77,7 @@ import org.elasticsearch.xpack.esql.core.expression.ReferenceAttribute;
 import org.elasticsearch.xpack.esql.core.tree.Source;
 import org.elasticsearch.xpack.esql.core.type.DataType;
 import org.elasticsearch.xpack.esql.planner.EsPhysicalOperationProviders;
+import org.elasticsearch.xpack.esql.planner.PlannerSettings;
 import org.elasticsearch.xpack.esql.planner.PlannerUtils;
 import org.elasticsearch.xpack.esql.plugin.EsqlPlugin;
 
@@ -467,7 +468,8 @@ public abstract class AbstractLookupService<R extends AbstractLookupService.Requ
                 )
             ),
             true,
-            0
+            0,
+            PlannerSettings.SOURCE_RESERVATION_FACTOR.get(Settings.EMPTY)
         );
     }
 

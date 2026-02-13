@@ -100,7 +100,14 @@ public class ExchangeServiceTests extends ESTestCase {
         for (int i = 0; i < pages.length; i++) {
             pages[i] = new Page(blockFactory.newConstantIntBlockWith(i, 2));
         }
-        ExchangeSinkHandler sinkExchanger = new ExchangeSinkHandler(blockFactory, 2, threadPool.relativeTimeInMillisSupplier());
+        ExchangeSinkHandler sinkExchanger = new ExchangeSinkHandler(
+            blockFactory,
+            2,
+            threadPool.relativeTimeInMillisSupplier(),
+            randomDoubleBetween(0.1, 10.0, true),
+            randomDoubleBetween(0.1, 1.0, true),
+            1024L * 1024L
+        );
         AtomicInteger pagesAddedToSink = new AtomicInteger();
         ExchangeSink sink1 = sinkExchanger.createExchangeSink(pagesAddedToSink::incrementAndGet);
         ExchangeSink sink2 = sinkExchanger.createExchangeSink(pagesAddedToSink::incrementAndGet);
@@ -365,7 +372,14 @@ public class ExchangeServiceTests extends ESTestCase {
                 if (sinkHandlers.isEmpty() == false && randomBoolean()) {
                     sinkHandler = randomFrom(sinkHandlers);
                 } else {
-                    sinkHandler = new ExchangeSinkHandler(blockFactory, randomExchangeBuffer(), threadPool.relativeTimeInMillisSupplier());
+                    sinkHandler = new ExchangeSinkHandler(
+                        blockFactory,
+                        randomExchangeBuffer(),
+                        threadPool.relativeTimeInMillisSupplier(),
+                        randomDoubleBetween(0.1, 10.0, true),
+                        randomDoubleBetween(0.1, 1.0, true),
+                        1024L * 1024L
+                    );
                     sourceExchanger.addRemoteSink(
                         sinkHandler::fetchPageAsync,
                         randomBoolean(),
@@ -405,7 +419,14 @@ public class ExchangeServiceTests extends ESTestCase {
         PlainActionFuture<Void> remoteSinksFuture = new PlainActionFuture<>();
         try (RefCountingListener refs = new RefCountingListener(remoteSinksFuture)) {
             Supplier<ExchangeSink> exchangeSink = () -> {
-                var sinkHandler = new ExchangeSinkHandler(blockFactory, randomExchangeBuffer(), threadPool.relativeTimeInMillisSupplier());
+                var sinkHandler = new ExchangeSinkHandler(
+                    blockFactory,
+                    randomExchangeBuffer(),
+                    threadPool.relativeTimeInMillisSupplier(),
+                    randomDoubleBetween(0.1, 10.0, true),
+                    randomDoubleBetween(0.1, 1.0, true),
+                    1024L * 1024L
+                );
                 int failAfter = randomBoolean() ? Integer.MAX_VALUE : randomIntBetween(0, 100);
                 AtomicInteger fetched = new AtomicInteger();
                 int instance = randomIntBetween(1, 3);
@@ -470,7 +491,14 @@ public class ExchangeServiceTests extends ESTestCase {
         IntBlock block2 = blockFactory.newConstantIntBlockWith(1, 2);
         Page p1 = new Page(block1);
         Page p2 = new Page(block2);
-        ExchangeSinkHandler sinkExchanger = new ExchangeSinkHandler(blockFactory, 2, threadPool.relativeTimeInMillisSupplier());
+        ExchangeSinkHandler sinkExchanger = new ExchangeSinkHandler(
+            blockFactory,
+            2,
+            threadPool.relativeTimeInMillisSupplier(),
+            randomDoubleBetween(0.1, 10.0, true),
+            randomDoubleBetween(0.1, 1.0, true),
+            1024L * 1024L
+        );
         ExchangeSink sink = sinkExchanger.createExchangeSink(() -> {});
         sink.addPage(p1);
         sink.addPage(p2);

@@ -513,7 +513,10 @@ public class LocalExecutionPlanner {
                 asList(encoders),
                 orders,
                 context.pageSize(topNExec, rowSize),
-                topNExec.inputOrdering()
+                topNExec.inputOrdering(),
+                context.plannerSettings().gcOverheadFactor(),
+                context.plannerSettings().gcDecayFactor(),
+                context.plannerSettings().valuesLoadingJumboSize().getBytes()
             ),
             source.layout
         );

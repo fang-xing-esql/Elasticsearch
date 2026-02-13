@@ -8888,7 +8888,14 @@ public class PhysicalPlanOptimizerTests extends ESTestCase {
         plan = useDataNodePlan ? plans.v2() : plans.v1();
         var flags = new EsqlFlags(true);
         plan = PlannerUtils.localPlan(PlannerSettings.DEFAULTS, flags, config, FoldContext.small(), plan, TEST_SEARCH_STATS, null);
-        ExchangeSinkHandler exchangeSinkHandler = new ExchangeSinkHandler(null, 10, () -> 10);
+        ExchangeSinkHandler exchangeSinkHandler = new ExchangeSinkHandler(
+            null,
+            10,
+            () -> 10,
+            PlannerSettings.GC_OVERHEAD_FACTOR.get(Settings.EMPTY),
+            PlannerSettings.GC_DECAY_FACTOR.get(Settings.EMPTY),
+            PlannerSettings.VALUES_LOADING_JUMBO_SIZE.get(Settings.EMPTY).getBytes()
+        );
         LocalExecutionPlanner planner = new LocalExecutionPlanner(
             "test",
             "",

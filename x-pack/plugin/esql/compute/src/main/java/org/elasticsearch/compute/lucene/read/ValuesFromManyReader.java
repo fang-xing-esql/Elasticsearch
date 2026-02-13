@@ -155,13 +155,13 @@ class ValuesFromManyReader extends ValuesReader {
 
         private void readRowStride(int doc) throws IOException {
             // Pre-reserve memory on the CB before loading _source (see ValuesFromSingleReader
-            // for detailed explanation of the 3x factor covering SourceFilter + String overhead).
+            // for detailed explanation of the sourceReservationFactor covering SourceFilter + UTF-16 String overhead).
             // Uses operator.lastKnownSourceSize which persists across pages.
             // NOTE: sourceReservation must only be set AFTER adjustBreaker succeeds.
             // If adjustBreaker throws CircuitBreakingException, the bytes are NOT added to the
             // breaker. Setting the field before would cause Run.close() to release bytes that
             // were never reserved, making the breaker go negative.
-            long reservation = operator.lastKnownSourceSize * 3;
+            long reservation = (long) (operator.lastKnownSourceSize * operator.sourceReservationFactor);
             if (reservation > 0) {
                 operator.driverContext.blockFactory().adjustBreaker(reservation);
             }
@@ -184,10 +184,6 @@ class ValuesFromManyReader extends ValuesReader {
             }
             // Release parsed source eagerly to allow GC of the large String objects
             storedFields.releaseParsedSource();
-            // Update breaker tracking for reader scratch buffers that may have grown
-            operator.trackReadersOverhead();
-            // Track GC lagging overhead from source parsing
-            operator.addGcLaggingOverhead(sourceBytes);
         }
 
         private void readColumnAtATime(int segmentStart, int segmentEnd) throws IOException {

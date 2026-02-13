@@ -237,6 +237,10 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
         );
     }
 
+    /*
+     * GC overhead and decay are added in ExchangeSinkHandler,
+     * accumulating many large(5MB) pages in the exchange buffer causes OOM without considering the overhead for large pages.
+     */
     public void testGiantTextFieldInSubqueryIntermediateResults() throws IOException {
         int docs = 100; // 100 * 5MB
         heapAttackIT.initGiantTextField(docs, false, 5);
@@ -245,6 +249,10 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
         }
     }
 
+    /*
+     * GC overhead and decay are added in TopNOperator,
+     * accumulating many large(5MB) pages in the exchange buffer causes OOM without considering the overhead for large pages.
+     */
     public void testGiantTextFieldInSubqueryIntermediateResultsWithSort() throws IOException {
         int docs = 100; // 100 * 5MB
         heapAttackIT.initGiantTextField(docs, false, 5);

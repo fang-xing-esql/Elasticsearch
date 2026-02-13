@@ -28,6 +28,7 @@ import org.elasticsearch.compute.operator.topn.TopNOperator;
 import org.elasticsearch.indices.breaker.CircuitBreakerMetrics;
 import org.elasticsearch.indices.breaker.CircuitBreakerService;
 import org.elasticsearch.indices.breaker.HierarchyCircuitBreakerService;
+import org.elasticsearch.xpack.esql.planner.PlannerSettings;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Fork;
@@ -141,7 +142,10 @@ public class TopNBenchmark {
             encoders,
             IntStream.range(0, count).mapToObj(c -> new TopNOperator.SortOrder(c, true, false)).toList(),
             8 * 1024,
-            sortedInput ? TopNOperator.InputOrdering.SORTED : TopNOperator.InputOrdering.NOT_SORTED
+            sortedInput ? TopNOperator.InputOrdering.SORTED : TopNOperator.InputOrdering.NOT_SORTED,
+            PlannerSettings.GC_OVERHEAD_FACTOR.getDefault(Settings.EMPTY),
+            PlannerSettings.GC_DECAY_FACTOR.getDefault(Settings.EMPTY),
+            PlannerSettings.VALUES_LOADING_JUMBO_SIZE.get(Settings.EMPTY).getBytes()
         );
     }
 

@@ -172,11 +172,12 @@ class ValuesFromSingleReader extends ValuesReader {
             // creates several large untracked allocations:
             // - SourceFilter.filterBytes() -> BytesStreamOutput -> BigByteArray (~1x source bytes)
             // - JSON parsing -> Java String for text values (~2x source bytes, UTF-16)
-            // By reserving 3x the source byte size, the CB can trip BEFORE these untracked
-            // allocations cause OOM. The reservation is released after loading completes.
+            // By reserving sourceReservationFactor (default 3x) times the source byte size,
+            // the CB can trip BEFORE these untracked allocations cause OOM.
+            // The reservation is released after loading completes.
             // NOTE: operator.lastKnownSourceSize persists across pages so even a 1-doc page
             // (common when jumboBytes is small) benefits from a previous page's observation.
-            long reservation = operator.lastKnownSourceSize * 3;
+            long reservation = (long) (operator.lastKnownSourceSize * operator.sourceReservationFactor);
             if (reservation > 0) {
                 operator.driverContext.blockFactory().adjustBreaker(reservation);
             }
@@ -200,10 +201,6 @@ class ValuesFromSingleReader extends ValuesReader {
             }
             // Release parsed source eagerly to allow GC of the large String objects
             storedFields.releaseParsedSource();
-            // Update breaker tracking for reader scratch buffers that may have grown
-            operator.trackReadersOverhead();
-            // Track GC lagging overhead from source parsing
-            operator.addGcLaggingOverhead(sourceBytes);
             estimated = estimatedRamBytesUsed(rowStrideReaders);
             log.trace("{}: bytes loaded {}/{}", p, estimated, jumboBytes);
         }

@@ -203,20 +203,29 @@ public class EsqlPlugin extends Plugin implements ActionPlugin, ExtensiblePlugin
             .flatMap(p -> p.checkers(services.projectResolver(), services.clusterService()).stream())
             .toList();
 
+        ExchangeService exchangeService = new ExchangeService(
+            services.clusterService().getSettings(),
+            services.threadPool(),
+            ThreadPool.Names.SEARCH,
+            blockFactoryProvider.blockFactory()
+        );
+        var clusterSettings = services.clusterService().getClusterSettings();
+        clusterSettings.initializeAndWatch(PlannerSettings.GC_OVERHEAD_FACTOR, exchangeService::setGcOverheadFactor);
+        clusterSettings.initializeAndWatch(PlannerSettings.GC_DECAY_FACTOR, exchangeService::setGcDecayFactor);
+        clusterSettings.initializeAndWatch(
+            PlannerSettings.VALUES_LOADING_JUMBO_SIZE,
+            v -> exchangeService.setGcOverheadJumboThreshold(v.getBytes())
+        );
+
         List<Object> components = List.of(
             new PlanExecutor(
                 new IndexResolver(services.client()),
                 services.telemetryProvider().getMeterRegistry(),
                 getLicenseState(),
-                new EsqlQueryLog(services.clusterService().getClusterSettings(), services.loggingFieldsProvider()),
+                new EsqlQueryLog(clusterSettings, services.loggingFieldsProvider()),
                 extraCheckers
             ),
-            new ExchangeService(
-                services.clusterService().getSettings(),
-                services.threadPool(),
-                ThreadPool.Names.SEARCH,
-                blockFactoryProvider.blockFactory()
-            ),
+            exchangeService,
             blockFactoryProvider
         );
         if (ESQL_VIEWS_FEATURE_FLAG.isEnabled()) {

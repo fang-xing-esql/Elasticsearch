@@ -7,6 +7,8 @@
 
 package org.elasticsearch.compute.operator.exchange;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.support.SubscribableListener;
 import org.elasticsearch.compute.data.BlockFactory;
@@ -31,6 +33,8 @@ import java.util.function.LongSupplier;
  */
 public final class ExchangeSinkHandler {
 
+    private static final Logger logger = LogManager.getLogger(ExchangeSinkHandler.class);
+
     private final ExchangeBuffer buffer;
     private final Queue<ActionListener<ExchangeResponse>> listeners = new ConcurrentLinkedQueue<>();
     private final AtomicInteger outstandingSinks = new AtomicInteger();
@@ -42,12 +46,61 @@ public final class ExchangeSinkHandler {
     private final AtomicLong lastUpdatedInMillis;
     private final BlockFactory blockFactory;
 
-    public ExchangeSinkHandler(BlockFactory blockFactory, int maxBufferSize, LongSupplier nowInMillis) {
+    /**
+     * Factor applied to page bytes to estimate GC lagging overhead when a page enters the exchange sink.
+     * Configurable via the {@code esql.gc_overhead_factor} cluster setting.
+     */
+    private final double gcOverheadFactor;
+
+    /**
+     * Fraction of accumulated GC overhead released each time a new page is added, modeling GC
+     * gradually catching up. Configurable via the {@code esql.gc_decay_factor} cluster setting.
+     */
+    private final double gcDecayFactor;
+
+    /**
+     * Minimum page size (in bytes) required to apply GC lagging overhead. Pages whose
+     * {@code ramBytesUsedByBlocks()} is below this threshold skip the overhead entirely.
+     * Derived from {@code esql.values_loading_jumbo_size}.
+     */
+    private final long gcOverheadJumboThreshold;
+
+    /**
+     * Lock protecting {@link #gcLaggingOverheadBytes} and {@link #gcOverheadReleased} to prevent
+     * races between adding overhead (driver threads) and releasing overhead (cleanup threads).
+     */
+    private final Object gcOverheadLock = new Object();
+
+    /**
+     * Cumulative bytes tracked on the circuit breaker for estimated GC lagging overhead.
+     * This tracks untracked UTF-16 String garbage from source parsing that lingers in JVM memory.
+     * Guarded by {@link #gcOverheadLock}.
+     */
+    private long gcLaggingOverheadBytes;
+
+    /**
+     * Set to true once {@link #releaseGcLaggingOverhead()} has been called, preventing further
+     * overhead from being added. Guarded by {@link #gcOverheadLock}.
+     */
+    private boolean gcOverheadReleased;
+
+    public ExchangeSinkHandler(
+        BlockFactory blockFactory,
+        int maxBufferSize,
+        LongSupplier nowInMillis,
+        double gcOverheadFactor,
+        double gcDecayFactor,
+        long gcOverheadJumboThreshold
+    ) {
         this.blockFactory = blockFactory;
         this.buffer = new ExchangeBuffer(maxBufferSize);
         this.completionFuture = SubscribableListener.newForked(buffer::addCompletionListener);
+        this.completionFuture.addListener(ActionListener.running(this::releaseGcLaggingOverhead));
         this.nowInMillis = nowInMillis;
         this.lastUpdatedInMillis = new AtomicLong(nowInMillis.getAsLong());
+        this.gcOverheadFactor = gcOverheadFactor;
+        this.gcDecayFactor = gcDecayFactor;
+        this.gcOverheadJumboThreshold = gcOverheadJumboThreshold;
     }
 
     private class ExchangeSinkImpl implements ExchangeSink {
@@ -65,6 +118,19 @@ public final class ExchangeSinkHandler {
         @Override
         public void addPage(Page page) {
             onPageFetched.run();
+            if (page.ramBytesUsedByBlocks() >= gcOverheadJumboThreshold) {
+                boolean success = false;
+                try {
+                    addGcLaggingOverhead(page);
+                    success = true;
+                } finally {
+                    if (success == false) {
+                        // release the memory tracked by circuit breaker to prevent leaks,
+                        // otherwise circuit break report non-zero size after circuit breaker trips
+                        page.releaseBlocks();
+                    }
+                }
+            }
             buffer.addPage(page);
             notifyListeners();
         }
@@ -134,6 +200,7 @@ public final class ExchangeSinkHandler {
      * Fails this sink exchange handler
      */
     void onFailure(Exception failure) {
+        releaseGcLaggingOverhead();
         completionFuture.onFailure(failure);
         buffer.finish(true);
         notifyListeners();
@@ -204,5 +271,60 @@ public final class ExchangeSinkHandler {
      */
     public int bufferSize() {
         return buffer.size();
+    }
+
+    /**
+     * Adds GC lagging overhead to the circuit breaker when a page enters the exchange sink(and the
+     * other pipeline breakers potentially). First decays existing overhead (modeling GC catching up),
+     * then adds new overhead proportional to the page's block data size. This models the lingering
+     * UTF-16 String objects from source parsing that haven't been collected by GC yet.
+     * <p>
+     * By tracking this overhead only at the exchange sink level (not per-driver in ValuesSourceReader),
+     * single-pipeline queries (where text blocks are consumed immediately by eval/aggregation) incur
+     * no GC overhead penalty. Only multi-pipeline (subquery) queries that route pages through exchange
+     * buffers accumulate this overhead, causing the circuit breaker to trip before OOM.
+     * <p>
+     * Synchronized on {@link #gcOverheadLock} to prevent races with {@link #releaseGcLaggingOverhead()}.
+     */
+    private void addGcLaggingOverhead(Page page) {
+        long pageBytes = page.ramBytesUsedByBlocks();
+        if (pageBytes <= 0) {
+            return;
+        }
+        synchronized (gcOverheadLock) {
+            if (gcOverheadReleased) {
+                return;
+            }
+            // Decay existing overhead, modeling GC gradually collecting humongous objects
+            if (gcLaggingOverheadBytes > 0) {
+                long release = (long) (gcLaggingOverheadBytes * gcDecayFactor);
+                if (release > 0) {
+                    blockFactory.breaker().addWithoutBreaking(-release);
+                    gcLaggingOverheadBytes -= release;
+                }
+            }
+            // Add new overhead for this page
+            long overhead = (long) (pageBytes * gcOverheadFactor);
+            if (overhead > 0) {
+                blockFactory.breaker().addEstimateBytesAndMaybeBreak(overhead, "exchange sink add page overhead");
+                gcLaggingOverheadBytes += overhead;
+            }
+        }
+    }
+
+    /**
+     * Releases all accumulated GC lagging overhead from the circuit breaker.
+     * Called when the sink handler completes or fails. Sets {@link #gcOverheadReleased} to prevent
+     * any further overhead from being added by concurrent driver threads.
+     */
+    private void releaseGcLaggingOverhead() {
+        synchronized (gcOverheadLock) {
+            gcOverheadReleased = true;
+            if (gcLaggingOverheadBytes > 0) {
+                blockFactory.breaker().addWithoutBreaking(-gcLaggingOverheadBytes);
+                logger.debug("released {} bytes of GC lagging overhead from exchange sink", gcLaggingOverheadBytes);
+                gcLaggingOverheadBytes = 0;
+            }
+        }
     }
 }
