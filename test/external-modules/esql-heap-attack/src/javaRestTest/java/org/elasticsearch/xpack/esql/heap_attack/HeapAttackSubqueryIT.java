@@ -81,8 +81,8 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
      * And these queries have sort on one field, there are 500 distinct values, each value is 1KB.
      * This is mainly to test TopNOperator, addInput triggers CBE.
      */
+    @AwaitsFix(bugUrl = "https://github.com/elastic/elasticsearch/issues/140218")
     public void testManyRandomKeywordFieldsInSubqueryIntermediateResultsWithSortOneField() throws IOException {
-        assertFalse("This test OOMs intermittently, skip it", true);
         int docs = 500; // 500MB random/unique keyword values
         heapAttackIT.initManyBigFieldsIndex(docs, "keyword", true);
         for (int subquery : List.of(DEFAULT_SUBQUERIES, MAX_SUBQUERIES)) {
@@ -95,8 +95,8 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
      * And these queries have sort on 100 fields, there are 500 * 100 distinct values, each value is 1KB.
      * This is mainly to test TopNOperator.
      */
+    @AwaitsFix(bugUrl = "https://github.com/elastic/elasticsearch/issues/140134")
     public void testManyRandomKeywordFieldsInSubqueryIntermediateResultsWithSortManyFields() throws IOException {
-        assertFalse("This test OOMs intermittently, skip it", true);
         int docs = 500; // // 500MB random/unique keyword values
         heapAttackIT.initManyBigFieldsIndex(docs, "keyword", true);
         // Some data points:
@@ -115,8 +115,8 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
         }
     }
 
+    @AwaitsFix(bugUrl = "https://github.com/elastic/elasticsearch/issues/140218")
     public void testManyRandomTextFieldsInSubqueryIntermediateResults() throws IOException {
-        assertFalse("This test OOMs intermittently, skip it", true);
         int docs = 500; // 500MB random/unique keyword values
         heapAttackIT.initManyBigFieldsIndex(docs, "text", true);
         // 2 subqueries are enough to trigger CBE, confirmed where this CBE happens in ExchangeService.doFetchPageAsync,
@@ -126,8 +126,8 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
         }
     }
 
+    @AwaitsFix(bugUrl = "https://github.com/elastic/elasticsearch/issues/140218")
     public void testManyRandomTextFieldsInSubqueryIntermediateResultsWithSortOneField() throws IOException {
-        assertFalse("This test OOMs intermittently, skip it", true);
         int docs = 500; // 500MB random/unique keyword values
         heapAttackIT.initManyBigFieldsIndex(docs, "text", true);
         // the sort of text field is not pushed to lucene, different from keyword
@@ -136,8 +136,8 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
         }
     }
 
+    @AwaitsFix(bugUrl = "https://github.com/elastic/elasticsearch/issues/140218")
     public void testManyRandomTextFieldsInSubqueryIntermediateResultsWithSortManyFields() throws IOException {
-        assertFalse("This test OOMs intermittently, skip it", true);
         int docs = 500; // 500MB random/unique keyword values
         heapAttackIT.initManyBigFieldsIndex(docs, "text", true);
         StringBuilder sortKeys = new StringBuilder();
