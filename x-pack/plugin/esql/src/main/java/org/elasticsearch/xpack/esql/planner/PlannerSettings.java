@@ -136,7 +136,7 @@ public class PlannerSettings {
      */
     public static final Setting<Double> GC_OVERHEAD_FACTOR = Setting.doubleSetting(
         "esql.gc_overhead_factor",
-        2.0,
+        3.0,
         0.0,
         Setting.Property.NodeScope,
         Setting.Property.Dynamic
