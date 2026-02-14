@@ -114,13 +114,12 @@ public class PlannerSettings {
     /**
      * Multiplier applied to {@code lastKnownSourceSize} to pre-reserve memory on the circuit breaker
      * before loading {@code _source}. The source loading path creates large untracked allocations:
-     * scratch, SourceFilter.filterBytes() and JSON parsing creates, heap dump has shown about 6x
-     * of the actual source size in untracked memory. A factor of 5.0 covers some of them, allowing
-     * the circuit breaker to trip before these untracked allocations cause OOM.
+     * scratch, SourceFilter.filterBytes() and JSON parsing creates, heap dump has shown about 8x
+     * of the actual source size in untracked memory at peak.
      */
     public static final Setting<Double> SOURCE_RESERVATION_FACTOR = Setting.doubleSetting(
         "esql.source_reservation_factor",
-        5.0,
+        8.0,
         0.0,
         Setting.Property.NodeScope,
         Setting.Property.Dynamic

@@ -162,10 +162,10 @@ class ValuesFromManyReader extends ValuesReader {
             // breaker. Setting the field before would cause Run.close() to release bytes that
             // were never reserved, making the breaker go negative.
             long reservation = (long) (operator.lastKnownSourceSize * operator.sourceReservationFactor);
-            if (reservation > 0) {
+            if (reservation > 0 && operator.lastKnownSourceSize > operator.jumboBytes) {
                 operator.driverContext.blockFactory().adjustBreaker(reservation);
+                sourceReservation = reservation;
             }
-            sourceReservation = reservation;
             try {
                 storedFields.advanceTo(doc);
                 for (CurrentWork r : rowStride) {

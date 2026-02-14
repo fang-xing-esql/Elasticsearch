@@ -178,10 +178,10 @@ class ValuesFromSingleReader extends ValuesReader {
             // NOTE: operator.lastKnownSourceSize persists across pages so even a 1-doc page
             // (common when jumboBytes is small) benefits from a previous page's observation.
             long reservation = (long) (operator.lastKnownSourceSize * operator.sourceReservationFactor);
-            if (reservation > 0) {
+            if (reservation > 0 && operator.lastKnownSourceSize > jumboBytes) {
                 operator.driverContext.blockFactory().adjustBreaker(reservation);
+                sourceReservation = reservation;
             }
-            sourceReservation = reservation;
             try {
                 storedFields.advanceTo(doc);
                 for (RowStrideReaderWork work : rowStrideReaders) {
