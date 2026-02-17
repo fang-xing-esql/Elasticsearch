@@ -82,20 +82,20 @@ public final class ExchangeService extends AbstractLifecycleComponent {
      * GC overhead factor for exchange sink handlers. Volatile to allow dynamic updates via cluster settings.
      * @see ExchangeSinkHandler
      */
-    private volatile double gcOverheadFactor = 2.0;
+    private volatile double gcOverheadFactor;
 
     /**
      * GC decay factor for exchange sink handlers. Volatile to allow dynamic updates via cluster settings.
      * @see ExchangeSinkHandler
      */
-    private volatile double gcDecayFactor = 0.2;
+    private volatile double gcDecayFactor;
 
     /**
      * Minimum page size (in bytes) required to apply GC lagging overhead. Pages smaller than this
      * threshold skip the overhead entirely, since they don't produce significant GC pressure.
      * Defaults to 0 (apply overhead to all pages); set via {@link #setGcOverheadJumboThreshold(long)}.
      */
-    private volatile long gcOverheadJumboThreshold = 0;
+    private volatile long gcOverheadJumboThreshold;
 
     private final Map<String, ExchangeSinkHandler> sinks = ConcurrentCollections.newConcurrentMap();
     private final Map<String, ExchangeSourceHandler> exchangeSources = ConcurrentCollections.newConcurrentMap();
