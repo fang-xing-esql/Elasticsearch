@@ -11,6 +11,7 @@ import com.carrotsearch.randomizedtesting.annotations.TimeoutSuite;
 
 import org.apache.lucene.tests.util.TimeUnits;
 import org.elasticsearch.Build;
+import org.elasticsearch.client.ResponseException;
 import org.elasticsearch.test.ListMatcher;
 import org.junit.Before;
 
@@ -130,9 +131,17 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
             columns = columns.item(matchesMap().entry("name", "f" + String.format(Locale.ROOT, "%03d", f)).entry("type", type));
         }
         for (int subquery : List.of(MAX_SUBQUERIES)) {
-            Map<?, ?> response = buildSubqueriesWithSort(subquery, "manybigfields", sortKeys.toString());
-            System.out.println("FANG!!!: response: " + response);
-            assertMap(response, matchesMap().entry("columns", columns));
+            // results are returned from non-serverless environment, but CBE is expected in serverless
+            try {
+                Map<?, ?> response = buildSubqueriesWithSort(subquery, "manybigfields", sortKeys.toString());
+                assertMap(response, matchesMap().entry("columns", columns));
+            } catch (ResponseException e) {
+                Map<?, ?> map = responseAsMap(e.getResponse());
+                assertMap(
+                    map,
+                    matchesMap().entry("status", 429).entry("error", matchesMap().extraOk().entry("type", "circuit_breaking_exception"))
+                );
+            }
         }
     }
 
