@@ -116,6 +116,26 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
         }
     }
 
+    public void testManyRandomNumericFieldsInSubqueryIntermediateResultsWithSortManyFields() throws IOException {
+        int docs = 1000;
+        String type = randomFrom("integer", "long", "double");
+        heapAttackIT.initManyBigFieldsIndex(docs, type, true);
+        StringBuilder sortKeys = new StringBuilder();
+        sortKeys.append("f000");
+        for (int f = 1; f < 100; f++) {
+            sortKeys.append(", f").append(String.format(Locale.ROOT, "%03d", f));
+        }
+        ListMatcher columns = matchesList();
+        for (int f = 0; f < 1000; f++) {
+            columns = columns.item(matchesMap().entry("name", "f" + String.format(Locale.ROOT, "%03d", f)).entry("type", type));
+        }
+        for (int subquery : List.of(MAX_SUBQUERIES)) {
+            Map<?, ?> response = buildSubqueriesWithSort(subquery, "manybigfields", sortKeys.toString());
+            System.out.println("FANG!!!: response: " + response);
+            assertMap(response, matchesMap().entry("columns", columns));
+        }
+    }
+
     /*
      * The index's size is 1MB * 500, each field has 500 unique/random text values, and these queries don't have aggregation or sort.
      * CBE is not triggered here.
@@ -356,6 +376,6 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
             query.append(", ").append(subquery);
         }
         query.append(" \"}");
-        return responseAsMap(query(query.toString(), "columns,values"));
+        return responseAsMap(query(query.toString(), "columns"));
     }
 }

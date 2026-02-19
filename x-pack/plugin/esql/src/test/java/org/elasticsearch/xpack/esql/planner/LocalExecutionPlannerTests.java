@@ -284,7 +284,8 @@ public class LocalExecutionPlannerTests extends MapperServiceTestCase {
             ByteSizeValue.ofMb(1),
             between(1, 10000),
             randomDoubleBetween(0.1, 1.0, true),
-            between(0, 1000)
+            between(0, 1000),
+            10
         );
         LocalExecutionPlanner.LocalExecutionPlan plan = planner().plan(
             "test",
