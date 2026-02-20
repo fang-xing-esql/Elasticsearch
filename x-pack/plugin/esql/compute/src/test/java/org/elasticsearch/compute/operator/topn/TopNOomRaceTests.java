@@ -132,6 +132,7 @@ public class TopNOomRaceTests extends ESTestCase {
                 List.of(new TopNOperator.SortOrder(0, false, false)),
                 Integer.MAX_VALUE,
                 InputOrdering.NOT_SORTED,
+                null,
                 randomDoubleBetween(0.1, 10.0, true),
                 1024L * 1024L
             );
