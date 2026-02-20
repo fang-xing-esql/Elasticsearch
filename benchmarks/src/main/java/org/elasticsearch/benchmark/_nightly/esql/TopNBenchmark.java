@@ -143,8 +143,7 @@ public class TopNBenchmark {
             sortOrders,
             8 * 1024,
             sortedInput ? TopNOperator.InputOrdering.SORTED : TopNOperator.InputOrdering.NOT_SORTED,
-            PlannerSettings.GC_OVERHEAD_FACTOR.getDefault(Settings.EMPTY),
-            PlannerSettings.GC_DECAY_FACTOR.getDefault(Settings.EMPTY),
+            PlannerSettings.PAGE_PENALTY_FACTOR.getDefault(Settings.EMPTY),
             PlannerSettings.VALUES_LOADING_JUMBO_SIZE.get(Settings.EMPTY).getBytes()
         );
     }

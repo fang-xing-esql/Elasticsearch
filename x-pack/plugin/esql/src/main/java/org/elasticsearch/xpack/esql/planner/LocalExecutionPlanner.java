@@ -575,8 +575,7 @@ public class LocalExecutionPlanner {
                 orders,
                 context.pageSize(topNExec, rowSize),
                 topNExec.inputOrdering(),
-                context.plannerSettings().gcOverheadFactor(),
-                context.plannerSettings().gcDecayFactor(),
+                context.plannerSettings().pagePenaltyFactor(),
                 context.plannerSettings().valuesLoadingJumboSize().getBytes()
             ),
             source.layout

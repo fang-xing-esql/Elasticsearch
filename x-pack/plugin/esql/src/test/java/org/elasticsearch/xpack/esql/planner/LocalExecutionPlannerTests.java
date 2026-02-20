@@ -286,8 +286,7 @@ public class LocalExecutionPlannerTests extends MapperServiceTestCase {
             randomDoubleBetween(0.1, 1.0, true),
             between(0, 1000),
             PlannerSettings.SOURCE_RESERVATION_FACTOR.get(Settings.EMPTY),
-            PlannerSettings.GC_OVERHEAD_FACTOR.get(Settings.EMPTY),
-            PlannerSettings.GC_DECAY_FACTOR.get(Settings.EMPTY)
+            PlannerSettings.PAGE_PENALTY_FACTOR.get(Settings.EMPTY)
         );
         LocalExecutionPlanner.LocalExecutionPlan plan = planner().plan(
             "test",

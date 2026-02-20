@@ -283,6 +283,18 @@ public final class Page implements Writeable, Releasable {
     }
 
     /**
+     * Returns the average row size in bytes, computed as total block bytes divided by position count.
+     * Returns 0 if the page has no positions.
+     *
+     * testFetchMvLongs create a 80MB page with 100 documents in it, so we calculate the average document size here
+     * instead of just using the page size, this is used to determine whether adding large page/document penalty in
+     * pipeline breakers like Exchange and TopNOperator when a new page is added to a pipeline breaker.
+     */
+    public long averageRowSize() {
+        return positionCount > 0 ? ramBytesUsedByBlocks() / positionCount : 0;
+    }
+
+    /**
      * Release all blocks in this page, decrementing any breakers accounting for these blocks.
      */
     public void releaseBlocks() {

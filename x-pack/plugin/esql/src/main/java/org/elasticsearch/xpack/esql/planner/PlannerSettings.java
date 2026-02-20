@@ -126,32 +126,16 @@ public class PlannerSettings {
     );
 
     /**
-     * Factor applied to page bytes to estimate GC lagging overhead when a page enters an exchange sink.
-     * When large text fields are loaded from _source, the source parsing creates UTF-16 String objects
-     * that linger as humongous G1GC objects until concurrent marking collects them. This factor models
-     * the cumulative untracked garbage from all pages that have flowed through the sink.
-     *
-     * This overhead can be applied to exchange sinks (used in subquery/multi-pipeline scenarios), or TopNOperator,
-     * and potentially other places in the future when there is a pipeline breaker.
+     * Penalty factor applied to the page size (in bytes) when a page with large documents is added
+     * to a pipeline breaker such as {@code ExchangeSinkHandler} or {@code TopNOperator}. The penalty
+     * is tracked on the circuit breaker to account for untracked JVM heap pressure (e.g. loading large
+     * objects from _source). A value of 0.2 means an additional 20% of the page size is reserved
+     * on the breaker.
      */
-    public static final Setting<Double> GC_OVERHEAD_FACTOR = Setting.doubleSetting(
-        "esql.gc_overhead_factor",
-        3.0,
-        0.0,
-        Setting.Property.NodeScope,
-        Setting.Property.Dynamic
-    );
-
-    /**
-     * Fraction of accumulated GC overhead released each time a new page is added to an exchange sink,
-     * modeling GC gradually catching up. With a decay of 0.2 (release 20%), the overhead converges to
-     * {@code pageBytes * GC_OVERHEAD_FACTOR / GC_DECAY_FACTOR} per operator.
-     */
-    public static final Setting<Double> GC_DECAY_FACTOR = Setting.doubleSetting(
-        "esql.gc_decay_factor",
+    public static final Setting<Double> PAGE_PENALTY_FACTOR = Setting.doubleSetting(
+        "esql.page_penalty_factor",
         0.2,
         0.0,
-        1.0,
         Setting.Property.NodeScope,
         Setting.Property.Dynamic
     );
@@ -167,8 +151,7 @@ public class PlannerSettings {
             PARTIAL_AGGREGATION_EMIT_UNIQUENESS_THRESHOLD,
             REUSE_COLUMN_LOADERS_THRESHOLD,
             SOURCE_RESERVATION_FACTOR,
-            GC_OVERHEAD_FACTOR,
-            GC_DECAY_FACTOR
+            PAGE_PENALTY_FACTOR
         );
     }
 
@@ -197,8 +180,7 @@ public class PlannerSettings {
                 v -> settings.updateAndGet(s -> s.reuseColumnLoadersThreshold(v))
             );
             clusterSettings.initializeAndWatch(SOURCE_RESERVATION_FACTOR, v -> settings.updateAndGet(s -> s.sourceReservationFactor(v)));
-            clusterSettings.initializeAndWatch(GC_OVERHEAD_FACTOR, v -> settings.updateAndGet(s -> s.gcOverheadFactor(v)));
-            clusterSettings.initializeAndWatch(GC_DECAY_FACTOR, v -> settings.updateAndGet(s -> s.gcDecayFactor(v)));
+            clusterSettings.initializeAndWatch(PAGE_PENALTY_FACTOR, v -> settings.updateAndGet(s -> s.pagePenaltyFactor(v)));
         }
 
         public PlannerSettings get() {
@@ -214,8 +196,7 @@ public class PlannerSettings {
     private final double partialEmitUniquenessThreshold;
     private final int reuseColumnLoadersThreshold;
     private final double sourceReservationFactor;
-    private final double gcOverheadFactor;
-    private final double gcDecayFactor;
+    private final double pagePenaltyFactor;
 
     /**
      * Defaults.
@@ -229,8 +210,7 @@ public class PlannerSettings {
         PARTIAL_AGGREGATION_EMIT_UNIQUENESS_THRESHOLD.getDefault(Settings.EMPTY),
         REUSE_COLUMN_LOADERS_THRESHOLD.getDefault(Settings.EMPTY),
         SOURCE_RESERVATION_FACTOR.getDefault(Settings.EMPTY),
-        GC_OVERHEAD_FACTOR.getDefault(Settings.EMPTY),
-        GC_DECAY_FACTOR.getDefault(Settings.EMPTY)
+        PAGE_PENALTY_FACTOR.getDefault(Settings.EMPTY)
     );
 
     /**
@@ -245,8 +225,7 @@ public class PlannerSettings {
         double partialEmitUniquenessThreshold,
         int reuseColumnLoadersThreshold,
         double sourceReservationFactor,
-        double gcOverheadFactor,
-        double gcDecayFactor
+        double pagePenaltyFactor
     ) {
         this.defaultDataPartitioning = defaultDataPartitioning;
         this.valuesLoadingJumboSize = valuesLoadingJumboSize;
@@ -256,8 +235,7 @@ public class PlannerSettings {
         this.partialEmitUniquenessThreshold = partialEmitUniquenessThreshold;
         this.reuseColumnLoadersThreshold = reuseColumnLoadersThreshold;
         this.sourceReservationFactor = sourceReservationFactor;
-        this.gcOverheadFactor = gcOverheadFactor;
-        this.gcDecayFactor = gcDecayFactor;
+        this.pagePenaltyFactor = pagePenaltyFactor;
     }
 
     public PlannerSettings defaultDataPartitioning(DataPartitioning defaultDataPartitioning) {
@@ -270,8 +248,7 @@ public class PlannerSettings {
             partialEmitUniquenessThreshold,
             reuseColumnLoadersThreshold,
             sourceReservationFactor,
-            gcOverheadFactor,
-            gcDecayFactor
+            pagePenaltyFactor
         );
     }
 
@@ -289,8 +266,7 @@ public class PlannerSettings {
             partialEmitUniquenessThreshold,
             reuseColumnLoadersThreshold,
             sourceReservationFactor,
-            gcOverheadFactor,
-            gcDecayFactor
+            pagePenaltyFactor
         );
     }
 
@@ -308,8 +284,7 @@ public class PlannerSettings {
             partialEmitUniquenessThreshold,
             reuseColumnLoadersThreshold,
             sourceReservationFactor,
-            gcOverheadFactor,
-            gcDecayFactor
+            pagePenaltyFactor
         );
     }
 
@@ -341,8 +316,7 @@ public class PlannerSettings {
             partialEmitUniquenessThreshold,
             reuseColumnLoadersThreshold,
             sourceReservationFactor,
-            gcOverheadFactor,
-            gcDecayFactor
+            pagePenaltyFactor
         );
     }
 
@@ -360,8 +334,7 @@ public class PlannerSettings {
             partialEmitUniquenessThreshold,
             reuseColumnLoadersThreshold,
             sourceReservationFactor,
-            gcOverheadFactor,
-            gcDecayFactor
+            pagePenaltyFactor
         );
     }
 
@@ -379,8 +352,7 @@ public class PlannerSettings {
             partialEmitUniquenessThreshold,
             reuseColumnLoadersThreshold,
             sourceReservationFactor,
-            gcOverheadFactor,
-            gcDecayFactor
+            pagePenaltyFactor
         );
     }
 
@@ -398,8 +370,7 @@ public class PlannerSettings {
             partialEmitUniquenessThreshold,
             reuseColumnLoadersThreshold,
             sourceReservationFactor,
-            gcOverheadFactor,
-            gcDecayFactor
+            pagePenaltyFactor
         );
     }
 
@@ -424,8 +395,7 @@ public class PlannerSettings {
             partialEmitUniquenessThreshold,
             reuseColumnLoadersThreshold,
             sourceReservationFactor,
-            gcOverheadFactor,
-            gcDecayFactor
+            pagePenaltyFactor
         );
     }
 
@@ -433,7 +403,7 @@ public class PlannerSettings {
         return sourceReservationFactor;
     }
 
-    public PlannerSettings gcOverheadFactor(double gcOverheadFactor) {
+    public PlannerSettings pagePenaltyFactor(double pagePenaltyFactor) {
         return new PlannerSettings(
             defaultDataPartitioning,
             valuesLoadingJumboSize,
@@ -443,31 +413,11 @@ public class PlannerSettings {
             partialEmitUniquenessThreshold,
             reuseColumnLoadersThreshold,
             sourceReservationFactor,
-            gcOverheadFactor,
-            gcDecayFactor
+            pagePenaltyFactor
         );
     }
 
-    public double gcOverheadFactor() {
-        return gcOverheadFactor;
-    }
-
-    public PlannerSettings gcDecayFactor(double gcDecayFactor) {
-        return new PlannerSettings(
-            defaultDataPartitioning,
-            valuesLoadingJumboSize,
-            luceneTopNLimit,
-            intermediateLocalRelationMaxSize,
-            partialEmitKeysThreshold,
-            partialEmitUniquenessThreshold,
-            reuseColumnLoadersThreshold,
-            sourceReservationFactor,
-            gcOverheadFactor,
-            gcDecayFactor
-        );
-    }
-
-    public double gcDecayFactor() {
-        return gcDecayFactor;
+    public double pagePenaltyFactor() {
+        return pagePenaltyFactor;
     }
 }

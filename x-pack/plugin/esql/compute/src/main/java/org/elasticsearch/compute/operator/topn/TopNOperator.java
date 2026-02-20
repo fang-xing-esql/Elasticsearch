@@ -242,9 +242,8 @@ public class TopNOperator implements Operator, Accountable {
         List<SortOrder> sortOrders,
         int maxPageSize,
         InputOrdering inputOrdering,
-        double gcOverheadFactor,
-        double gcDecayFactor,
-        long gcOverheadJumboThreshold
+        double pagePenaltyFactor,
+        long pagePenaltyJumboThreshold
     ) implements OperatorFactory {
         public TopNOperatorFactory {
             for (ElementType e : elementTypes) {
@@ -265,9 +264,8 @@ public class TopNOperator implements Operator, Accountable {
                 sortOrders,
                 maxPageSize,
                 inputOrdering,
-                gcOverheadFactor,
-                gcDecayFactor,
-                gcOverheadJumboThreshold
+                pagePenaltyFactor,
+                pagePenaltyJumboThreshold
             );
         }
 
@@ -330,21 +328,18 @@ public class TopNOperator implements Operator, Accountable {
     private final InputOrdering inputOrdering;
 
     /**
-     * Factor applied to input page bytes to estimate GC lagging overhead.
-     * Models the untracked UTF-16 String garbage from source parsing that lingers
-     * in the JVM heap while TopN accumulates rows.
+     * Penalty factor applied to input page bytes to account for untracked JVM heap pressure.
      *
      * @see org.elasticsearch.compute.operator.exchange.ExchangeSinkHandler
      */
-    private final double gcOverheadFactor;
-    private final double gcDecayFactor;
-    private final long gcOverheadJumboThreshold;
+    private final double pagePenaltyFactor;
+    private final long pagePenaltyJumboThreshold;
 
     /**
-     * Cumulative bytes tracked on the circuit breaker for estimated GC lagging overhead.
+     * Cumulative bytes tracked on the circuit breaker for page penalty.
      * No synchronization needed since TopN is single-threaded.
      */
-    private long gcLaggingOverheadBytes;
+    private long pagePenaltyBytes;
 
     public TopNOperator(
         BlockFactory blockFactory,
@@ -355,9 +350,8 @@ public class TopNOperator implements Operator, Accountable {
         List<SortOrder> sortOrders,
         int maxPageSize,
         InputOrdering inputOrdering,
-        double gcOverheadFactor,
-        double gcDecayFactor,
-        long gcOverheadJumboThreshold
+        double pagePenaltyFactor,
+        long pagePenaltyJumboThreshold
     ) {
         this.blockFactory = blockFactory;
         this.breaker = breaker;
@@ -371,9 +365,8 @@ public class TopNOperator implements Operator, Accountable {
         for (SortOrder so : sortOrders) {
             channelInKey[so.channel] = true;
         }
-        this.gcOverheadFactor = gcOverheadFactor;
-        this.gcDecayFactor = gcDecayFactor;
-        this.gcOverheadJumboThreshold = gcOverheadJumboThreshold;
+        this.pagePenaltyFactor = pagePenaltyFactor;
+        this.pagePenaltyJumboThreshold = pagePenaltyJumboThreshold;
     }
 
     @Override
@@ -384,17 +377,13 @@ public class TopNOperator implements Operator, Accountable {
     @Override
     public void addInput(Page page) {
         long start = System.nanoTime();
-        // These are similar to ExchangeSinkHandler.addPage
-        long averageDocumentSize = page.getPositionCount() > 0 ? page.ramBytesUsedByBlocks() / page.getPositionCount() : 0;
-        if (averageDocumentSize >= gcOverheadJumboThreshold) {
+        if (page.averageRowSize() >= pagePenaltyJumboThreshold) {
             boolean success = false;
             try {
-                addGcLaggingOverhead(page);
+                addPagePenalty(page);
                 success = true;
             } finally {
                 if (success == false) {
-                    // release the memory tracked by circuit breaker to prevent leaks,
-                    // otherwise circuit break report non-zero size after circuit breaker trips
                     page.releaseBlocks();
                 }
             }
@@ -514,7 +503,7 @@ public class TopNOperator implements Operator, Accountable {
              */
             output
         );
-        releaseGcLaggingOverhead();
+        releasePagePenalty();
         // Aggressively null these so they can be GCed more quickly.
         inputQueue = null;
         output = null;
@@ -570,41 +559,29 @@ public class TopNOperator implements Operator, Accountable {
     }
 
     /**
-     * Adds GC lagging overhead to the circuit breaker when a page enters the TopN operator.
-     * First decays existing overhead (modeling GC catching up), then adds new overhead
-     * proportional to the page's block data size. This models the lingering UTF-16 String
-     * objects from source parsing that haven't been collected by GC yet.
+     * Adds a penalty to the circuit breaker proportional to the page size. This accounts for
+     * untracked JVM heap pressure (e.g. lingering UTF-16 String objects from _source parsing)
+     * that accumulates when pages enter pipeline breakers like TopN.
      * <p>
      * No synchronization needed since TopN is single-threaded (one driver).
-     *
-     * @see org.elasticsearch.compute.operator.exchange.ExchangeSinkHandler
      */
-    private void addGcLaggingOverhead(Page page) {
+    private void addPagePenalty(Page page) {
         long pageBytes = page.ramBytesUsedByBlocks();
-        // Decay existing overhead, modeling GC gradually collecting humongous objects
-        if (gcLaggingOverheadBytes > 0) {
-            long release = (long) (gcLaggingOverheadBytes * gcDecayFactor);
-            if (release > 0) {
-                breaker.addWithoutBreaking(-release);
-                gcLaggingOverheadBytes -= release;
-            }
-        }
-        // Add new overhead for this page
-        long overhead = (long) (pageBytes * gcOverheadFactor);
-        if (overhead > 0) {
-            breaker.addEstimateBytesAndMaybeBreak(overhead, "topn add page gc overhead");
-            gcLaggingOverheadBytes += overhead;
+        long penalty = (long) (pageBytes * pagePenaltyFactor);
+        if (penalty > 0) {
+            breaker.addEstimateBytesAndMaybeBreak(penalty, "topn page penalty");
+            pagePenaltyBytes += penalty;
         }
     }
 
     /**
-     * Releases all accumulated GC lagging overhead from the circuit breaker.
+     * Releases all accumulated page penalty from the circuit breaker.
      * Called when the TopN operator is closed.
      */
-    private void releaseGcLaggingOverhead() {
-        if (gcLaggingOverheadBytes > 0) {
-            breaker.addWithoutBreaking(-gcLaggingOverheadBytes);
-            gcLaggingOverheadBytes = 0;
+    private void releasePagePenalty() {
+        if (pagePenaltyBytes > 0) {
+            breaker.addWithoutBreaking(-pagePenaltyBytes);
+            pagePenaltyBytes = 0;
         }
     }
 

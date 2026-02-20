@@ -216,7 +216,6 @@ public abstract class ForkingOperatorTestCase extends OperatorTestCase {
             randomIntBetween(2, 10),
             threadPool.relativeTimeInMillisSupplier(),
             randomDoubleBetween(0.1, 10.0, true),
-            randomDoubleBetween(0.1, 1.0, true),
             1024L * 1024L
         );
         ExchangeSourceHandler sourceExchanger = new ExchangeSourceHandler(randomIntBetween(1, 4), threadPool.executor(ESQL_TEST_EXECUTOR));

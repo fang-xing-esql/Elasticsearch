@@ -9,7 +9,6 @@ package org.elasticsearch.xpack.esql.heap_attack;
 
 import com.carrotsearch.randomizedtesting.annotations.TimeoutSuite;
 
-import org.apache.http.util.EntityUtils;
 import org.apache.lucene.tests.util.TimeUnits;
 import org.elasticsearch.Build;
 import org.elasticsearch.client.ResponseException;
@@ -24,7 +23,6 @@ import java.util.Map;
 import static org.elasticsearch.test.ListMatcher.matchesList;
 import static org.elasticsearch.test.MapMatcher.assertMap;
 import static org.elasticsearch.test.MapMatcher.matchesMap;
-import static org.hamcrest.Matchers.containsString;
 
 /**
  * Tests that run ESQL queries with subqueries that use a ton of memory. We want to make
@@ -58,7 +56,7 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
             columns = columns.item(matchesMap().entry("name", "f" + String.format(Locale.ROOT, "%03d", f)).entry("type", "keyword"));
         }
         for (int subquery : List.of(DEFAULT_SUBQUERIES, MAX_SUBQUERIES)) {
-            Map<?, ?> response = buildSubqueries(subquery, "manybigfields", "");
+            Map<?, ?> response = buildSubqueries(subquery, "manybigfields");
             assertMap(response, matchesMap().entry("columns", columns));
         }
     }
@@ -72,7 +70,7 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
         int docs = 500;
         heapAttackIT.initManyBigFieldsIndex(docs, "keyword", true);
         for (int subquery : List.of(DEFAULT_SUBQUERIES, MAX_SUBQUERIES)) {
-            assertCircuitBreaks(attempt -> buildSubqueries(subquery, "manybigfields", ""));
+            assertCircuitBreaks(attempt -> buildSubqueries(subquery, "manybigfields"));
         }
     }
 
@@ -115,18 +113,14 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
         }
     }
 
-    @AwaitsFix(bugUrl = "https://github.com/elastic/elasticsearch/issues/140218")
     public void testManyRandomTextFieldsInSubqueryIntermediateResults() throws IOException {
         int docs = 500; // 500MB random/unique keyword values
         heapAttackIT.initManyBigFieldsIndex(docs, "text", true);
-        // 2 subqueries are enough to trigger CBE, confirmed where this CBE happens in ExchangeService.doFetchPageAsync,
-        // as a few big pages are loaded into the exchange buffer
         for (int subquery : List.of(DEFAULT_SUBQUERIES, MAX_SUBQUERIES)) {
-            assertCircuitBreaks(attempt -> buildSubqueries(subquery, "manybigfields", ""));
+            assertCircuitBreaks(attempt -> buildSubqueries(subquery, "manybigfields"));
         }
     }
 
-    @AwaitsFix(bugUrl = "https://github.com/elastic/elasticsearch/issues/140218")
     public void testManyRandomTextFieldsInSubqueryIntermediateResultsWithSortOneField() throws IOException {
         int docs = 500; // 500MB random/unique keyword values
         heapAttackIT.initManyBigFieldsIndex(docs, "text", true);
@@ -136,7 +130,6 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
         }
     }
 
-    @AwaitsFix(bugUrl = "https://github.com/elastic/elasticsearch/issues/140218")
     public void testManyRandomTextFieldsInSubqueryIntermediateResultsWithSortManyFields() throws IOException {
         int docs = 500; // 500MB random/unique keyword values
         heapAttackIT.initManyBigFieldsIndex(docs, "text", true);
@@ -190,7 +183,6 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
     /*
      * The index's size is 1MB * 500, each field has 500 unique/random keyword values.
      * And these queries have aggregation with grouping by one field, there are 500 buckets.
-     * This is mainly to test HashAggregationOperator, CBE is not triggered here.
      */
     public void testManyRandomKeywordFieldsInSubqueryIntermediateResultsWithAggWithGBYOneField() throws IOException {
         int docs = 500; // 500MB random/unique keyword values
@@ -211,46 +203,48 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
      * This is mainly to test HashAggregationOperator and ValuesSourceReaderOperator, CBE is expected to be triggered here.
      */
     public void testManyRandomKeywordFieldsInSubqueryIntermediateResultsWithAggGBYManyFields() throws IOException {
-        if (isServerless()) { // skip this test in serverless, as it OOMs with 100 fields and 2 subqueries
+        if (isServerless()) {
+            // skip this test in serverless as it is expected to trigger CBE
+            // retry after https://github.com/elastic/elasticsearch/issues/140218 is fixed
             return;
         }
-        // GBY 100 fields CB and 500 fields docs OOM with 2 subqueries
         int docs = 500; // 500MB random/unique keyword values
         heapAttackIT.initManyBigFieldsIndex(docs, "keyword", true);
-        // Some data points:
-        // 1. group by 50 fields completes successfully for 2/8 subqueries, there is no CBE
-        // 2. group by 100 fields with 2 subqueries completes successfully, 8 subqueries triggers CBE
-        // 3. group by 500 fields, HashAggregationOperator.addInput triggers CBE for 2 subqueries locally, however it OOMs in serverless CI,
-        // TODO 8 subqueries trigger OOM, skip group by 500 fields with 8 subqueries,
-        // the walkaround that prevents the OOM is setting FIELD_EXTRACT_PREFERENCE=STORED
         StringBuilder grouping = new StringBuilder();
         grouping.append("f000");
         int groupBySize = 100;
         for (int f = 1; f < groupBySize; f++) {
             grouping.append(", f").append(String.format(Locale.ROOT, "%03d", f));
         }
-        Map<?, ?> response = buildSubqueriesWithAgg(DEFAULT_SUBQUERIES, "manybigfields", "c = COUNT_DISTINCT(f999)", grouping.toString());
-        assertTrue(response.get("columns") instanceof List<?> l && l.size() == (groupBySize + 1));
-        assertCircuitBreaks(
-            attempt -> buildSubqueriesWithAgg(MAX_SUBQUERIES, "manybigfields", "c = COUNT_DISTINCT(f999)", grouping.toString())
-        );
+        for (int subquery : List.of(DEFAULT_SUBQUERIES, MAX_SUBQUERIES)) {
+            try {
+                Map<?, ?> response = buildSubqueriesWithAgg(subquery, "manybigfields", "c = COUNT_DISTINCT(f999)", grouping.toString());
+                assertTrue(response.get("columns") instanceof List<?> l && l.size() == (groupBySize + 1));
+            } catch (ResponseException e) {
+                Map<?, ?> map = responseAsMap(e.getResponse());
+                assertMap(
+                    map,
+                    matchesMap().entry("status", 429).entry("error", matchesMap().extraOk().entry("type", "circuit_breaking_exception"))
+                );
+            }
+        }
     }
 
     /*
-     * GC overhead and decay are added in ExchangeSinkHandler,
-     * accumulating many large(5MB) pages in the exchange buffer causes OOM without considering the overhead for large pages.
+     * Large page penalty is added in ExchangeSinkHandler, accumulating many large(e.g. 5MB) pages in the exchange buffer causes OOM
+     * without considering the overhead for large pages.
      */
     public void testGiantTextFieldInSubqueryIntermediateResults() throws IOException {
         int docs = 50; // 50 * 5MB
         heapAttackIT.initGiantTextField(docs, false, 5);
         for (int subquery : List.of(DEFAULT_SUBQUERIES, MAX_SUBQUERIES)) {
-            assertCircuitBreaks(attempt -> buildSubqueries(subquery, "bigtext", ""));
+            assertCircuitBreaks(attempt -> buildSubqueries(subquery, "bigtext"));
         }
     }
 
     /*
-     * GC overhead and decay are added in TopNOperator,
-     * accumulating many large(5MB) pages in the exchange buffer causes OOM without considering the overhead for large pages.
+     * Large page penalty is added in TopNOperator, keeping adding many large(5MB) pages in the TopNOperator causes OOM without
+     * considering the overhead for large pages.
      */
     public void testGiantTextFieldInSubqueryIntermediateResultsWithSort() throws IOException {
         int docs = 50; // 50 * 5MB
@@ -272,20 +266,24 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
                     values = values.item(matchesList().item(1024 * 1024 * 5 * docs));
                 }
                 assertMap(response, matchesMap().entry("columns", columns).entry("values", values));
-            } catch (ResponseException re) {
-                assertThat(EntityUtils.toString(re.getResponse().getEntity()), containsString("CircuitBreakingException"));
+            } catch (ResponseException e) {
+                Map<?, ?> map = responseAsMap(e.getResponse());
+                assertMap(
+                    map,
+                    matchesMap().entry("status", 429).entry("error", matchesMap().extraOk().entry("type", "circuit_breaking_exception"))
+                );
             }
         }
     }
 
-    private Map<String, Object> buildSubqueries(int subqueries, String indexName, String limit) throws IOException {
+    private Map<String, Object> buildSubqueries(int subqueries, String indexName) throws IOException {
         StringBuilder query = startQuery();
         String subquery = "(FROM " + indexName + " )";
         query.append("FROM ").append(subquery);
         for (int i = 1; i < subqueries; i++) {
             query.append(", ").append(subquery);
         }
-        query.append(limit).append(" \"}");
+        query.append(" \"}");
         return responseAsMap(query(query.toString(), "columns"));
     }
 

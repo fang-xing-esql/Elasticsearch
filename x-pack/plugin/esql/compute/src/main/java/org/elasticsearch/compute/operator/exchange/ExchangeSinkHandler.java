@@ -47,60 +47,51 @@ public final class ExchangeSinkHandler {
     private final BlockFactory blockFactory;
 
     /**
-     * Factor applied to page bytes to estimate GC lagging overhead when a page enters the exchange sink.
-     * Configurable via the {@code esql.gc_overhead_factor} cluster setting.
+     * Penalty factor applied to page bytes when a page with large documents enters the exchange sink.
+     * Configurable via the {@code esql.page_penalty_factor} cluster setting.
      */
-    private final double gcOverheadFactor;
+    private final double pagePenaltyFactor;
 
     /**
-     * Fraction of accumulated GC overhead released each time a new page is added, modeling GC
-     * gradually catching up. Configurable via the {@code esql.gc_decay_factor} cluster setting.
-     */
-    private final double gcDecayFactor;
-
-    /**
-     * Minimum page size (in bytes) required to apply GC lagging overhead. Pages whose
-     * {@code ramBytesUsedByBlocks()} is below this threshold skip the overhead entirely.
+     * Minimum average document size (in bytes) required to apply the page penalty. Pages whose
+     * average document size is below this threshold skip the penalty entirely.
      * Derived from {@code esql.values_loading_jumbo_size}.
      */
-    private final long gcOverheadJumboThreshold;
+    private final long pagePenaltyJumboThreshold;
 
     /**
-     * Lock protecting {@link #gcLaggingOverheadBytes} and {@link #gcOverheadReleased} to prevent
-     * races between adding overhead (driver threads) and releasing overhead (cleanup threads).
+     * Lock protecting {@link #pagePenaltyBytes} and {@link #pagePenaltyReleased} to prevent
+     * races between adding penalty (driver threads) and releasing penalty (cleanup threads).
      */
-    private final Object gcOverheadLock = new Object();
+    private final Object pagePenaltyLock = new Object();
 
     /**
-     * Cumulative bytes tracked on the circuit breaker for estimated GC lagging overhead.
-     * This tracks untracked UTF-16 String garbage from source parsing that lingers in JVM memory.
-     * Guarded by {@link #gcOverheadLock}.
+     * Cumulative bytes tracked on the circuit breaker for page penalty overhead.
+     * Guarded by {@link #pagePenaltyLock}.
      */
-    private long gcLaggingOverheadBytes;
+    private long pagePenaltyBytes;
 
     /**
-     * Set to true once {@link #releaseGcLaggingOverhead()} has been called, preventing further
-     * overhead from being added. Guarded by {@link #gcOverheadLock}.
+     * Set to true once {@link #releasePagePenalty()} has been called, preventing further
+     * penalty from being added. Guarded by {@link #pagePenaltyLock}.
      */
-    private boolean gcOverheadReleased;
+    private boolean pagePenaltyReleased;
 
     public ExchangeSinkHandler(
         BlockFactory blockFactory,
         int maxBufferSize,
         LongSupplier nowInMillis,
-        double gcOverheadFactor,
-        double gcDecayFactor,
-        long gcOverheadJumboThreshold
+        double pagePenaltyFactor,
+        long pagePenaltyJumboThreshold
     ) {
         this.blockFactory = blockFactory;
         this.buffer = new ExchangeBuffer(maxBufferSize);
         this.completionFuture = SubscribableListener.newForked(buffer::addCompletionListener);
-        this.completionFuture.addListener(ActionListener.running(this::releaseGcLaggingOverhead));
+        this.completionFuture.addListener(ActionListener.running(this::releasePagePenalty));
         this.nowInMillis = nowInMillis;
         this.lastUpdatedInMillis = new AtomicLong(nowInMillis.getAsLong());
-        this.gcOverheadFactor = gcOverheadFactor;
-        this.gcDecayFactor = gcDecayFactor;
-        this.gcOverheadJumboThreshold = gcOverheadJumboThreshold;
+        this.pagePenaltyFactor = pagePenaltyFactor;
+        this.pagePenaltyJumboThreshold = pagePenaltyJumboThreshold;
     }
 
     private class ExchangeSinkImpl implements ExchangeSink {
@@ -118,19 +109,13 @@ public final class ExchangeSinkHandler {
         @Override
         public void addPage(Page page) {
             onPageFetched.run();
-            // HeapAttackIT.testFetchMvLongs builds a 80MB giant page with 100 documents in it. How does it happen?
-            // Check the average document size, targeting to giant text fields similar to ValuesFromSingerReader and
-            // ValuesFromManyReader only when adding overhead for gc
-            long averageDocumentSize = page.getPositionCount() > 0 ? page.ramBytesUsedByBlocks() / page.getPositionCount() : 0;
-            if (averageDocumentSize >= gcOverheadJumboThreshold) {
+            if (page.averageRowSize() >= pagePenaltyJumboThreshold) {
                 boolean success = false;
                 try {
-                    addGcLaggingOverhead(page);
+                    addPagePenalty(page);
                     success = true;
                 } finally {
                     if (success == false) {
-                        // release the memory tracked by circuit breaker to prevent leaks,
-                        // otherwise circuit break report non-zero size after circuit breaker trips
                         page.releaseBlocks();
                     }
                 }
@@ -204,7 +189,7 @@ public final class ExchangeSinkHandler {
      * Fails this sink exchange handler
      */
     void onFailure(Exception failure) {
-        releaseGcLaggingOverhead();
+        releasePagePenalty();
         completionFuture.onFailure(failure);
         buffer.finish(true);
         notifyListeners();
@@ -278,56 +263,41 @@ public final class ExchangeSinkHandler {
     }
 
     /**
-     * Adds GC lagging overhead to the circuit breaker when a page enters the exchange sink(and the
-     * other pipeline breakers potentially). First decays existing overhead (modeling GC catching up),
-     * then adds new overhead proportional to the page's block data size. This models the lingering
-     * UTF-16 String objects from source parsing that haven't been collected by GC yet.
+     * Adds a penalty to the circuit breaker proportional to the page size. This accounts for
+     * untracked JVM heap pressure (e.g. loading large objects from _source)
+     * that accumulates when pages flow through pipeline breakers like exchange sinks.
      * <p>
-     * By tracking this overhead only at the exchange sink level (not per-driver in ValuesSourceReader),
-     * single-pipeline queries (where text blocks are consumed immediately by eval/aggregation) incur
-     * no GC overhead penalty. Only multi-pipeline (subquery) queries that route pages through exchange
-     * buffers accumulate this overhead, causing the circuit breaker to trip before OOM.
-     * <p>
-     * Synchronized on {@link #gcOverheadLock} to prevent races with {@link #releaseGcLaggingOverhead()}.
+     * Synchronized on {@link #pagePenaltyLock} to prevent races with {@link #releasePagePenalty()}.
      */
-    private void addGcLaggingOverhead(Page page) {
+    private void addPagePenalty(Page page) {
         long pageBytes = page.ramBytesUsedByBlocks();
         if (pageBytes <= 0) {
             return;
         }
-        synchronized (gcOverheadLock) {
-            if (gcOverheadReleased) {
+        synchronized (pagePenaltyLock) {
+            if (pagePenaltyReleased) {
                 return;
             }
-            // Decay existing overhead, modeling GC gradually collecting humongous objects
-            if (gcLaggingOverheadBytes > 0) {
-                long release = (long) (gcLaggingOverheadBytes * gcDecayFactor);
-                if (release > 0) {
-                    blockFactory.breaker().addWithoutBreaking(-release);
-                    gcLaggingOverheadBytes -= release;
-                }
-            }
-            // Add new overhead for this page
-            long overhead = (long) (pageBytes * gcOverheadFactor);
-            if (overhead > 0) {
-                blockFactory.breaker().addEstimateBytesAndMaybeBreak(overhead, "exchange sink add page gc overhead");
-                gcLaggingOverheadBytes += overhead;
+            long penalty = (long) (pageBytes * pagePenaltyFactor);
+            if (penalty > 0) {
+                blockFactory.breaker().addEstimateBytesAndMaybeBreak(penalty, "exchange sink page penalty");
+                pagePenaltyBytes += penalty;
             }
         }
     }
 
     /**
-     * Releases all accumulated GC lagging overhead from the circuit breaker.
-     * Called when the sink handler completes or fails. Sets {@link #gcOverheadReleased} to prevent
-     * any further overhead from being added by concurrent driver threads.
+     * Releases all accumulated page penalty from the circuit breaker.
+     * Called when the sink handler completes or fails. Sets {@link #pagePenaltyReleased} to prevent
+     * any further penalty from being added by concurrent driver threads.
      */
-    private void releaseGcLaggingOverhead() {
-        synchronized (gcOverheadLock) {
-            gcOverheadReleased = true;
-            if (gcLaggingOverheadBytes > 0) {
-                blockFactory.breaker().addWithoutBreaking(-gcLaggingOverheadBytes);
-                logger.debug("released {} bytes of GC lagging overhead from exchange sink", gcLaggingOverheadBytes);
-                gcLaggingOverheadBytes = 0;
+    private void releasePagePenalty() {
+        synchronized (pagePenaltyLock) {
+            pagePenaltyReleased = true;
+            if (pagePenaltyBytes > 0) {
+                blockFactory.breaker().addWithoutBreaking(-pagePenaltyBytes);
+                logger.debug("released {} bytes of page penalty from exchange sink", pagePenaltyBytes);
+                pagePenaltyBytes = 0;
             }
         }
     }

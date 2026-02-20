@@ -211,11 +211,10 @@ public class EsqlPlugin extends Plugin implements ActionPlugin, ExtensiblePlugin
             blockFactoryProvider.blockFactory()
         );
         var clusterSettings = services.clusterService().getClusterSettings();
-        clusterSettings.initializeAndWatch(PlannerSettings.GC_OVERHEAD_FACTOR, exchangeService::setGcOverheadFactor);
-        clusterSettings.initializeAndWatch(PlannerSettings.GC_DECAY_FACTOR, exchangeService::setGcDecayFactor);
+        clusterSettings.initializeAndWatch(PlannerSettings.PAGE_PENALTY_FACTOR, exchangeService::setPagePenaltyFactor);
         clusterSettings.initializeAndWatch(
             PlannerSettings.VALUES_LOADING_JUMBO_SIZE,
-            v -> exchangeService.setGcOverheadJumboThreshold(v.getBytes())
+            v -> exchangeService.setPagePenaltyJumboThreshold(v.getBytes())
         );
 
         List<Object> components = List.of(

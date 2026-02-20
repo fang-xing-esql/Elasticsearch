@@ -8940,8 +8940,7 @@ public class PhysicalPlanOptimizerTests extends ESTestCase {
             null,
             10,
             () -> 10,
-            PlannerSettings.GC_OVERHEAD_FACTOR.get(Settings.EMPTY),
-            PlannerSettings.GC_DECAY_FACTOR.get(Settings.EMPTY),
+            PlannerSettings.PAGE_PENALTY_FACTOR.get(Settings.EMPTY),
             PlannerSettings.VALUES_LOADING_JUMBO_SIZE.get(Settings.EMPTY).getBytes()
         );
         LocalExecutionPlanner planner = new LocalExecutionPlanner(

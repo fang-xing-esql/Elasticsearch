@@ -875,8 +875,7 @@ public class CsvTests extends ESTestCase {
             blockFactory,
             between(1, 64),
             threadPool::relativeTimeInMillis,
-            PlannerSettings.GC_OVERHEAD_FACTOR.get(Settings.EMPTY),
-            PlannerSettings.GC_DECAY_FACTOR.get(Settings.EMPTY),
+            PlannerSettings.PAGE_PENALTY_FACTOR.get(Settings.EMPTY),
             PlannerSettings.VALUES_LOADING_JUMBO_SIZE.get(Settings.EMPTY).getBytes()
         );
 

@@ -156,7 +156,6 @@ public class TopNOperatorTests extends OperatorTestCase {
             pageSize,
             InputOrdering.NOT_SORTED,
             randomDoubleBetween(0.1, 10.0, true),
-            randomDoubleBetween(0.1, 1.0, true),
             1024L * 1024L
         );
     }
@@ -252,7 +251,6 @@ public class TopNOperatorTests extends OperatorTestCase {
                     pageSize,
                     sortedInput,
                     randomDoubleBetween(0.1, 10.0, true),
-                    randomDoubleBetween(0.1, 1.0, true),
                     1024L * 1024L
                 ).get(context)
             ) {
@@ -354,7 +352,6 @@ public class TopNOperatorTests extends OperatorTestCase {
                         randomPageSize(),
                         InputOrdering.SORTED,
                         randomDoubleBetween(0.1, 10.0, true),
-                        randomDoubleBetween(0.1, 1.0, true),
                         1024L * 1024L
                     )
                 ),
@@ -410,7 +407,6 @@ public class TopNOperatorTests extends OperatorTestCase {
                         randomPageSize(),
                         InputOrdering.SORTED,
                         randomDoubleBetween(0.1, 10.0, true),
-                        randomDoubleBetween(0.1, 1.0, true),
                         1024L * 1024L
                     )
                 ),
@@ -432,7 +428,6 @@ public class TopNOperatorTests extends OperatorTestCase {
             pageSize,
             InputOrdering.SORTED,
             randomDoubleBetween(0.1, 10.0, true),
-            randomDoubleBetween(0.1, 1.0, true),
             1024L * 1024L
         );
         var expectedDescription = "TopNOperator[count=0/4, elementTypes=[LONG], encoders=[DefaultUnsortable], "
@@ -980,7 +975,6 @@ public class TopNOperatorTests extends OperatorTestCase {
                         randomPageSize(),
                         InputOrdering.NOT_SORTED,
                         randomDoubleBetween(0.1, 10.0, true),
-                        randomDoubleBetween(0.1, 1.0, true),
                         1024L * 1024L
                     )
                 ),
@@ -1078,7 +1072,6 @@ public class TopNOperatorTests extends OperatorTestCase {
                         randomPageSize(),
                         InputOrdering.NOT_SORTED,
                         randomDoubleBetween(0.1, 10.0, true),
-                        randomDoubleBetween(0.1, 1.0, true),
                         1024L * 1024L
                     )
                 ),
@@ -1150,7 +1143,6 @@ public class TopNOperatorTests extends OperatorTestCase {
                             randomPageSize(),
                             InputOrdering.NOT_SORTED,
                             randomDoubleBetween(0.1, 10.0, true),
-                            randomDoubleBetween(0.1, 1.0, true),
                             1024L * 1024L
                         )
                     ),
@@ -1202,7 +1194,6 @@ public class TopNOperatorTests extends OperatorTestCase {
             randomPageSize(),
             InputOrdering.NOT_SORTED,
             randomDoubleBetween(0.1, 10.0, true),
-            randomDoubleBetween(0.1, 1.0, true),
             1024L * 1024L
         );
         String sorts = List.of("SortOrder[channel=0, asc=false, nullsFirst=false]", "SortOrder[channel=1, asc=false, nullsFirst=true]")
@@ -1448,7 +1439,6 @@ public class TopNOperatorTests extends OperatorTestCase {
                         randomPageSize(),
                         InputOrdering.NOT_SORTED,
                         randomDoubleBetween(0.1, 10.0, true),
-                        randomDoubleBetween(0.1, 1.0, true),
                         1024L * 1024L
                     )
                 ),
@@ -1590,7 +1580,6 @@ public class TopNOperatorTests extends OperatorTestCase {
                     rows,
                     InputOrdering.NOT_SORTED,
                     randomDoubleBetween(0.1, 10.0, true),
-                    randomDoubleBetween(0.1, 1.0, true),
                     1024L * 1024L
                 )
             );
@@ -1635,7 +1624,6 @@ public class TopNOperatorTests extends OperatorTestCase {
                             randomPageSize(),
                             InputOrdering.NOT_SORTED,
                             randomDoubleBetween(0.1, 10.0, true),
-                            randomDoubleBetween(0.1, 1.0, true),
                             1024L * 1024L
                         )
                     ),
@@ -1765,7 +1753,6 @@ public class TopNOperatorTests extends OperatorTestCase {
                             randomPageSize(),
                             InputOrdering.NOT_SORTED,
                             randomDoubleBetween(0.1, 10.0, true),
-                            randomDoubleBetween(0.1, 1.0, true),
                             1024L * 1024L
                         )
                     ),
@@ -1859,7 +1846,6 @@ public class TopNOperatorTests extends OperatorTestCase {
                         randomPageSize(),
                         InputOrdering.NOT_SORTED,
                         randomDoubleBetween(0.1, 10.0, true),
-                        randomDoubleBetween(0.1, 1.0, true),
                         1024L * 1024L
                     )
                 ),
@@ -1899,7 +1885,6 @@ public class TopNOperatorTests extends OperatorTestCase {
                         maxPageSize,
                         InputOrdering.NOT_SORTED,
                         randomDoubleBetween(0.1, 10.0, true),
-                        randomDoubleBetween(0.1, 1.0, true),
                         1024L * 1024L
                     )
                 ),
@@ -1938,7 +1923,6 @@ public class TopNOperatorTests extends OperatorTestCase {
                 randomPageSize(),
                 InputOrdering.NOT_SORTED,
                 randomDoubleBetween(0.1, 10.0, true),
-                randomDoubleBetween(0.1, 1.0, true),
                 1024L * 1024L
             )
         ) {
@@ -1966,7 +1950,6 @@ public class TopNOperatorTests extends OperatorTestCase {
                 randomPageSize(),
                 InputOrdering.NOT_SORTED,
                 randomDoubleBetween(0.1, 10.0, true),
-                randomDoubleBetween(0.1, 1.0, true),
                 1024L * 1024L
             )
         ) {

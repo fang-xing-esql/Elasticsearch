@@ -480,7 +480,6 @@ public class DriverTests extends ESTestCase {
                 positions,
                 System::currentTimeMillis,
                 randomDoubleBetween(0.1, 10.0, true),
-                randomDoubleBetween(0.1, 1.0, true),
                 1024L * 1024L
             );
             var sinkOperator = new ExchangeSinkOperator(sinkHandler.createExchangeSink(() -> {}));
@@ -528,7 +527,6 @@ public class DriverTests extends ESTestCase {
                 between(1, 5),
                 System::currentTimeMillis,
                 randomDoubleBetween(0.1, 10.0, true),
-                randomDoubleBetween(0.1, 1.0, true),
                 1024L * 1024L
             );
             var sourceOperator = new ExchangeSourceOperator(sourceHandler.createExchangeSource());

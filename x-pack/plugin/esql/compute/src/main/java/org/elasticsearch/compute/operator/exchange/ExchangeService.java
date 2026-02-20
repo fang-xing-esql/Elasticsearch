@@ -79,23 +79,18 @@ public final class ExchangeService extends AbstractLifecycleComponent {
     private final BlockFactory blockFactory;
 
     /**
-     * GC overhead factor for exchange sink handlers. Volatile to allow dynamic updates via cluster settings.
+     * Penalty factor applied to page bytes for large documents in exchange sink handlers.
+     * Volatile to allow dynamic updates via cluster settings.
      * @see ExchangeSinkHandler
      */
-    private volatile double gcOverheadFactor;
+    private volatile double pagePenaltyFactor;
 
     /**
-     * GC decay factor for exchange sink handlers. Volatile to allow dynamic updates via cluster settings.
-     * @see ExchangeSinkHandler
+     * Minimum average document size (in bytes) required to apply the page penalty. Pages whose
+     * average document size is below this threshold skip the penalty entirely.
+     * Defaults to 0; set via {@link #setPagePenaltyJumboThreshold(long)}.
      */
-    private volatile double gcDecayFactor;
-
-    /**
-     * Minimum page size (in bytes) required to apply GC lagging overhead. Pages smaller than this
-     * threshold skip the overhead entirely, since they don't produce significant GC pressure.
-     * Defaults to 0 (apply overhead to all pages); set via {@link #setGcOverheadJumboThreshold(long)}.
-     */
-    private volatile long gcOverheadJumboThreshold;
+    private volatile long pagePenaltyJumboThreshold;
 
     private final Map<String, ExchangeSinkHandler> sinks = ConcurrentCollections.newConcurrentMap();
     private final Map<String, ExchangeSourceHandler> exchangeSources = ConcurrentCollections.newConcurrentMap();
@@ -114,28 +109,20 @@ public final class ExchangeService extends AbstractLifecycleComponent {
     }
 
     /**
-     * Sets the GC overhead factor for newly created exchange sink handlers.
-     * Called by the dynamic cluster setting watcher for {@code esql.gc_overhead_factor}.
+     * Sets the page penalty factor for newly created exchange sink handlers.
+     * Called by the dynamic cluster setting watcher for {@code esql.page_penalty_factor}.
      */
-    public void setGcOverheadFactor(double gcOverheadFactor) {
-        this.gcOverheadFactor = gcOverheadFactor;
+    public void setPagePenaltyFactor(double pagePenaltyFactor) {
+        this.pagePenaltyFactor = pagePenaltyFactor;
     }
 
     /**
-     * Sets the GC decay factor for newly created exchange sink handlers.
-     * Called by the dynamic cluster setting watcher for {@code esql.gc_decay_factor}.
-     */
-    public void setGcDecayFactor(double gcDecayFactor) {
-        this.gcDecayFactor = gcDecayFactor;
-    }
-
-    /**
-     * Sets the minimum page size threshold for applying GC lagging overhead.
-     * Pages whose {@code ramBytesUsedByBlocks()} is below this threshold will skip the overhead.
+     * Sets the minimum average document size threshold for applying the page penalty.
+     * Pages whose average document size is below this threshold will skip the penalty.
      * Typically set to {@code esql.values_loading_jumbo_size}.
      */
-    public void setGcOverheadJumboThreshold(long gcOverheadJumboThreshold) {
-        this.gcOverheadJumboThreshold = gcOverheadJumboThreshold;
+    public void setPagePenaltyJumboThreshold(long pagePenaltyJumboThreshold) {
+        this.pagePenaltyJumboThreshold = pagePenaltyJumboThreshold;
     }
 
     public void registerTransportHandler(TransportService transportService) {
@@ -172,9 +159,8 @@ public final class ExchangeService extends AbstractLifecycleComponent {
             blockFactory,
             maxBufferSize,
             threadPool.relativeTimeInMillisSupplier(),
-            gcOverheadFactor,
-            gcDecayFactor,
-            gcOverheadJumboThreshold
+            pagePenaltyFactor,
+            pagePenaltyJumboThreshold
         );
         if (sinks.putIfAbsent(exchangeId, sinkHandler) != null) {
             throw new IllegalStateException("sink exchanger for id [" + exchangeId + "] already exists");

@@ -105,7 +105,6 @@ public class ExchangeServiceTests extends ESTestCase {
             2,
             threadPool.relativeTimeInMillisSupplier(),
             randomDoubleBetween(0.1, 10.0, true),
-            randomDoubleBetween(0.1, 1.0, true),
             1024L * 1024L
         );
         AtomicInteger pagesAddedToSink = new AtomicInteger();
@@ -377,7 +376,6 @@ public class ExchangeServiceTests extends ESTestCase {
                         randomExchangeBuffer(),
                         threadPool.relativeTimeInMillisSupplier(),
                         randomDoubleBetween(0.1, 10.0, true),
-                        randomDoubleBetween(0.1, 1.0, true),
                         1024L * 1024L
                     );
                     sourceExchanger.addRemoteSink(
@@ -424,7 +422,6 @@ public class ExchangeServiceTests extends ESTestCase {
                     randomExchangeBuffer(),
                     threadPool.relativeTimeInMillisSupplier(),
                     randomDoubleBetween(0.1, 10.0, true),
-                    randomDoubleBetween(0.1, 1.0, true),
                     1024L * 1024L
                 );
                 int failAfter = randomBoolean() ? Integer.MAX_VALUE : randomIntBetween(0, 100);
@@ -496,7 +493,6 @@ public class ExchangeServiceTests extends ESTestCase {
             2,
             threadPool.relativeTimeInMillisSupplier(),
             randomDoubleBetween(0.1, 10.0, true),
-            randomDoubleBetween(0.1, 1.0, true),
             1024L * 1024L
         );
         ExchangeSink sink = sinkExchanger.createExchangeSink(() -> {});

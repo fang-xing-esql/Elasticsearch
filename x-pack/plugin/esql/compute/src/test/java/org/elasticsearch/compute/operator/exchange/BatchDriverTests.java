@@ -686,7 +686,6 @@ public class BatchDriverTests extends ESTestCase {
             10,
             System::currentTimeMillis,
             randomDoubleBetween(0.1, 10.0, true),
-            randomDoubleBetween(0.1, 1.0, true),
             1024L * 1024L
         );
         sourceHandler.addRemoteSink(sinkHandler::fetchPageAsync, true, () -> {}, 1, ActionListener.noop());
