@@ -129,12 +129,14 @@ public class PlannerSettings {
      * Penalty factor applied to the page size (in bytes) when a page with large documents is added
      * to a pipeline breaker such as {@code ExchangeSinkHandler} or {@code TopNOperator}. The penalty
      * is tracked on the circuit breaker to account for untracked JVM heap pressure (e.g. loading large
-     * objects from _source). A value of 0.3 means an additional 30% of the page size is reserved
-     * on the breaker.
+     * objects from _source). A value of 0.5 means an additional 50% of the page size is reserved
+     * on the breaker. 0.3 is good enough to having heap attack tests not OOM in non-serverless mode,
+     * however, in serverless we want to be more conservative and set it to 0.5 to prevent OOMs under
+     * load with large documents.
      */
     public static final Setting<Double> PAGE_PENALTY_FACTOR = Setting.doubleSetting(
         "esql.page_penalty_factor",
-        0.3,
+        0.5,
         0.0,
         Setting.Property.NodeScope,
         Setting.Property.Dynamic
