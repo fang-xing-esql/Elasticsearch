@@ -285,6 +285,8 @@ public class LocalExecutionPlannerTests extends MapperServiceTestCase {
             between(1, 10000),
             randomDoubleBetween(0.1, 1.0, true),
             between(0, 1000),
+            MappedFieldType.BlockLoaderContext.DEFAULT_ORDINALS_BYTE_SIZE,
+            MappedFieldType.BlockLoaderContext.DEFAULT_SCRIPT_BYTE_SIZE,
             10
         );
         LocalExecutionPlanner.LocalExecutionPlan plan = planner().plan(
@@ -365,7 +367,8 @@ public class LocalExecutionPlannerTests extends MapperServiceTestCase {
             null,
             null,
             null,
-            esPhysicalOperationProviders(shardContexts)
+            esPhysicalOperationProviders(shardContexts),
+            null  // OperatorFactoryRegistry - not needed for these tests
         );
     }
 
