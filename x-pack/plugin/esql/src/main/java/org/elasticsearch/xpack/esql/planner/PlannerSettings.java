@@ -165,7 +165,7 @@ public class PlannerSettings {
      */
     public static final Setting<Double> PAGE_PENALTY_FACTOR = Setting.doubleSetting(
         "esql.page_penalty_factor",
-        1.5,
+        2.0,
         0.0,
         Setting.Property.NodeScope,
         Setting.Property.Dynamic
