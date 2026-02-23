@@ -1,6 +1,9 @@
 area: ES|QL
 issues:
+ - 141203
+ - 141034
  - 140664
+ - 141550
 pr: 142790
 summary: Add penalty to giant page in `Exchange` and `TopNOperator`
 type: bug
