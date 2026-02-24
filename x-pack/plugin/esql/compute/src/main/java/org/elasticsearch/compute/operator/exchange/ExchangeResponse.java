@@ -36,6 +36,10 @@ public final class ExchangeResponse extends TransportResponse implements Releasa
 
     public ExchangeResponse(BlockStreamInput in) throws IOException {
         this.blockFactory = in.blockFactory();
+        this.reservedBytes = in.available();
+        if (reservedBytes > 0) {
+            blockFactory.breaker().addEstimateBytesAndMaybeBreak(reservedBytes, "deserialize exchange response");
+        }
         this.page = in.readOptionalWriteable(Page::new);
         this.finished = in.readBoolean();
     }
