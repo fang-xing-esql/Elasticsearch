@@ -142,6 +142,19 @@ public class PlannerSettings {
     );
 
     /**
+     * Maximum number of keyword sort fields allowed when pushing TopN to Lucene.
+     * Sorting on many keyword fields in Lucene can be expensive. When exceeded,
+     * the sort falls back to the compute engine.
+     */
+    public static final Setting<Integer> MAX_KEYWORD_SORT_FIELDS = Setting.intSetting(
+        "esql.max_keyword_sort_fields",
+        10,
+        0,
+        Setting.Property.NodeScope,
+        Setting.Property.Dynamic
+    );
+
+    /**
      * Multiplier applied to {@code lastKnownSourceSize} to pre-reserve memory on the circuit breaker
      * before loading {@code _source}. The source loading path creates large untracked allocations:
      * scratch, SourceFilter.filterBytes() and JSON parsing creates, heap dump has shown about 8x
@@ -167,6 +180,7 @@ public class PlannerSettings {
             REUSE_COLUMN_LOADERS_THRESHOLD,
             BLOCK_LOADER_SIZE_ORDINALS,
             BLOCK_LOADER_SIZE_SCRIPT,
+            MAX_KEYWORD_SORT_FIELDS,
             SOURCE_RESERVATION_FACTOR
         );
     }
@@ -197,6 +211,7 @@ public class PlannerSettings {
             );
             clusterSettings.initializeAndWatch(BLOCK_LOADER_SIZE_ORDINALS, v -> settings.updateAndGet(s -> s.blockLoaderSizeOrdinals(v)));
             clusterSettings.initializeAndWatch(BLOCK_LOADER_SIZE_SCRIPT, v -> settings.updateAndGet(s -> s.blockLoaderSizeOrdinals(v)));
+            clusterSettings.initializeAndWatch(MAX_KEYWORD_SORT_FIELDS, v -> settings.updateAndGet(s -> s.maxKeywordSortFields(v)));
             clusterSettings.initializeAndWatch(SOURCE_RESERVATION_FACTOR, v -> settings.updateAndGet(s -> s.sourceReservationFactor(v)));
         }
 
@@ -214,6 +229,7 @@ public class PlannerSettings {
     private final int reuseColumnLoadersThreshold;
     private final ByteSizeValue blockLoaderSizeOrdinals;
     private final ByteSizeValue blockLoaderSizeScript;
+    private final int maxKeywordSortFields;
     private final double sourceReservationFactor;
 
     /**
@@ -229,6 +245,7 @@ public class PlannerSettings {
         REUSE_COLUMN_LOADERS_THRESHOLD.getDefault(Settings.EMPTY),
         BLOCK_LOADER_SIZE_ORDINALS.getDefault(Settings.EMPTY),
         BLOCK_LOADER_SIZE_SCRIPT.getDefault(Settings.EMPTY),
+        MAX_KEYWORD_SORT_FIELDS.getDefault(Settings.EMPTY),
         SOURCE_RESERVATION_FACTOR.getDefault(Settings.EMPTY)
     );
 
@@ -245,6 +262,7 @@ public class PlannerSettings {
         int reuseColumnLoadersThreshold,
         ByteSizeValue blockLoaderSizeOrdinals,
         ByteSizeValue blockLoaderSizeScript,
+        int maxKeywordSortFields,
         double sourceReservationFactor
     ) {
         this.defaultDataPartitioning = defaultDataPartitioning;
@@ -256,6 +274,7 @@ public class PlannerSettings {
         this.reuseColumnLoadersThreshold = reuseColumnLoadersThreshold;
         this.blockLoaderSizeOrdinals = blockLoaderSizeOrdinals;
         this.blockLoaderSizeScript = blockLoaderSizeScript;
+        this.maxKeywordSortFields = maxKeywordSortFields;
         this.sourceReservationFactor = sourceReservationFactor;
     }
 
@@ -270,6 +289,7 @@ public class PlannerSettings {
             reuseColumnLoadersThreshold,
             blockLoaderSizeOrdinals,
             blockLoaderSizeScript,
+            maxKeywordSortFields,
             sourceReservationFactor
         );
     }
@@ -289,6 +309,7 @@ public class PlannerSettings {
             reuseColumnLoadersThreshold,
             blockLoaderSizeOrdinals,
             blockLoaderSizeScript,
+            maxKeywordSortFields,
             sourceReservationFactor
         );
     }
@@ -308,6 +329,7 @@ public class PlannerSettings {
             reuseColumnLoadersThreshold,
             blockLoaderSizeOrdinals,
             blockLoaderSizeScript,
+            maxKeywordSortFields,
             sourceReservationFactor
         );
     }
@@ -341,6 +363,7 @@ public class PlannerSettings {
             reuseColumnLoadersThreshold,
             blockLoaderSizeOrdinals,
             blockLoaderSizeScript,
+            maxKeywordSortFields,
             sourceReservationFactor
         );
     }
@@ -360,6 +383,7 @@ public class PlannerSettings {
             reuseColumnLoadersThreshold,
             blockLoaderSizeOrdinals,
             blockLoaderSizeScript,
+            maxKeywordSortFields,
             sourceReservationFactor
         );
     }
@@ -379,6 +403,7 @@ public class PlannerSettings {
             reuseColumnLoadersThreshold,
             blockLoaderSizeOrdinals,
             blockLoaderSizeScript,
+            maxKeywordSortFields,
             sourceReservationFactor
         );
     }
@@ -398,6 +423,7 @@ public class PlannerSettings {
             reuseColumnLoadersThreshold,
             blockLoaderSizeOrdinals,
             blockLoaderSizeScript,
+            maxKeywordSortFields,
             sourceReservationFactor
         );
     }
@@ -424,6 +450,7 @@ public class PlannerSettings {
             reuseColumnLoadersThreshold,
             blockLoaderSizeOrdinals,
             blockLoaderSizeScript,
+            maxKeywordSortFields,
             sourceReservationFactor
         );
     }
@@ -446,6 +473,7 @@ public class PlannerSettings {
             reuseColumnLoadersThreshold,
             blockLoaderSizeOrdinals,
             blockLoaderSizeScript,
+            maxKeywordSortFields,
             sourceReservationFactor
         );
     }
@@ -455,6 +483,26 @@ public class PlannerSettings {
      */
     public ByteSizeValue blockLoaderSizeScript() {
         return blockLoaderSizeScript;
+    }
+
+    public PlannerSettings maxKeywordSortFields(int maxKeywordSortFields) {
+        return new PlannerSettings(
+            defaultDataPartitioning,
+            valuesLoadingJumboSize,
+            luceneTopNLimit,
+            intermediateLocalRelationMaxSize,
+            partialEmitKeysThreshold,
+            partialEmitUniquenessThreshold,
+            reuseColumnLoadersThreshold,
+            blockLoaderSizeOrdinals,
+            blockLoaderSizeScript,
+            maxKeywordSortFields,
+            sourceReservationFactor
+        );
+    }
+
+    public int maxKeywordSortFields() {
+        return maxKeywordSortFields;
     }
 
     public PlannerSettings sourceReservationFactor(double sourceReservationFactor) {
@@ -468,6 +516,7 @@ public class PlannerSettings {
             reuseColumnLoadersThreshold,
             blockLoaderSizeOrdinals,
             blockLoaderSizeScript,
+            maxKeywordSortFields,
             sourceReservationFactor
         );
     }
