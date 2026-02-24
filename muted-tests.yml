@@ -240,30 +240,18 @@ tests:
 - class: org.elasticsearch.xpack.esql.qa.single_node.EsqlSpecIT
   method: test {csv-spec:string.Url_encode_component tests with table reads}
   issue: https://github.com/elastic/elasticsearch/issues/140621
-- class: org.elasticsearch.xpack.esql.heap_attack.HeapAttackSubqueryIT
-  method: testManyRandomTextFieldsInSubqueryIntermediateResultsWithSortManyFields
-  issue: https://github.com/elastic/elasticsearch/issues/140664
 - class: org.elasticsearch.xpack.inference.integration.AuthorizationTaskExecutorIT
   method: testCreatesEisChatCompletion_DoesNotRemoveEndpointWhenNoLongerAuthorized
   issue: https://github.com/elastic/elasticsearch/issues/140802
 - class: org.elasticsearch.xpack.esql.ccq.MultiClusterSpecIT
   method: test {csv-spec:spatial.ConvertFromStringParseError}
   issue: https://github.com/elastic/elasticsearch/issues/139213
-- class: org.elasticsearch.xpack.esql.heap_attack.HeapAttackSubqueryIT
-  method: testGiantTextFieldInSubqueryIntermediateResultsWithSort
-  issue: https://github.com/elastic/elasticsearch/issues/141034
-- class: org.elasticsearch.xpack.esql.heap_attack.HeapAttackSubqueryIT
-  method: testManyRandomKeywordFieldsInSubqueryIntermediateResultsWithSortManyFields
-  issue: https://github.com/elastic/elasticsearch/issues/141083
 - class: org.elasticsearch.xpack.transform.checkpoint.TransformCheckpointServiceNodeTests
   method: testGetCheckpointStats
   issue: https://github.com/elastic/elasticsearch/issues/141112
 - class: org.elasticsearch.xpack.entsearch.EnterpriseSearchRestIT
   method: test {p0=entsearch/rules/40_rule_query_search/Perform a rule query with an organic query that must be rewritten to another query type}
   issue: https://github.com/elastic/elasticsearch/issues/141200
-- class: org.elasticsearch.xpack.esql.heap_attack.HeapAttackSubqueryIT
-  method: testManyRandomTextFieldsInSubqueryIntermediateResultsWithSortOneField
-  issue: https://github.com/elastic/elasticsearch/issues/141203
 - class: org.elasticsearch.snapshots.SnapshotStatusApisIT
   method: testFailedSnapshot
   issue: https://github.com/elastic/elasticsearch/issues/141279
@@ -294,11 +282,6 @@ tests:
 - class: org.elasticsearch.indices.recovery.IndexRecoveryIT
   method: testSourceThrottling
   issue: https://github.com/elastic/elasticsearch/issues/141548
-- class: org.elasticsearch.xpack.esql.heap_attack.HeapAttackIT
-  methods:
-  - testLastAggWithGiantText
-  - testFirstAggWithGiantText
-  issue: https://github.com/elastic/elasticsearch/issues/141550
 - class: org.elasticsearch.xpack.inference.external.http.sender.RequestExecutorServiceTests
   method: testExecute_Throws_WhenRateLimitedQueueIsFull
   issue: https://github.com/elastic/elasticsearch/issues/141231
@@ -371,18 +354,6 @@ tests:
 - class: org.elasticsearch.xpack.esql.qa.mixed.EsqlClientYamlIT
   method: test {p0=esql/40_tsdb/TS Command grouping on text field}
   issue: https://github.com/elastic/elasticsearch/issues/142544
-- class: org.elasticsearch.index.IndexSettingsTests
-  method: testSyntheticIdBadVersion
-  issue: https://github.com/elastic/elasticsearch/issues/142508
-- class: org.elasticsearch.index.IndexSettingsTests
-  method: testSyntheticIdBadCodec
-  issue: https://github.com/elastic/elasticsearch/issues/142509
-- class: org.elasticsearch.index.IndexSettingsTests
-  method: testSyntheticIdBadMode
-  issue: https://github.com/elastic/elasticsearch/issues/142510
-- class: org.elasticsearch.index.IndexSettingsTests
-  method: testSyntheticIdCorrectSettings
-  issue: https://github.com/elastic/elasticsearch/issues/142507
 - class: org.elasticsearch.xpack.esql.datasources.GlobDiscoveryLocalTests
   method: testRecursiveDoubleStarAllFiles
   issue: https://github.com/elastic/elasticsearch/issues/142576
@@ -413,9 +384,6 @@ tests:
 - class: org.elasticsearch.xpack.ccr.CcrTimeSeriesDataStreamsIT
   method: testCrossClusterReplicationForTSDB
   issue: https://github.com/elastic/elasticsearch/issues/142797
-- class: org.elasticsearch.xpack.esql.heap_attack.HeapAttackSubqueryIT
-  method: testManyRandomKeywordFieldsInSubqueryIntermediateResultsWithSortOneField
-  issue: https://github.com/elastic/elasticsearch/issues/141202
 - class: org.elasticsearch.xpack.core.termsenum.TermsEnumTests
   method: testTermsEnumIPRandomized
   issue: https://github.com/elastic/elasticsearch/issues/142811
@@ -431,18 +399,6 @@ tests:
 - class: org.elasticsearch.xpack.esql.qa.mixed.MixedClusterEsqlSpecIT
   method: test {csv-spec:spatial.ConvertFromStringParseError}
   issue: https://github.com/elastic/elasticsearch/issues/142843
-- class: org.elasticsearch.snapshots.SnapshotShutdownIT
-  method: testRemoveNodeDuringSnapshot
-  issue: https://github.com/elastic/elasticsearch/issues/142868
-- class: org.elasticsearch.snapshots.SnapshotShutdownIT
-  method: testAbortSnapshotWhileRemovingNode
-  issue: https://github.com/elastic/elasticsearch/issues/142869
-- class: org.elasticsearch.snapshots.SnapshotShutdownIT
-  method: testDeleteSnapshotWithPausedShardSnapshots
-  issue: https://github.com/elastic/elasticsearch/issues/142870
-- class: org.elasticsearch.snapshots.SnapshotShutdownIT
-  method: testStartRemoveNodeButDoNotComplete
-  issue: https://github.com/elastic/elasticsearch/issues/142871
 - class: org.elasticsearch.benchmark.vector.scorer.VectorScorerOSQBenchmarkTests
   method: testSingleScalarVsVectorized {p0=1024 p1=1 p2=NIO p3=DOT_PRODUCT}
   issue: https://github.com/elastic/elasticsearch/issues/142881
@@ -452,6 +408,9 @@ tests:
 - class: org.elasticsearch.compute.operator.exchange.BatchDriverTests
   method: testSinglePageSingleBatch
   issue: https://github.com/elastic/elasticsearch/issues/142895
+- class: org.elasticsearch.xpack.searchablesnapshots.SearchableSnapshotsTSDBSyntheticIdIntegTests
+  method: testSearchableSnapshot
+  issue: https://github.com/elastic/elasticsearch/issues/142918
 
 # Examples:
 #

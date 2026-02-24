@@ -141,6 +141,20 @@ public class PlannerSettings {
         Setting.Property.Dynamic
     );
 
+    /**
+     * Multiplier applied to {@code lastKnownSourceSize} to pre-reserve memory on the circuit breaker
+     * before loading {@code _source}. The source loading path creates large untracked allocations:
+     * scratch, SourceFilter.filterBytes() and JSON parsing creates, heap dump has shown about 8x
+     * of the actual source size in untracked memory at peak. 10x is an overestimation to prevent crashes.
+     */
+    public static final Setting<Double> SOURCE_RESERVATION_FACTOR = Setting.doubleSetting(
+        "esql.source_reservation_factor",
+        10.0,
+        0.0,
+        Setting.Property.NodeScope,
+        Setting.Property.Dynamic
+    );
+
     public static List<Setting<?>> settings() {
         return List.of(
             DEFAULT_DATA_PARTITIONING,
@@ -152,7 +166,8 @@ public class PlannerSettings {
             PARTIAL_AGGREGATION_EMIT_UNIQUENESS_THRESHOLD,
             REUSE_COLUMN_LOADERS_THRESHOLD,
             BLOCK_LOADER_SIZE_ORDINALS,
-            BLOCK_LOADER_SIZE_SCRIPT
+            BLOCK_LOADER_SIZE_SCRIPT,
+            SOURCE_RESERVATION_FACTOR
         );
     }
 
@@ -182,6 +197,7 @@ public class PlannerSettings {
             );
             clusterSettings.initializeAndWatch(BLOCK_LOADER_SIZE_ORDINALS, v -> settings.updateAndGet(s -> s.blockLoaderSizeOrdinals(v)));
             clusterSettings.initializeAndWatch(BLOCK_LOADER_SIZE_SCRIPT, v -> settings.updateAndGet(s -> s.blockLoaderSizeOrdinals(v)));
+            clusterSettings.initializeAndWatch(SOURCE_RESERVATION_FACTOR, v -> settings.updateAndGet(s -> s.sourceReservationFactor(v)));
         }
 
         public PlannerSettings get() {
@@ -198,6 +214,7 @@ public class PlannerSettings {
     private final int reuseColumnLoadersThreshold;
     private final ByteSizeValue blockLoaderSizeOrdinals;
     private final ByteSizeValue blockLoaderSizeScript;
+    private final double sourceReservationFactor;
 
     /**
      * Defaults.
@@ -211,7 +228,8 @@ public class PlannerSettings {
         PARTIAL_AGGREGATION_EMIT_UNIQUENESS_THRESHOLD.getDefault(Settings.EMPTY),
         REUSE_COLUMN_LOADERS_THRESHOLD.getDefault(Settings.EMPTY),
         BLOCK_LOADER_SIZE_ORDINALS.getDefault(Settings.EMPTY),
-        BLOCK_LOADER_SIZE_SCRIPT.getDefault(Settings.EMPTY)
+        BLOCK_LOADER_SIZE_SCRIPT.getDefault(Settings.EMPTY),
+        SOURCE_RESERVATION_FACTOR.getDefault(Settings.EMPTY)
     );
 
     /**
@@ -226,7 +244,8 @@ public class PlannerSettings {
         double partialEmitUniquenessThreshold,
         int reuseColumnLoadersThreshold,
         ByteSizeValue blockLoaderSizeOrdinals,
-        ByteSizeValue blockLoaderSizeScript
+        ByteSizeValue blockLoaderSizeScript,
+        double sourceReservationFactor
     ) {
         this.defaultDataPartitioning = defaultDataPartitioning;
         this.valuesLoadingJumboSize = valuesLoadingJumboSize;
@@ -237,6 +256,7 @@ public class PlannerSettings {
         this.reuseColumnLoadersThreshold = reuseColumnLoadersThreshold;
         this.blockLoaderSizeOrdinals = blockLoaderSizeOrdinals;
         this.blockLoaderSizeScript = blockLoaderSizeScript;
+        this.sourceReservationFactor = sourceReservationFactor;
     }
 
     public PlannerSettings defaultDataPartitioning(DataPartitioning defaultDataPartitioning) {
@@ -249,7 +269,8 @@ public class PlannerSettings {
             partialEmitUniquenessThreshold,
             reuseColumnLoadersThreshold,
             blockLoaderSizeOrdinals,
-            blockLoaderSizeScript
+            blockLoaderSizeScript,
+            sourceReservationFactor
         );
     }
 
@@ -267,7 +288,8 @@ public class PlannerSettings {
             partialEmitUniquenessThreshold,
             reuseColumnLoadersThreshold,
             blockLoaderSizeOrdinals,
-            blockLoaderSizeScript
+            blockLoaderSizeScript,
+            sourceReservationFactor
         );
     }
 
@@ -285,7 +307,8 @@ public class PlannerSettings {
             partialEmitUniquenessThreshold,
             reuseColumnLoadersThreshold,
             blockLoaderSizeOrdinals,
-            blockLoaderSizeScript
+            blockLoaderSizeScript,
+            sourceReservationFactor
         );
     }
 
@@ -317,7 +340,8 @@ public class PlannerSettings {
             partialEmitUniquenessThreshold,
             reuseColumnLoadersThreshold,
             blockLoaderSizeOrdinals,
-            blockLoaderSizeScript
+            blockLoaderSizeScript,
+            sourceReservationFactor
         );
     }
 
@@ -335,7 +359,8 @@ public class PlannerSettings {
             partialEmitUniquenessThreshold,
             reuseColumnLoadersThreshold,
             blockLoaderSizeOrdinals,
-            blockLoaderSizeScript
+            blockLoaderSizeScript,
+            sourceReservationFactor
         );
     }
 
@@ -353,7 +378,8 @@ public class PlannerSettings {
             partialEmitUniquenessThreshold,
             reuseColumnLoadersThreshold,
             blockLoaderSizeOrdinals,
-            blockLoaderSizeScript
+            blockLoaderSizeScript,
+            sourceReservationFactor
         );
     }
 
@@ -371,7 +397,8 @@ public class PlannerSettings {
             partialEmitUniquenessThreshold,
             reuseColumnLoadersThreshold,
             blockLoaderSizeOrdinals,
-            blockLoaderSizeScript
+            blockLoaderSizeScript,
+            sourceReservationFactor
         );
     }
 
@@ -396,7 +423,8 @@ public class PlannerSettings {
             partialEmitUniquenessThreshold,
             reuseColumnLoadersThreshold,
             blockLoaderSizeOrdinals,
-            blockLoaderSizeScript
+            blockLoaderSizeScript,
+            sourceReservationFactor
         );
     }
 
@@ -417,7 +445,8 @@ public class PlannerSettings {
             partialEmitUniquenessThreshold,
             reuseColumnLoadersThreshold,
             blockLoaderSizeOrdinals,
-            blockLoaderSizeScript
+            blockLoaderSizeScript,
+            sourceReservationFactor
         );
     }
 
@@ -426,5 +455,24 @@ public class PlannerSettings {
      */
     public ByteSizeValue blockLoaderSizeScript() {
         return blockLoaderSizeScript;
+    }
+
+    public PlannerSettings sourceReservationFactor(double sourceReservationFactor) {
+        return new PlannerSettings(
+            defaultDataPartitioning,
+            valuesLoadingJumboSize,
+            luceneTopNLimit,
+            intermediateLocalRelationMaxSize,
+            partialEmitKeysThreshold,
+            partialEmitUniquenessThreshold,
+            reuseColumnLoadersThreshold,
+            blockLoaderSizeOrdinals,
+            blockLoaderSizeScript,
+            sourceReservationFactor
+        );
+    }
+
+    public double sourceReservationFactor() {
+        return sourceReservationFactor;
     }
 }

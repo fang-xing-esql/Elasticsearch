@@ -60,7 +60,8 @@ public class ValuesSourceReaderOperator extends AbstractPageMappingToIteratorOpe
         List<FieldInfo> fields,
         IndexedByShardId<ShardContext> shardContexts,
         boolean reuseColumnLoaders,
-        int docChannel
+        int docChannel,
+        double sourceReservationFactor
     ) implements OperatorFactory {
         public Factory
 
@@ -78,7 +79,8 @@ public class ValuesSourceReaderOperator extends AbstractPageMappingToIteratorOpe
                 fields,
                 shardContexts,
                 reuseColumnLoaders,
-                docChannel
+                docChannel,
+                sourceReservationFactor
             );
         }
 
@@ -175,6 +177,32 @@ public class ValuesSourceReaderOperator extends AbstractPageMappingToIteratorOpe
     private int lastSegment = -1;
 
     /**
+     * The maximum raw byte size of _source observed so far. This persists across pages so
+     * the pre-reservation for source parsing overhead can protect even the first (and only)
+     * document in a page. On a 512MB JVM, jumboBytes is ~512KB, so each 5MB text field
+     * creates a 1-doc page. Without persisting this, every page starts with 0 reservation.
+     */
+    volatile long lastKnownSourceSize;
+
+    /**
+     * Multiplier applied to {@link #lastKnownSourceSize} to pre-reserve memory on the circuit
+     * breaker before loading {@code _source}. A factor of 3.0 covers the large untracked
+     * allocations from source parsing such as the scratch buffer, SourceFilter.filterBytes() and
+     * JSON parsing overhead. This is a heuristic and can be adjusted based on observed
+     * memory usage patterns.
+     */
+    final double sourceReservationFactor;
+
+    /**
+     * Persistent reservation on the circuit breaker for the expected overhead of _source
+     * parsing. Held while this operator is active and loading large documents. When multiple
+     * operators load large _source concurrently, their persistent reservations accumulate
+     * on the shared circuit breaker, causing it to trip before the aggregate untracked
+     * temporaries from concurrent loads can overwhelm the heap.
+     */
+    private long sourceLoadingReservation;
+
+    /**
      * Creates a new extractor
      * @param fields fields to load
      * @param docChannel the channel containing the shard, leaf/segment and doc id
@@ -185,7 +213,8 @@ public class ValuesSourceReaderOperator extends AbstractPageMappingToIteratorOpe
         List<FieldInfo> fields,
         IndexedByShardId<? extends ShardContext> shardContexts,
         boolean reuseColumnLoaders,
-        int docChannel
+        int docChannel,
+        double sourceReservationFactor
     ) {
         if (fields.isEmpty()) {
             throw new IllegalStateException("ValuesSourceReaderOperator doesn't support empty fields");
@@ -199,15 +228,35 @@ public class ValuesSourceReaderOperator extends AbstractPageMappingToIteratorOpe
         this.shardContexts = shardContexts;
         this.reuseColumnLoaders = reuseColumnLoaders;
         this.docChannel = docChannel;
+        this.sourceReservationFactor = sourceReservationFactor;
     }
 
     @Override
     protected ReleasableIterator<Page> receive(Page page) {
+        acquireSourceLoadingReservation();
         DocVector docVector = page.<DocBlock>getBlock(docChannel).asVector();
         return appendBlockArrays(
             page,
             docVector.singleSegment() ? new ValuesFromSingleReader(this, docVector) : new ValuesFromManyReader(this, docVector)
         );
+    }
+
+    /**
+     * Acquires or increases the persistent source loading reservation on the circuit breaker.
+     * Called at the start of each page and after each row load that updates
+     * {@link #lastKnownSourceSize}. If the breaker trips, the exception propagates and
+     * prevents further loading, limiting concurrent large _source operations.
+     */
+    void acquireSourceLoadingReservation() {
+        if (lastKnownSourceSize <= jumboBytes) {
+            return;
+        }
+        long needed = (long) (lastKnownSourceSize * sourceReservationFactor);
+        long additional = needed - sourceLoadingReservation;
+        if (additional > 0) {
+            driverContext.blockFactory().adjustBreaker(additional);
+            sourceLoadingReservation = needed;
+        }
     }
 
     void positionFieldWork(int shard, int segment, int firstDoc) {
@@ -267,6 +316,10 @@ public class ValuesSourceReaderOperator extends AbstractPageMappingToIteratorOpe
 
     @Override
     public void close() {
+        if (sourceLoadingReservation > 0) {
+            driverContext.blockFactory().adjustBreaker(-sourceLoadingReservation);
+            sourceLoadingReservation = 0;
+        }
         Releasables.close(super::close, converterEvaluators, Releasables.wrap(fields));
     }
 

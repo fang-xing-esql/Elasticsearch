@@ -286,7 +286,8 @@ public class LocalExecutionPlannerTests extends MapperServiceTestCase {
             randomDoubleBetween(0.1, 1.0, true),
             between(0, 1000),
             MappedFieldType.BlockLoaderContext.DEFAULT_ORDINALS_BYTE_SIZE,
-            MappedFieldType.BlockLoaderContext.DEFAULT_SCRIPT_BYTE_SIZE
+            MappedFieldType.BlockLoaderContext.DEFAULT_SCRIPT_BYTE_SIZE,
+            PlannerSettings.SOURCE_RESERVATION_FACTOR.getDefault(Settings.EMPTY)
         );
         LocalExecutionPlanner.LocalExecutionPlan plan = planner().plan(
             "test",
