@@ -42,7 +42,8 @@ final class ExchangeBuffer {
 
     void addPage(Page page) {
         queue.add(page);
-        if (queueSize.incrementAndGet() == 1) {
+        int newSize = queueSize.incrementAndGet();
+        if (newSize == 1) {
             notifyNotEmpty();
         }
         if (noMoreInputs) {

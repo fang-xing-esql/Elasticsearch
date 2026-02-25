@@ -168,6 +168,31 @@ public class PlannerSettings {
         Setting.Property.Dynamic
     );
 
+    /**
+     * When a {@code BytesRefArrayVector}'s backing values exceed this size, the RAM estimate is
+     * multiplied by {@link #BYTES_REF_RAM_OVERESTIMATE_FACTOR} to account for untracked overhead
+     * in large byte arrays. The untracked overhead may come from loading large text fields from
+     * _source.
+     */
+    public static final Setting<ByteSizeValue> BYTES_REF_RAM_OVERESTIMATE_THRESHOLD = Setting.byteSizeSetting(
+        "esql.bytes_ref_ram_overestimate_threshold",
+        ByteSizeValue.ofMb(1),
+        Setting.Property.NodeScope,
+        Setting.Property.Dynamic
+    );
+
+    /**
+     * Multiplier applied to the RAM estimate of a {@code BytesRefArrayVector} whose backing values
+     * exceed {@link #BYTES_REF_RAM_OVERESTIMATE_THRESHOLD}.
+     */
+    public static final Setting<Double> BYTES_REF_RAM_OVERESTIMATE_FACTOR = Setting.doubleSetting(
+        "esql.bytes_ref_ram_overestimate_factor",
+        2.0,
+        1.0,
+        Setting.Property.NodeScope,
+        Setting.Property.Dynamic
+    );
+
     public static List<Setting<?>> settings() {
         return List.of(
             DEFAULT_DATA_PARTITIONING,
@@ -181,7 +206,9 @@ public class PlannerSettings {
             BLOCK_LOADER_SIZE_ORDINALS,
             BLOCK_LOADER_SIZE_SCRIPT,
             MAX_KEYWORD_SORT_FIELDS,
-            SOURCE_RESERVATION_FACTOR
+            SOURCE_RESERVATION_FACTOR,
+            BYTES_REF_RAM_OVERESTIMATE_THRESHOLD,
+            BYTES_REF_RAM_OVERESTIMATE_FACTOR
         );
     }
 
@@ -213,6 +240,14 @@ public class PlannerSettings {
             clusterSettings.initializeAndWatch(BLOCK_LOADER_SIZE_SCRIPT, v -> settings.updateAndGet(s -> s.blockLoaderSizeOrdinals(v)));
             clusterSettings.initializeAndWatch(MAX_KEYWORD_SORT_FIELDS, v -> settings.updateAndGet(s -> s.maxKeywordSortFields(v)));
             clusterSettings.initializeAndWatch(SOURCE_RESERVATION_FACTOR, v -> settings.updateAndGet(s -> s.sourceReservationFactor(v)));
+            clusterSettings.initializeAndWatch(
+                BYTES_REF_RAM_OVERESTIMATE_THRESHOLD,
+                v -> settings.updateAndGet(s -> s.bytesRefRamOverestimateThreshold(v))
+            );
+            clusterSettings.initializeAndWatch(
+                BYTES_REF_RAM_OVERESTIMATE_FACTOR,
+                v -> settings.updateAndGet(s -> s.bytesRefRamOverestimateFactor(v))
+            );
         }
 
         public PlannerSettings get() {
@@ -231,6 +266,8 @@ public class PlannerSettings {
     private final ByteSizeValue blockLoaderSizeScript;
     private final int maxKeywordSortFields;
     private final double sourceReservationFactor;
+    private final ByteSizeValue bytesRefRamOverestimateThreshold;
+    private final double bytesRefRamOverestimateFactor;
 
     /**
      * Defaults.
@@ -246,7 +283,9 @@ public class PlannerSettings {
         BLOCK_LOADER_SIZE_ORDINALS.getDefault(Settings.EMPTY),
         BLOCK_LOADER_SIZE_SCRIPT.getDefault(Settings.EMPTY),
         MAX_KEYWORD_SORT_FIELDS.getDefault(Settings.EMPTY),
-        SOURCE_RESERVATION_FACTOR.getDefault(Settings.EMPTY)
+        SOURCE_RESERVATION_FACTOR.getDefault(Settings.EMPTY),
+        BYTES_REF_RAM_OVERESTIMATE_THRESHOLD.getDefault(Settings.EMPTY),
+        BYTES_REF_RAM_OVERESTIMATE_FACTOR.getDefault(Settings.EMPTY)
     );
 
     /**
@@ -263,7 +302,9 @@ public class PlannerSettings {
         ByteSizeValue blockLoaderSizeOrdinals,
         ByteSizeValue blockLoaderSizeScript,
         int maxKeywordSortFields,
-        double sourceReservationFactor
+        double sourceReservationFactor,
+        ByteSizeValue bytesRefRamOverestimateThreshold,
+        double bytesRefRamOverestimateFactor
     ) {
         this.defaultDataPartitioning = defaultDataPartitioning;
         this.valuesLoadingJumboSize = valuesLoadingJumboSize;
@@ -276,6 +317,8 @@ public class PlannerSettings {
         this.blockLoaderSizeScript = blockLoaderSizeScript;
         this.maxKeywordSortFields = maxKeywordSortFields;
         this.sourceReservationFactor = sourceReservationFactor;
+        this.bytesRefRamOverestimateThreshold = bytesRefRamOverestimateThreshold;
+        this.bytesRefRamOverestimateFactor = bytesRefRamOverestimateFactor;
     }
 
     public PlannerSettings defaultDataPartitioning(DataPartitioning defaultDataPartitioning) {
@@ -290,7 +333,9 @@ public class PlannerSettings {
             blockLoaderSizeOrdinals,
             blockLoaderSizeScript,
             maxKeywordSortFields,
-            sourceReservationFactor
+            sourceReservationFactor,
+            bytesRefRamOverestimateThreshold,
+            bytesRefRamOverestimateFactor
         );
     }
 
@@ -310,7 +355,9 @@ public class PlannerSettings {
             blockLoaderSizeOrdinals,
             blockLoaderSizeScript,
             maxKeywordSortFields,
-            sourceReservationFactor
+            sourceReservationFactor,
+            bytesRefRamOverestimateThreshold,
+            bytesRefRamOverestimateFactor
         );
     }
 
@@ -330,7 +377,9 @@ public class PlannerSettings {
             blockLoaderSizeOrdinals,
             blockLoaderSizeScript,
             maxKeywordSortFields,
-            sourceReservationFactor
+            sourceReservationFactor,
+            bytesRefRamOverestimateThreshold,
+            bytesRefRamOverestimateFactor
         );
     }
 
@@ -364,7 +413,9 @@ public class PlannerSettings {
             blockLoaderSizeOrdinals,
             blockLoaderSizeScript,
             maxKeywordSortFields,
-            sourceReservationFactor
+            sourceReservationFactor,
+            bytesRefRamOverestimateThreshold,
+            bytesRefRamOverestimateFactor
         );
     }
 
@@ -384,7 +435,9 @@ public class PlannerSettings {
             blockLoaderSizeOrdinals,
             blockLoaderSizeScript,
             maxKeywordSortFields,
-            sourceReservationFactor
+            sourceReservationFactor,
+            bytesRefRamOverestimateThreshold,
+            bytesRefRamOverestimateFactor
         );
     }
 
@@ -404,7 +457,9 @@ public class PlannerSettings {
             blockLoaderSizeOrdinals,
             blockLoaderSizeScript,
             maxKeywordSortFields,
-            sourceReservationFactor
+            sourceReservationFactor,
+            bytesRefRamOverestimateThreshold,
+            bytesRefRamOverestimateFactor
         );
     }
 
@@ -424,7 +479,9 @@ public class PlannerSettings {
             blockLoaderSizeOrdinals,
             blockLoaderSizeScript,
             maxKeywordSortFields,
-            sourceReservationFactor
+            sourceReservationFactor,
+            bytesRefRamOverestimateThreshold,
+            bytesRefRamOverestimateFactor
         );
     }
 
@@ -451,7 +508,9 @@ public class PlannerSettings {
             blockLoaderSizeOrdinals,
             blockLoaderSizeScript,
             maxKeywordSortFields,
-            sourceReservationFactor
+            sourceReservationFactor,
+            bytesRefRamOverestimateThreshold,
+            bytesRefRamOverestimateFactor
         );
     }
 
@@ -474,7 +533,9 @@ public class PlannerSettings {
             blockLoaderSizeOrdinals,
             blockLoaderSizeScript,
             maxKeywordSortFields,
-            sourceReservationFactor
+            sourceReservationFactor,
+            bytesRefRamOverestimateThreshold,
+            bytesRefRamOverestimateFactor
         );
     }
 
@@ -497,7 +558,9 @@ public class PlannerSettings {
             blockLoaderSizeOrdinals,
             blockLoaderSizeScript,
             maxKeywordSortFields,
-            sourceReservationFactor
+            sourceReservationFactor,
+            bytesRefRamOverestimateThreshold,
+            bytesRefRamOverestimateFactor
         );
     }
 
@@ -517,11 +580,57 @@ public class PlannerSettings {
             blockLoaderSizeOrdinals,
             blockLoaderSizeScript,
             maxKeywordSortFields,
-            sourceReservationFactor
+            sourceReservationFactor,
+            bytesRefRamOverestimateThreshold,
+            bytesRefRamOverestimateFactor
         );
     }
 
     public double sourceReservationFactor() {
         return sourceReservationFactor;
+    }
+
+    public PlannerSettings bytesRefRamOverestimateThreshold(ByteSizeValue bytesRefRamOverestimateThreshold) {
+        return new PlannerSettings(
+            defaultDataPartitioning,
+            valuesLoadingJumboSize,
+            luceneTopNLimit,
+            intermediateLocalRelationMaxSize,
+            partialEmitKeysThreshold,
+            partialEmitUniquenessThreshold,
+            reuseColumnLoadersThreshold,
+            blockLoaderSizeOrdinals,
+            blockLoaderSizeScript,
+            maxKeywordSortFields,
+            sourceReservationFactor,
+            bytesRefRamOverestimateThreshold,
+            bytesRefRamOverestimateFactor
+        );
+    }
+
+    public ByteSizeValue bytesRefRamOverestimateThreshold() {
+        return bytesRefRamOverestimateThreshold;
+    }
+
+    public PlannerSettings bytesRefRamOverestimateFactor(double bytesRefRamOverestimateFactor) {
+        return new PlannerSettings(
+            defaultDataPartitioning,
+            valuesLoadingJumboSize,
+            luceneTopNLimit,
+            intermediateLocalRelationMaxSize,
+            partialEmitKeysThreshold,
+            partialEmitUniquenessThreshold,
+            reuseColumnLoadersThreshold,
+            blockLoaderSizeOrdinals,
+            blockLoaderSizeScript,
+            maxKeywordSortFields,
+            sourceReservationFactor,
+            bytesRefRamOverestimateThreshold,
+            bytesRefRamOverestimateFactor
+        );
+    }
+
+    public double bytesRefRamOverestimateFactor() {
+        return bytesRefRamOverestimateFactor;
     }
 }
