@@ -362,6 +362,7 @@ public class LookupFromIndexIT extends AbstractEsqlIntegTestCase {
                 PlannerSettings.SOURCE_RESERVATION_FACTOR.getDefault(Settings.EMPTY)
             );
             CancellableTask parentTask = new EsqlQueryTask(
+                "test-session",
                 1,
                 "test",
                 "test",
