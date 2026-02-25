@@ -13,6 +13,11 @@ import org.elasticsearch.xpack.esql.core.expression.Attribute;
 import org.elasticsearch.xpack.esql.core.expression.Literal;
 import org.elasticsearch.xpack.esql.core.expression.MetadataAttribute;
 import org.elasticsearch.xpack.esql.core.expression.NamedExpression;
+import org.elasticsearch.xpack.esql.expression.predicate.logical.And;
+import org.elasticsearch.xpack.esql.expression.predicate.logical.Not;
+import org.elasticsearch.xpack.esql.expression.predicate.operator.comparison.GreaterThan;
+import org.elasticsearch.xpack.esql.expression.predicate.operator.comparison.In;
+import org.elasticsearch.xpack.esql.expression.predicate.operator.comparison.InSubquery;
 import org.elasticsearch.xpack.esql.expression.predicate.operator.comparison.LessThan;
 import org.elasticsearch.xpack.esql.plan.logical.Aggregate;
 import org.elasticsearch.xpack.esql.plan.logical.ChangePoint;
@@ -1116,5 +1121,179 @@ public class SubqueryTests extends AbstractStatementParserTests {
             """, mainIndexPattern, subqueryIndexPattern);
 
         expectThrows(ParsingException.class, containsString("line 1:2: Subqueries are not supported in TS command"), () -> query(query));
+    }
+
+    // ---- WHERE IN subquery tests ----
+
+    /**
+     * Basic WHERE x IN (FROM subquery_index) test.
+     *
+     * Filter[InSubquery[?x, subquery_plan]]
+     *   \_UnresolvedRelation[]
+     */
+    public void testWhereInSubqueryBasic() {
+        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.SUBQUERY_IN_WHERE_IN.isEnabled());
+        String query = "FROM main_index | WHERE x IN (FROM sub_index)";
+
+        LogicalPlan plan = query(query);
+        Filter filter = as(plan, Filter.class);
+        InSubquery inSubquery = as(filter.condition(), InSubquery.class);
+        Attribute value = as(inSubquery.value(), Attribute.class);
+        assertEquals("x", value.name());
+
+        UnresolvedRelation subqueryRelation = as(inSubquery.subquery(), UnresolvedRelation.class);
+        assertEquals("sub_index", subqueryRelation.indexPattern().indexPattern());
+
+        UnresolvedRelation mainRelation = as(filter.child(), UnresolvedRelation.class);
+        assertEquals("main_index", mainRelation.indexPattern().indexPattern());
+    }
+
+    /**
+     * WHERE x NOT IN (FROM subquery_index) test.
+     *
+     * Filter[Not[InSubquery[?x, subquery_plan]]]
+     *   \_UnresolvedRelation[]
+     */
+    public void testWhereNotInSubquery() {
+        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.SUBQUERY_IN_WHERE_IN.isEnabled());
+        String query = "FROM main_index | WHERE x NOT IN (FROM sub_index)";
+
+        LogicalPlan plan = query(query);
+        Filter filter = as(plan, Filter.class);
+        Not not = as(filter.condition(), Not.class);
+        InSubquery inSubquery = as(not.field(), InSubquery.class);
+        Attribute value = as(inSubquery.value(), Attribute.class);
+        assertEquals("x", value.name());
+
+        UnresolvedRelation subqueryRelation = as(inSubquery.subquery(), UnresolvedRelation.class);
+        assertEquals("sub_index", subqueryRelation.indexPattern().indexPattern());
+    }
+
+    /**
+     * WHERE x IN (FROM subquery_index | WHERE y > 10 | KEEP z) with processing commands in subquery.
+     *
+     * Filter[InSubquery[?x, Keep[Filter[...]]]]
+     *   \_UnresolvedRelation[]
+     */
+    public void testWhereInSubqueryWithProcessingCommands() {
+        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.SUBQUERY_IN_WHERE_IN.isEnabled());
+        String query = "FROM main_index | WHERE x IN (FROM sub_index | WHERE y > 10 | KEEP z)";
+
+        LogicalPlan plan = query(query);
+        Filter filter = as(plan, Filter.class);
+        InSubquery inSubquery = as(filter.condition(), InSubquery.class);
+        Attribute value = as(inSubquery.value(), Attribute.class);
+        assertEquals("x", value.name());
+
+        Keep keep = as(inSubquery.subquery(), Keep.class);
+        Filter subqueryFilter = as(keep.child(), Filter.class);
+        UnresolvedRelation subqueryRelation = as(subqueryFilter.child(), UnresolvedRelation.class);
+        assertEquals("sub_index", subqueryRelation.indexPattern().indexPattern());
+
+        UnresolvedRelation mainRelation = as(filter.child(), UnresolvedRelation.class);
+        assertEquals("main_index", mainRelation.indexPattern().indexPattern());
+    }
+
+    /**
+     * WHERE x IN (FROM subquery_index | STATS count = COUNT(*) BY y) with aggregation in subquery.
+     *
+     * Filter[InSubquery[?x, Aggregate[...]]]
+     *   \_UnresolvedRelation[]
+     */
+    public void testWhereInSubqueryWithAggregation() {
+        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.SUBQUERY_IN_WHERE_IN.isEnabled());
+        String query = "FROM main_index | WHERE x IN (FROM sub_index | STATS count = COUNT(*) BY y)";
+
+        LogicalPlan plan = query(query);
+        Filter filter = as(plan, Filter.class);
+        InSubquery inSubquery = as(filter.condition(), InSubquery.class);
+
+        Aggregate aggregate = as(inSubquery.subquery(), Aggregate.class);
+        UnresolvedRelation subqueryRelation = as(aggregate.child(), UnresolvedRelation.class);
+        assertEquals("sub_index", subqueryRelation.indexPattern().indexPattern());
+    }
+
+    /**
+     * WHERE IN subquery combined with other boolean expressions.
+     *
+     * Filter[And[GreaterThan[?a, 5], InSubquery[?x, ...]]]
+     *   \_UnresolvedRelation[]
+     */
+    public void testWhereInSubqueryWithOtherConditions() {
+        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.SUBQUERY_IN_WHERE_IN.isEnabled());
+        String query = "FROM main_index | WHERE a > 5 AND x IN (FROM sub_index | KEEP y)";
+
+        LogicalPlan plan = query(query);
+        Filter filter = as(plan, Filter.class);
+        And and = as(filter.condition(), And.class);
+        as(and.left(), GreaterThan.class);
+        InSubquery inSubquery = as(and.right(), InSubquery.class);
+        Attribute value = as(inSubquery.value(), Attribute.class);
+        assertEquals("x", value.name());
+    }
+
+    /**
+     * Existing value list IN still works after the grammar changes.
+     */
+    public void testWhereInValueListStillWorks() {
+        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.SUBQUERY_IN_WHERE_IN.isEnabled());
+        String query = "FROM main_index | WHERE x IN (1, 2, 3)";
+
+        LogicalPlan plan = query(query);
+        Filter filter = as(plan, Filter.class);
+        In in = as(filter.condition(), In.class);
+        Attribute value = as(in.value(), Attribute.class);
+        assertEquals("x", value.name());
+        assertEquals(3, in.list().size());
+    }
+
+    /**
+     * WHERE IN subquery with multiple pipes in the subquery.
+     */
+    public void testWhereInSubqueryMultiplePipes() {
+        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.SUBQUERY_IN_WHERE_IN.isEnabled());
+        String query = """
+            FROM main_index
+            | WHERE x IN (FROM sub_index | WHERE a > 1 | EVAL b = a * 2 | SORT b | LIMIT 10 | KEEP b)
+            """;
+
+        LogicalPlan plan = query(query);
+        Filter filter = as(plan, Filter.class);
+        InSubquery inSubquery = as(filter.condition(), InSubquery.class);
+
+        Keep keep = as(inSubquery.subquery(), Keep.class);
+        Limit limit = as(keep.child(), Limit.class);
+        OrderBy orderBy = as(limit.child(), OrderBy.class);
+        Eval eval = as(orderBy.child(), Eval.class);
+        Filter subqueryFilter = as(eval.child(), Filter.class);
+        UnresolvedRelation subqueryRelation = as(subqueryFilter.child(), UnresolvedRelation.class);
+        assertEquals("sub_index", subqueryRelation.indexPattern().indexPattern());
+    }
+
+    /**
+     * WHERE IN subquery ends with different modes to verify lexer mode transitions.
+     */
+    public void testWhereInSubqueryEndsWithDifferentModes() {
+        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.SUBQUERY_IN_WHERE_IN.isEnabled());
+        List<String> processingCommands = List.of(
+            "WHERE a > 10",
+            "EVAL b = a * 2",
+            "KEEP x",
+            "DROP y",
+            "SORT a",
+            "LIMIT 10",
+            "STATS cnt = COUNT(*) BY a",
+            "RENAME a AS b",
+            "MV_EXPAND m"
+        );
+        for (String processingCommand : processingCommands) {
+            String query = LoggerMessageFormat.format(null, """
+                FROM main_index | WHERE x IN (FROM sub_index | {})
+                """, processingCommand);
+
+            LogicalPlan plan = query(query);
+            Filter filter = as(plan, Filter.class);
+            as(filter.condition(), InSubquery.class);
+        }
     }
 }

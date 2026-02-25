@@ -80,6 +80,7 @@ import org.elasticsearch.xpack.esql.plan.SettingsValidationContext;
 import org.elasticsearch.xpack.esql.plan.logical.Explain;
 import org.elasticsearch.xpack.esql.plan.logical.LogicalPlan;
 import org.elasticsearch.xpack.esql.plan.logical.join.InlineJoin;
+import org.elasticsearch.xpack.esql.plan.logical.join.SemiJoin;
 import org.elasticsearch.xpack.esql.plan.logical.local.LocalRelation;
 import org.elasticsearch.xpack.esql.plan.logical.local.LocalSupplier;
 import org.elasticsearch.xpack.esql.plan.logical.promql.PromqlCommand;
@@ -108,11 +109,11 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiFunction;
 
 import static java.util.stream.Collectors.toSet;
 import static org.elasticsearch.xpack.esql.core.tree.Source.EMPTY;
 import static org.elasticsearch.xpack.esql.plan.QuerySettings.UNMAPPED_FIELDS;
-import static org.elasticsearch.xpack.esql.plan.logical.join.InlineJoin.firstSubPlan;
 import static org.elasticsearch.xpack.esql.session.SessionUtils.checkPagesBelowSize;
 
 /**
@@ -419,6 +420,29 @@ public class EsqlSession {
         }
     }
 
+    /**
+     * Holds the information needed to execute a subplan and inline its result back into the main plan.
+     *
+     * @param planToExecute the logical subplan to execute
+     * @param resultInliner given the current optimized plan and the subplan result, produces a new main plan
+     */
+    record SubPlanExecution(LogicalPlan planToExecute, BiFunction<LogicalPlan, LocalRelation, LogicalPlan> resultInliner) {}
+
+    static SubPlanExecution findFirstSubPlan(LogicalPlan optimizedPlan, Set<LocalRelation> subPlansResults) {
+        var semiJoinTuple = SemiJoin.firstSubPlan(optimizedPlan, subPlansResults);
+        if (semiJoinTuple != null) {
+            return new SubPlanExecution(semiJoinTuple.subPlan(), (plan, result) -> SemiJoin.newMainPlan(plan, semiJoinTuple, result));
+        }
+        var inlineJoinTuple = InlineJoin.firstSubPlan(optimizedPlan, subPlansResults);
+        if (inlineJoinTuple != null) {
+            return new SubPlanExecution(
+                inlineJoinTuple.stubReplacedSubPlan(),
+                (plan, result) -> newInlineJoinMainPlan(plan, inlineJoinTuple, result)
+            );
+        }
+        return null;
+    }
+
     private void executeSubPlans(
         LogicalPlan optimizedPlan,
         Configuration configuration,
@@ -433,7 +457,7 @@ public class EsqlSession {
         ActionListener<Result> listener
     ) {
         var subPlansResults = new HashSet<LocalRelation>();
-        var subPlan = firstSubPlan(optimizedPlan, subPlansResults);
+        var subPlan = findFirstSubPlan(optimizedPlan, subPlansResults);
 
         // TODO: merge into one method
         if (subPlan != null) {
@@ -476,7 +500,7 @@ public class EsqlSession {
     private void executeSubPlan(
         DriverCompletionInfo.Accumulator completionInfoAccumulator,
         LogicalPlan optimizedPlan,
-        InlineJoin.LogicalPlanTuple subPlans,
+        SubPlanExecution subPlanExec,
         Configuration configuration,
         FoldContext foldContext,
         EsqlExecutionInfo executionInfo,
@@ -487,29 +511,25 @@ public class EsqlSession {
         PlanTimeProfile planTimeProfile,
         ActionListener<Result> listener
     ) {
-        LOGGER.debug("Executing subplan:\n{}", subPlans.stubReplacedSubPlan());
-        // Create a physical plan out of the logical sub-plan
-        var physicalSubPlan = logicalPlanToPhysicalPlan(subPlans.stubReplacedSubPlan(), request, physicalPlanOptimizer, planTimeProfile);
+        LOGGER.debug("Executing subplan:\n{}", subPlanExec.planToExecute());
+        var physicalSubPlan = logicalPlanToPhysicalPlan(subPlanExec.planToExecute(), request, physicalPlanOptimizer, planTimeProfile);
 
         executionInfo.startSubPlans();
 
         runner.run(physicalSubPlan, configuration, foldContext, planTimeProfile, listener.delegateFailureAndWrap((next, result) -> {
             AtomicReference<Page> localRelationPage = new AtomicReference<>();
             try {
-                // Translate the subquery into a separate, coordinator based plan and the results 'broadcasted' as a local relation
                 completionInfoAccumulator.accumulate(result.completionInfo());
-                LocalRelation resultWrapper = resultToPlan(subPlans.stubReplacedSubPlan().source(), result);
+                LocalRelation resultWrapper = resultToPlan(subPlanExec.planToExecute().source(), result);
                 localRelationPage.set(resultWrapper.supplier().get());
                 var releasingNext = ActionListener.runAfter(next, () -> releaseLocalRelationBlocks(localRelationPage));
                 subPlansResults.add(resultWrapper);
 
-                // replace the original logical plan with the backing result
-                LogicalPlan newMainPlan = newMainPlan(optimizedPlan, subPlans, resultWrapper);
+                LogicalPlan newMainPlan = subPlanExec.resultInliner().apply(optimizedPlan, resultWrapper);
 
-                // look for the next inlinejoin plan
-                var newSubPlan = firstSubPlan(newMainPlan, subPlansResults);
+                var newSubPlan = findFirstSubPlan(newMainPlan, subPlansResults);
 
-                if (newSubPlan == null) {// run the final "main" plan
+                if (newSubPlan == null) {
                     executionInfo.finishSubPlans();
                     LOGGER.debug("Executing final plan:\n{}", newMainPlan);
                     var newPhysicalPlan = logicalPlanToPhysicalPlan(newMainPlan, request, physicalPlanOptimizer, planTimeProfile);
@@ -531,7 +551,7 @@ public class EsqlSession {
                             );
                         })
                     );
-                } else {// continue executing the subplans
+                } else {
                     executeSubPlan(
                         completionInfoAccumulator,
                         newMainPlan,
@@ -548,8 +568,6 @@ public class EsqlSession {
                     );
                 }
             } catch (Exception e) {
-                // safely release the blocks in case an exception occurs either before, but also after the "final" runner.run() forks off
-                // the current thread, but with the blocks still referenced
                 releaseLocalRelationBlocks(localRelationPage);
                 throw e;
             } finally {
@@ -558,14 +576,15 @@ public class EsqlSession {
         }));
     }
 
-    public static LogicalPlan newMainPlan(LogicalPlan optimizedPlan, InlineJoin.LogicalPlanTuple subPlans, LocalRelation resultWrapper) {
+    public static LogicalPlan newInlineJoinMainPlan(
+        LogicalPlan optimizedPlan,
+        InlineJoin.LogicalPlanTuple subPlans,
+        LocalRelation resultWrapper
+    ) {
         LogicalPlan newLogicalPlan = optimizedPlan.transformUp(
             InlineJoin.class,
-            // use object equality since the right-hand side shouldn't have changed in the optimizedPlan at this point
-            // and equals would have ignored name IDs anyway
             ij -> ij.right() == subPlans.originalSubPlan() ? InlineJoin.inlineData(ij, resultWrapper) : ij
         );
-        // TODO: INLINE STATS can we do better here and further optimize the plan AFTER one of the subplans executed?
         newLogicalPlan.setOptimized();
         if (LOGGER.isTraceEnabled()) {
             LOGGER.trace("Main plan change after previous subplan execution:\n{}", NodeUtils.diffString(optimizedPlan, newLogicalPlan));

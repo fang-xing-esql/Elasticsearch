@@ -58,4 +58,39 @@ public abstract class LexerConfig extends Lexer {
     boolean isPromqlQuery() {
         return promqlDepth > 0;
     }
+
+    /**
+     * Look ahead past '(' and whitespace to check whether the next word is a source command keyword.
+     * Used by IN_SUBQUERY_LP in IN_MODE to determine whether '(' starts a subquery (push DEFAULT_MODE) or a value list
+     * (push EXPRESSION_MODE).
+     */
+    boolean isNextSourceCommand() {
+        int offset = 2; // LA(1) is '(', start scanning from LA(2)
+        while (true) {
+            int c = _input.LA(offset);
+            if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
+                offset++;
+            } else {
+                break;
+            }
+        }
+        return matchesKeywordAtOffset(offset, "from")
+            || matchesKeywordAtOffset(offset, "row")
+            || matchesKeywordAtOffset(offset, "show")
+            || matchesKeywordAtOffset(offset, "ts");
+    }
+
+    private boolean matchesKeywordAtOffset(int offset, String keyword) {
+        for (int i = 0; i < keyword.length(); i++) {
+            int c = _input.LA(offset + i);
+            if (c == -1) {
+                return false;
+            }
+            if (Character.toLowerCase(c) != keyword.charAt(i)) {
+                return false;
+            }
+        }
+        int next = _input.LA(offset + keyword.length());
+        return next == -1 || (Character.isLetterOrDigit(next) == false && next != '_');
+    }
 }

@@ -233,7 +233,9 @@ public class Join extends BinaryPlan implements PostAnalysisVerificationAware, S
         JoinType joinType = config.type();
         List<NamedExpression> output;
         // TODO: make the other side nullable
-        if (LEFT.equals(joinType)) {
+        if (JoinTypes.SEMI.equals(joinType) || JoinTypes.ANTI.equals(joinType)) {
+            output = new ArrayList<>(leftOutput);
+        } else if (LEFT.equals(joinType)) {
             if (config.joinOnConditions() == null) {
                 // right side becomes nullable and overrides left except for join keys, which we preserve from the left
                 AttributeSet rightKeys = AttributeSet.of(config.rightFields());

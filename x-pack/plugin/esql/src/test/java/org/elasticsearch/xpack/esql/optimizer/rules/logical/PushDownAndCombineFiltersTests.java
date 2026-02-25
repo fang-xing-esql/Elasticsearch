@@ -89,7 +89,7 @@ import static org.elasticsearch.xpack.esql.EsqlTestUtils.rlike;
 import static org.elasticsearch.xpack.esql.EsqlTestUtils.wildcardLike;
 import static org.elasticsearch.xpack.esql.core.tree.Source.EMPTY;
 import static org.elasticsearch.xpack.esql.plan.logical.join.InlineJoin.firstSubPlan;
-import static org.elasticsearch.xpack.esql.session.EsqlSession.newMainPlan;
+import static org.elasticsearch.xpack.esql.session.EsqlSession.newInlineJoinMainPlan;
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.instanceOf;
@@ -1588,7 +1588,7 @@ public class PushDownAndCombineFiltersTests extends AbstractLogicalPlanOptimizer
         var resultWrapper = new LocalRelation(subPlans.stubReplacedSubPlan().source(), schema, LocalSupplier.of(new Page(blocks)));
         subPlansResults.add(resultWrapper);
         // this is Second InlineJoin stubReplacedSubPlan
-        firstSubPlan = firstSubPlan(newMainPlan(plan, subPlans, resultWrapper), subPlansResults).stubReplacedSubPlan();
+        firstSubPlan = firstSubPlan(newInlineJoinMainPlan(plan, subPlans, resultWrapper), subPlansResults).stubReplacedSubPlan();
 
         // first InlineJoin right side
         var right = as(ij.right(), Project.class);
@@ -1744,7 +1744,7 @@ public class PushDownAndCombineFiltersTests extends AbstractLogicalPlanOptimizer
         );
         var resultWrapper = new LocalRelation(subPlans.stubReplacedSubPlan().source(), schema, LocalSupplier.of(new Page(blocks)));
         subPlansResults.add(resultWrapper);
-        LogicalPlan newMainPlan = newMainPlan(plan, subPlans, resultWrapper);
+        LogicalPlan newMainPlan = newInlineJoinMainPlan(plan, subPlans, resultWrapper);
         // this is Second InlineJoin stubReplacedSubPlan
         firstSubPlan = firstSubPlan(newMainPlan, subPlansResults).stubReplacedSubPlan();
 
@@ -1902,7 +1902,7 @@ public class PushDownAndCombineFiltersTests extends AbstractLogicalPlanOptimizer
         );
         var resultWrapper = new LocalRelation(subPlans.stubReplacedSubPlan().source(), schema, LocalSupplier.of(new Page(blocks)));
         subPlansResults.add(resultWrapper);
-        LogicalPlan newMainPlan = newMainPlan(plan, subPlans, resultWrapper);
+        LogicalPlan newMainPlan = newInlineJoinMainPlan(plan, subPlans, resultWrapper);
         // this is Second InlineJoin stubReplacedSubPlan
         firstSubPlan = firstSubPlan(newMainPlan, subPlansResults).stubReplacedSubPlan();
 
@@ -2082,7 +2082,7 @@ public class PushDownAndCombineFiltersTests extends AbstractLogicalPlanOptimizer
         );
         var resultWrapper = new LocalRelation(subPlans.stubReplacedSubPlan().source(), schema, LocalSupplier.of(new Page(blocks)));
         subPlansResults.add(resultWrapper);
-        LogicalPlan newMainPlan = newMainPlan(plan, subPlans, resultWrapper);
+        LogicalPlan newMainPlan = newInlineJoinMainPlan(plan, subPlans, resultWrapper);
         // this is Second InlineJoin stubReplacedSubPlan
         firstSubPlan = firstSubPlan(newMainPlan, subPlansResults).stubReplacedSubPlan();
 
@@ -2285,7 +2285,7 @@ public class PushDownAndCombineFiltersTests extends AbstractLogicalPlanOptimizer
         );
         var resultWrapper = new LocalRelation(subPlans.stubReplacedSubPlan().source(), schema, LocalSupplier.of(new Page(blocks)));
         subPlansResults.add(resultWrapper);
-        LogicalPlan newMainPlan = newMainPlan(plan, subPlans, resultWrapper);
+        LogicalPlan newMainPlan = newInlineJoinMainPlan(plan, subPlans, resultWrapper);
         // this is Second InlineJoin stubReplacedSubPlan
         firstSubPlan = firstSubPlan(newMainPlan, subPlansResults).stubReplacedSubPlan();
 

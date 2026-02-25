@@ -65,10 +65,12 @@ import org.elasticsearch.xpack.esql.expression.predicate.operator.comparison.Equ
 import org.elasticsearch.xpack.esql.expression.predicate.operator.comparison.GreaterThan;
 import org.elasticsearch.xpack.esql.expression.predicate.operator.comparison.GreaterThanOrEqual;
 import org.elasticsearch.xpack.esql.expression.predicate.operator.comparison.In;
+import org.elasticsearch.xpack.esql.expression.predicate.operator.comparison.InSubquery;
 import org.elasticsearch.xpack.esql.expression.predicate.operator.comparison.InsensitiveEquals;
 import org.elasticsearch.xpack.esql.expression.predicate.operator.comparison.LessThan;
 import org.elasticsearch.xpack.esql.expression.predicate.operator.comparison.LessThanOrEqual;
 import org.elasticsearch.xpack.esql.inference.InferenceSettings;
+import org.elasticsearch.xpack.esql.plan.logical.LogicalPlan;
 import org.elasticsearch.xpack.esql.telemetry.PlanTelemetry;
 import org.elasticsearch.xpack.esql.type.EsqlDataTypeConverter;
 
@@ -835,6 +837,15 @@ public abstract class ExpressionBuilder extends IdentifierBuilder {
         Expression e = expressions.size() == 2
             ? new Equals(source, expressions.get(0), expressions.get(1))
             : new In(source, expressions.get(0), expressions.subList(1, expressions.size()));
+        return ctx.NOT() == null ? e : new Not(source, e);
+    }
+
+    @Override
+    public Expression visitLogicalInSubquery(EsqlBaseParser.LogicalInSubqueryContext ctx) {
+        Expression value = expression(ctx.valueExpression());
+        LogicalPlan subqueryPlan = (LogicalPlan) visit(ctx.subquery());
+        Source source = source(ctx);
+        Expression e = new InSubquery(source, value, subqueryPlan);
         return ctx.NOT() == null ? e : new Not(source, e);
     }
 
