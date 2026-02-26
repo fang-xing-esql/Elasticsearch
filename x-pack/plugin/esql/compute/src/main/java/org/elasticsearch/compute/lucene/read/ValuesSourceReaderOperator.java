@@ -249,9 +249,6 @@ public class ValuesSourceReaderOperator extends AbstractPageMappingToIteratorOpe
      * prevents further loading, limiting concurrent large _source operations.
      */
     void acquireSourceLoadingReservation() {
-        if (lastKnownSourceSize <= jumboBytes) {
-            return;
-        }
         long needed = (long) (lastKnownSourceSize * sourceReservationFactor);
         long additional = needed - sourceLoadingReservation;
         if (additional > 0) {
