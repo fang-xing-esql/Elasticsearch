@@ -187,7 +187,7 @@ public class PlannerSettings {
      */
     public static final Setting<Double> BYTES_REF_RAM_OVERESTIMATE_FACTOR = Setting.doubleSetting(
         "esql.bytes_ref_ram_overestimate_factor",
-        2.0,
+        2.5,
         1.0,
         Setting.Property.NodeScope,
         Setting.Property.Dynamic
