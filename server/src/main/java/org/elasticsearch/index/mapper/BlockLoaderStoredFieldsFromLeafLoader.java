@@ -24,12 +24,6 @@ public class BlockLoaderStoredFieldsFromLeafLoader implements BlockLoader.Stored
     private int loaderDocId = -1;
     private int sourceDocId = -1;
 
-    /**
-     * The byte size of the last loaded source. Used by callers to estimate untracked memory
-     * overhead from source parsing (Java Strings use ~2x the raw byte size).
-     */
-    private long lastSourceBytesSize;
-
     public BlockLoaderStoredFieldsFromLeafLoader(LeafStoredFieldLoader loader, SourceLoader.Leaf sourceLoader) {
         this.loader = loader;
         this.sourceLoader = sourceLoader;
@@ -55,7 +49,6 @@ public class BlockLoaderStoredFieldsFromLeafLoader implements BlockLoader.Stored
             if (sourceDocId != docId) {
                 source = sourceLoader.source(loader, docId);
                 sourceDocId = docId;
-                lastSourceBytesSize = source != null && source.internalSourceRef() != null ? source.internalSourceRef().length() : 0;
             }
         }
         return source;
@@ -90,7 +83,7 @@ public class BlockLoaderStoredFieldsFromLeafLoader implements BlockLoader.Stored
      * approximately 2x the raw byte size due to UTF-16 encoding).
      */
     public long lastSourceBytesSize() {
-        return lastSourceBytesSize;
+        return source != null && source.internalSourceRef() != null ? source.internalSourceRef().length() : 0;
     }
 
     /**
@@ -102,6 +95,5 @@ public class BlockLoaderStoredFieldsFromLeafLoader implements BlockLoader.Stored
     public void releaseParsedSource() {
         source = null;
         sourceDocId = -1;
-        lastSourceBytesSize = 0;
     }
 }

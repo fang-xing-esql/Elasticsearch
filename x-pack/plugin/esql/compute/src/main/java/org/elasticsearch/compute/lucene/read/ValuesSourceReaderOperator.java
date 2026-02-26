@@ -27,6 +27,7 @@ import org.elasticsearch.core.Releasable;
 import org.elasticsearch.core.ReleasableIterator;
 import org.elasticsearch.core.Releasables;
 import org.elasticsearch.index.mapper.BlockLoader;
+import org.elasticsearch.index.mapper.BlockLoaderStoredFieldsFromLeafLoader;
 import org.elasticsearch.index.mapper.SourceLoader;
 import org.elasticsearch.index.mapper.blockloader.ConstantNull;
 import org.elasticsearch.logging.LogManager;
@@ -170,6 +171,15 @@ public class ValuesSourceReaderOperator extends AbstractPageMappingToIteratorOpe
     private final boolean reuseColumnLoaders;
     private final int docChannel;
 
+    /**
+     * Multiplier applied to {@link #lastKnownSourceSize} to pre-reserve memory on the circuit
+     * breaker before loading {@code _source}. A factor of 3.0 covers the large untracked
+     * allocations from source parsing such as the scratch buffer, SourceFilter.filterBytes() and
+     * JSON parsing overhead. This is a heuristic and can be adjusted based on observed
+     * memory usage patterns.
+     */
+    final double sourceReservationFactor;
+
     private final Map<String, Integer> readersBuilt = new TreeMap<>();
     long valuesLoaded;
 
@@ -182,16 +192,7 @@ public class ValuesSourceReaderOperator extends AbstractPageMappingToIteratorOpe
      * document in a page. On a 512MB JVM, jumboBytes is ~512KB, so each 5MB text field
      * creates a 1-doc page. Without persisting this, every page starts with 0 reservation.
      */
-    volatile long lastKnownSourceSize;
-
-    /**
-     * Multiplier applied to {@link #lastKnownSourceSize} to pre-reserve memory on the circuit
-     * breaker before loading {@code _source}. A factor of 3.0 covers the large untracked
-     * allocations from source parsing such as the scratch buffer, SourceFilter.filterBytes() and
-     * JSON parsing overhead. This is a heuristic and can be adjusted based on observed
-     * memory usage patterns.
-     */
-    final double sourceReservationFactor;
+    long lastKnownSourceSize;
 
     /**
      * Persistent reservation on the circuit breaker for the expected overhead of _source
@@ -257,6 +258,19 @@ public class ValuesSourceReaderOperator extends AbstractPageMappingToIteratorOpe
             driverContext.blockFactory().adjustBreaker(additional);
             sourceLoadingReservation = needed;
         }
+    }
+
+    /**
+     * Updates the source loading reservation if the source bytes from the current document
+     * exceed what we've seen before, then releases the parsed source to free memory.
+     */
+    void trackSourceBytesAndRelease(BlockLoaderStoredFieldsFromLeafLoader storedFields) {
+        long sourceBytes = storedFields.lastSourceBytesSize();
+        if (sourceBytes > lastKnownSourceSize) {
+            lastKnownSourceSize = sourceBytes;
+            acquireSourceLoadingReservation();
+        }
+        storedFields.releaseParsedSource();
     }
 
     void positionFieldWork(int shard, int segment, int firstDoc) {

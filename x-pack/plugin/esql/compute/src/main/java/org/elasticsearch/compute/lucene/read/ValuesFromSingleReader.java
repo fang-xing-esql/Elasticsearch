@@ -159,12 +159,7 @@ class ValuesFromSingleReader extends ValuesReader {
             for (RowStrideReaderWork work : rowStrideReaders) {
                 work.read(doc, storedFields);
             }
-            long sourceBytes = storedFields.lastSourceBytesSize();
-            if (sourceBytes > operator.lastKnownSourceSize) {
-                operator.lastKnownSourceSize = sourceBytes;
-                operator.acquireSourceLoadingReservation();
-            }
-            storedFields.releaseParsedSource();
+            operator.trackSourceBytesAndRelease(storedFields);
             estimated = estimatedRamBytesUsed(rowStrideReaders);
             log.trace("{}: bytes loaded {}/{}", p, estimated, jumboBytes);
         }

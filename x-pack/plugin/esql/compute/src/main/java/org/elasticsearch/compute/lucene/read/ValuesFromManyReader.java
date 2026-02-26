@@ -157,12 +157,7 @@ class ValuesFromManyReader extends ValuesReader {
                 assert r.columnAtATime == null;
                 r.rowStride.read(doc, storedFields, r.builder);
             }
-            long sourceBytes = storedFields.lastSourceBytesSize();
-            if (sourceBytes > operator.lastKnownSourceSize) {
-                operator.lastKnownSourceSize = sourceBytes;
-                operator.acquireSourceLoadingReservation();
-            }
-            storedFields.releaseParsedSource();
+            operator.trackSourceBytesAndRelease(storedFields);
         }
 
         private void readColumnAtATime(int segmentStart, int segmentEnd) throws IOException {
