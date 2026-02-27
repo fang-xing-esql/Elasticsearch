@@ -254,6 +254,9 @@ public class ValuesSourceReaderOperator extends AbstractPageMappingToIteratorOpe
         if (additional > 0) {
             driverContext.blockFactory().adjustBreaker(additional);
             sourceLoadingReservation = needed;
+            if (log.isDebugEnabled()) {
+                log.debug("reserve {}/{} bytes on circuit breaker for source loading", additional, sourceLoadingReservation);
+            }
         }
     }
 
@@ -330,6 +333,9 @@ public class ValuesSourceReaderOperator extends AbstractPageMappingToIteratorOpe
         if (sourceLoadingReservation > 0) {
             driverContext.blockFactory().adjustBreaker(-sourceLoadingReservation);
             sourceLoadingReservation = 0;
+            if (log.isDebugEnabled()) {
+                log.debug("release {} bytes from circuit breaker after source loading", sourceLoadingReservation);
+            }
         }
         Releasables.close(super::close, converterEvaluators, Releasables.wrap(fields));
     }

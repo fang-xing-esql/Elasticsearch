@@ -19,11 +19,13 @@ import org.elasticsearch.common.util.BigArrays;
 import org.elasticsearch.common.util.BytesRefArray;
 import org.elasticsearch.compute.test.ComputeTestCase;
 import org.elasticsearch.core.Releasables;
+import org.elasticsearch.core.Tuple;
 import org.hamcrest.Matcher;
 
 import java.lang.reflect.Field;
 import java.util.BitSet;
 import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 import java.util.stream.IntStream;
 
@@ -472,5 +474,85 @@ public class BlockAccountingTests extends ComputeTestCase {
 
     static long ramBytesForDoubleArray(int length) {
         return alignObjectSize((long) Long.BYTES * length);
+    }
+
+    public void testBytesRefArrayVectorRamOverestimate() {
+        // Test that the overestimate factor is applied when value length is above the threshold, and not applied when it is below.
+        for (Integer valueLength : List.of(5, Math.toIntExact(ByteSizeValue.ofKb(1).getBytes()))) {
+            Tuple<BytesRefVector, Long> vectorAndSize = bytesRefArrayVector(valueLength);
+            BytesRefVector vector = vectorAndSize.v1();
+            long valueSize = vectorAndSize.v2();
+
+            long base = BytesRefArrayVector.BASE_RAM_BYTES_USED;
+            long expectedSize = valueSize <= blockFactory().bytesRefRamOverestimateThreshold()
+                ? valueSize
+                : Math.round(valueSize * blockFactory().bytesRefRamOverestimateFactor());
+            assertEquals(vector.ramBytesUsed(), base + expectedSize);
+            Releasables.close(vector);
+        }
+    }
+
+    private Tuple<BytesRefVector, Long> bytesRefArrayVector(int valueLength) {
+        BlockFactory blockFactory = blockFactory();
+        var values = new BytesRefArray(0, blockFactory.bigArrays());
+        int positionCount = 1100;
+        for (int i = 0; i < positionCount; i++) {
+            values.append(new BytesRef(randomAlphaOfLength(valueLength)));
+        }
+        return Tuple.tuple(blockFactory.newBytesRefArrayVector(values, positionCount), RamUsageEstimator.sizeOf(values));
+    }
+
+    public void testConstantBytesRefVectorRamOverestimate() {
+        // Test that the overestimate factor is applied when value length is above the threshold, and not applied when it is below.
+        for (Integer valueLength : List.of(5, Math.toIntExact(ByteSizeValue.ofMb(2).getBytes()))) {
+            Tuple<BytesRefVector, Long> vectorAndSize = constantBytesRefVector(valueLength);
+            BytesRefVector vector = vectorAndSize.v1();
+            long valueSize = vectorAndSize.v2();
+
+            long base = ConstantBytesRefVector.BASE_RAM_BYTES_USED;
+            long expectedSize = valueSize <= blockFactory().bytesRefRamOverestimateThreshold()
+                ? valueSize
+                : Math.round(valueSize * blockFactory().bytesRefRamOverestimateFactor());
+            assertEquals(vector.ramBytesUsed(), base + expectedSize);
+            Releasables.close(vector);
+        }
+    }
+
+    private Tuple<BytesRefVector, Long> constantBytesRefVector(int valueLength) {
+        BlockFactory blockFactory = blockFactory();
+        BytesRef value = new BytesRef(randomAlphaOfLength(valueLength));
+        return Tuple.tuple(
+            blockFactory.newConstantBytesRefVector(value, 1),
+            RamUsageEstimator.alignObjectSize(RamUsageEstimator.NUM_BYTES_ARRAY_HEADER + value.length)
+        );
+    }
+
+    public void testBytesRefArrayBlockRamOverestimate() {
+        // Test that the overestimate factor is applied when value length is above the threshold, and not applied when it is below.
+        for (Integer valueLength : List.of(5, Math.toIntExact(ByteSizeValue.ofKb(1).getBytes()))) {
+            Tuple<BytesRefBlock, Long> blockAndSize = bytesRefArrayBlock(valueLength);
+            BytesRefBlock block = blockAndSize.v1();
+            long valueSize = blockAndSize.v2();
+
+            long base = BytesRefArrayBlock.BASE_RAM_BYTES_USED + BytesRefArrayVector.BASE_RAM_BYTES_USED;
+            long expectedSize = valueSize <= blockFactory().bytesRefRamOverestimateThreshold()
+                ? valueSize
+                : Math.round(valueSize * blockFactory().bytesRefRamOverestimateFactor());
+            assertEquals(block.ramBytesUsed(), base + expectedSize);
+            Releasables.close(block);
+        }
+    }
+
+    private Tuple<BytesRefBlock, Long> bytesRefArrayBlock(int valueLength) {
+        BlockFactory blockFactory = blockFactory();
+        var values = new BytesRefArray(0, blockFactory.bigArrays());
+        int positionCount = 1100;
+        for (int i = 0; i < positionCount; i++) {
+            values.append(new BytesRef(randomAlphaOfLength(valueLength)));
+        }
+        return Tuple.tuple(
+            blockFactory.newBytesRefArrayBlock(values, positionCount, null, new BitSet(), randomFrom(Block.MvOrdering.values())),
+            RamUsageEstimator.sizeOf(values)
+        );
     }
 }
