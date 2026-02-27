@@ -482,24 +482,21 @@ public class BlockAccountingTests extends ComputeTestCase {
             Tuple<BytesRefVector, Long> vectorAndSize = bytesRefArrayVector(valueLength);
             BytesRefVector vector = vectorAndSize.v1();
             long valueSize = vectorAndSize.v2();
-
             long base = BytesRefArrayVector.BASE_RAM_BYTES_USED;
-            long expectedSize = valueSize <= blockFactory().bytesRefRamOverestimateThreshold()
+            long expectedSize = (valueSize <= blockFactory().bytesRefRamOverestimateThreshold()
                 ? valueSize
-                : Math.round(valueSize * blockFactory().bytesRefRamOverestimateFactor());
-            assertEquals(vector.ramBytesUsed(), base + expectedSize);
+                : Math.round(valueSize * blockFactory().bytesRefRamOverestimateFactor())) + base;
+            assertEquals(expectedSize, vector.ramBytesUsed());
+            assertEquals(expectedSize, vector.blockFactory().breaker().getUsed());
             Releasables.close(vector);
         }
     }
 
     private Tuple<BytesRefVector, Long> bytesRefArrayVector(int valueLength) {
         BlockFactory blockFactory = blockFactory();
-        var values = new BytesRefArray(0, blockFactory.bigArrays());
         int positionCount = 1100;
-        for (int i = 0; i < positionCount; i++) {
-            values.append(new BytesRef(randomAlphaOfLength(valueLength)));
-        }
-        return Tuple.tuple(blockFactory.newBytesRefArrayVector(values, positionCount), RamUsageEstimator.sizeOf(values));
+        BytesRefArray array = bytesRefArray(positionCount, valueLength, blockFactory.bigArrays());
+        return Tuple.tuple(blockFactory.newBytesRefArrayVector(array, positionCount), RamUsageEstimator.sizeOf(array));
     }
 
     public void testConstantBytesRefVectorRamOverestimate() {
@@ -508,12 +505,12 @@ public class BlockAccountingTests extends ComputeTestCase {
             Tuple<BytesRefVector, Long> vectorAndSize = constantBytesRefVector(valueLength);
             BytesRefVector vector = vectorAndSize.v1();
             long valueSize = vectorAndSize.v2();
-
             long base = ConstantBytesRefVector.BASE_RAM_BYTES_USED;
-            long expectedSize = valueSize <= blockFactory().bytesRefRamOverestimateThreshold()
+            long expectedSize = (valueSize <= blockFactory().bytesRefRamOverestimateThreshold()
                 ? valueSize
-                : Math.round(valueSize * blockFactory().bytesRefRamOverestimateFactor());
-            assertEquals(vector.ramBytesUsed(), base + expectedSize);
+                : Math.round(valueSize * blockFactory().bytesRefRamOverestimateFactor())) + base;
+            assertEquals(expectedSize, vector.ramBytesUsed());
+            assertEquals(expectedSize, vector.blockFactory().breaker().getUsed());
             Releasables.close(vector);
         }
     }
@@ -533,26 +530,31 @@ public class BlockAccountingTests extends ComputeTestCase {
             Tuple<BytesRefBlock, Long> blockAndSize = bytesRefArrayBlock(valueLength);
             BytesRefBlock block = blockAndSize.v1();
             long valueSize = blockAndSize.v2();
-
             long base = BytesRefArrayBlock.BASE_RAM_BYTES_USED + BytesRefArrayVector.BASE_RAM_BYTES_USED;
-            long expectedSize = valueSize <= blockFactory().bytesRefRamOverestimateThreshold()
+            long expectedSize = (valueSize <= blockFactory().bytesRefRamOverestimateThreshold()
                 ? valueSize
-                : Math.round(valueSize * blockFactory().bytesRefRamOverestimateFactor());
-            assertEquals(block.ramBytesUsed(), base + expectedSize);
+                : Math.round(valueSize * blockFactory().bytesRefRamOverestimateFactor())) + base;
+            assertEquals(expectedSize, block.ramBytesUsed());
+            assertEquals(expectedSize, block.blockFactory().breaker().getUsed());
             Releasables.close(block);
         }
     }
 
     private Tuple<BytesRefBlock, Long> bytesRefArrayBlock(int valueLength) {
         BlockFactory blockFactory = blockFactory();
-        var values = new BytesRefArray(0, blockFactory.bigArrays());
         int positionCount = 1100;
-        for (int i = 0; i < positionCount; i++) {
-            values.append(new BytesRef(randomAlphaOfLength(valueLength)));
-        }
+        BytesRefArray array = bytesRefArray(positionCount, valueLength, blockFactory.bigArrays());
         return Tuple.tuple(
-            blockFactory.newBytesRefArrayBlock(values, positionCount, null, new BitSet(), randomFrom(Block.MvOrdering.values())),
-            RamUsageEstimator.sizeOf(values)
+            blockFactory.newBytesRefArrayBlock(array, positionCount, null, new BitSet(), randomFrom(Block.MvOrdering.values())),
+            RamUsageEstimator.sizeOf(array)
         );
+    }
+
+    private static BytesRefArray bytesRefArray(int positionCount, int valueLength, BigArrays bigArrays) {
+        var array = new BytesRefArray(0, bigArrays);
+        for (int i = 0; i < positionCount; i++) {
+            array.append(new BytesRef(randomAlphaOfLength(valueLength)));
+        }
+        return array;
     }
 }
