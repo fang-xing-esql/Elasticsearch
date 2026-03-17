@@ -206,6 +206,15 @@ public class ValuesSourceReaderOperator extends AbstractPageMappingToIteratorOpe
     private final Map<String, Integer> readersBuilt = new TreeMap<>();
     long valuesLoaded;
 
+    /**
+     * Maximum average column-at-a-time bytes per position observed across all
+     * {@link ValuesFromDocSequence} flushes. Persists across pages so the
+     * jumboBytes estimate can account for unflushed column-at-a-time data in
+     * pages that have no shard/segment/doc-order boundaries. {@code -1} means
+     * no measurement has been taken yet.
+     */
+    long maxColumnAtATimeBytesPerDoc = -1;
+
     private int lastShard = -1;
     private int lastSegment = -1;
 
@@ -265,11 +274,13 @@ public class ValuesSourceReaderOperator extends AbstractPageMappingToIteratorOpe
     }
 
     private ValuesReader valuesReader(DocVector docVector) {
-        if (docVector.singleSegment()) {
-            return new ValuesFromSingleReader(this, docVector);
-        }
+        // load in doc sequence if the number of BytesRef fields exceeds the threshold,
+        // regardless whether it is a single or multiple segments.
         if (bytesRefFieldCount() >= docSequenceBytesRefFieldThreshold) {
             return new ValuesFromDocSequence(this, docVector);
+        }
+        if (docVector.singleSegment()) {
+            return new ValuesFromSingleReader(this, docVector);
         }
         return new ValuesFromManyReader(this, docVector);
     }

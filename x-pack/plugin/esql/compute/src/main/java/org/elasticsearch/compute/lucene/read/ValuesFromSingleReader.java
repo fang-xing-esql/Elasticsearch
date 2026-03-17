@@ -13,10 +13,8 @@ import org.elasticsearch.compute.data.DocVector;
 import org.elasticsearch.core.Nullable;
 import org.elasticsearch.core.Releasable;
 import org.elasticsearch.core.Releasables;
-import org.elasticsearch.index.fieldvisitor.StoredFieldLoader;
 import org.elasticsearch.index.mapper.BlockLoader;
 import org.elasticsearch.index.mapper.BlockLoaderStoredFieldsFromLeafLoader;
-import org.elasticsearch.index.mapper.SourceLoader;
 import org.elasticsearch.logging.LogManager;
 import org.elasticsearch.logging.Logger;
 import org.elasticsearch.search.fetch.StoredFieldsSpec;
@@ -30,18 +28,6 @@ import java.util.List;
  */
 class ValuesFromSingleReader extends ValuesReader {
     private static final Logger log = LogManager.getLogger(ValuesFromSingleReader.class);
-
-    /**
-     * Minimum number of documents for which it is more efficient to use a
-     * sequential stored field reader when reading stored fields.
-     * <p>
-     *     The sequential stored field reader decompresses a whole block of docs
-     *     at a time so for very short lists it won't be faster to use it. We use
-     *     {@code 10} documents as the boundary for "very short" because it's what
-     *     search does, not because we've done extensive testing on the number.
-     * </p>
-     */
-    static final int SEQUENTIAL_BOUNDARY = 10;
 
     private final int shard;
     private final int segment;
@@ -140,17 +126,7 @@ class ValuesFromSingleReader extends ValuesReader {
         ValuesReaderDocs docs,
         int offset
     ) throws IOException {
-        SourceLoader sourceLoader = null;
-        ValuesSourceReaderOperator.ShardContext shardContext = operator.shardContexts.get(shard);
-        if (storedFieldsSpec.requiresSource()) {
-            sourceLoader = shardContext.newSourceLoader().apply(storedFieldsSpec.sourcePaths());
-            storedFieldsSpec = storedFieldsSpec.merge(new StoredFieldsSpec(true, false, sourceLoader.requiredStoredFields()));
-        }
-        StoredFieldLoader storedFieldLoader = storedFieldLoader(storedFieldsSpec, shardContext, docs);
-        BlockLoaderStoredFieldsFromLeafLoader storedFields = new BlockLoaderStoredFieldsFromLeafLoader(
-            storedFieldLoader.getLoader(ctx, null),
-            sourceLoader != null ? sourceLoader.leaf(ctx.reader(), null) : null
-        );
+        BlockLoaderStoredFieldsFromLeafLoader storedFields = buildStoredFieldsLoader(storedFieldsSpec, shard, ctx, docs, offset);
         int p = offset;
         long estimated = 0;
         while (p < docs.count() && estimated < jumboBytes) {
@@ -175,35 +151,6 @@ class ValuesFromSingleReader extends ValuesReader {
             log.debug("loaded {} positions row stride estimated/actual {}/{} bytes", p - offset, estimated, actual);
         }
         docs.setCount(p);
-    }
-
-    private StoredFieldLoader storedFieldLoader(
-        StoredFieldsSpec storedFieldsSpec,
-        ValuesSourceReaderOperator.ShardContext shardContext,
-        ValuesReaderDocs docs
-    ) {
-        if (storedFieldsSpec.equals(StoredFieldsSpec.NO_REQUIREMENTS)) {
-            return StoredFieldLoader.empty();
-        }
-        if (useSequentialStoredFieldsReader(docs, shardContext.storedFieldsSequentialProportion())) {
-            operator.trackStoredFields(storedFieldsSpec, true);
-            return StoredFieldLoader.fromSpecSequential(storedFieldsSpec);
-        }
-        operator.trackStoredFields(storedFieldsSpec, false);
-        return StoredFieldLoader.fromSpec(storedFieldsSpec);
-    }
-
-    /**
-     * Is it more efficient to use a sequential stored field reader
-     * when reading stored fields for the documents contained in {@code docIds}?
-     */
-    private boolean useSequentialStoredFieldsReader(BlockLoader.Docs docs, double storedFieldsSequentialProportion) {
-        int count = docs.count();
-        if (count < SEQUENTIAL_BOUNDARY) {
-            return false;
-        }
-        int range = docs.get(count - 1) - docs.get(0);
-        return range * storedFieldsSequentialProportion <= count;
     }
 
     /**

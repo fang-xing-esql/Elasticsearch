@@ -9,11 +9,14 @@ package org.elasticsearch.compute.lucene.read;
 
 import org.apache.lucene.index.LeafReaderContext;
 import org.elasticsearch.compute.data.Block;
+import org.elasticsearch.compute.data.ConstantNullBlock;
 import org.elasticsearch.compute.data.DocVector;
+import org.elasticsearch.core.Nullable;
 import org.elasticsearch.core.Releasable;
 import org.elasticsearch.core.ReleasableIterator;
 import org.elasticsearch.core.Releasables;
 import org.elasticsearch.index.fieldvisitor.StoredFieldLoader;
+import org.elasticsearch.index.mapper.BlockLoader;
 import org.elasticsearch.index.mapper.BlockLoaderStoredFieldsFromLeafLoader;
 import org.elasticsearch.index.mapper.SourceLoader;
 import org.elasticsearch.search.fetch.StoredFieldsSpec;
@@ -24,6 +27,18 @@ import java.util.ArrayList;
 import java.util.List;
 
 public abstract class ValuesReader implements ReleasableIterator<Block[]> {
+    /**
+     * Minimum number of documents for which it is more efficient to use a
+     * sequential stored field reader when reading stored fields.
+     * <p>
+     *     The sequential stored field reader decompresses a whole block of docs
+     *     at a time so for very short lists it won't be faster to use it. We use
+     *     {@code 10} documents as the boundary for "very short" because it's what
+     *     search does, not because we've done extensive testing on the number.
+     * </p>
+     */
+    static final int SEQUENTIAL_BOUNDARY = 10;
+
     protected final ValuesSourceReaderOperator operator;
     protected final DocVector docs;
     private int offset;
@@ -63,6 +78,58 @@ public abstract class ValuesReader implements ReleasableIterator<Block[]> {
 
     @Override
     public void close() {}
+
+    /**
+     * Is it more efficient to use a sequential stored field reader for the
+     * documents in {@code docs} starting at {@code offset}?
+     */
+    static boolean useSequentialStoredFieldsReader(BlockLoader.Docs docs, int offset, double proportion) {
+        int count = docs.count() - offset;
+        if (count < SEQUENTIAL_BOUNDARY) {
+            return false;
+        }
+        int range = docs.get(docs.count() - 1) - docs.get(offset);
+        return range * proportion <= count;
+    }
+
+    /**
+     * Builds a {@link BlockLoaderStoredFieldsFromLeafLoader} for the given shard and
+     * leaf context. Resolves the source loader, picks the stored-field loading strategy
+     * (empty, sequential, or normal), and tracks the chosen strategy.
+     *
+     * @param docs   if non-null, enables the sequential stored-field optimisation when
+     *               the doc density is high enough; pass {@code null} to always use the
+     *               normal (non-sequential) loader
+     * @param offset starting position inside {@code docs} for the sequential-density check
+     */
+    BlockLoaderStoredFieldsFromLeafLoader buildStoredFieldsLoader(
+        StoredFieldsSpec storedFieldsSpec,
+        int shard,
+        LeafReaderContext ctx,
+        @Nullable BlockLoader.Docs docs,
+        int offset
+    ) throws IOException {
+        SourceLoader sourceLoader = null;
+        ValuesSourceReaderOperator.ShardContext shardCtx = operator.shardContexts.get(shard);
+        if (storedFieldsSpec.requiresSource()) {
+            sourceLoader = shardCtx.newSourceLoader().apply(storedFieldsSpec.sourcePaths());
+            storedFieldsSpec = storedFieldsSpec.merge(new StoredFieldsSpec(true, false, sourceLoader.requiredStoredFields()));
+        }
+        StoredFieldLoader storedFieldLoader;
+        if (storedFieldsSpec.equals(StoredFieldsSpec.NO_REQUIREMENTS)) {
+            storedFieldLoader = StoredFieldLoader.empty();
+        } else if (docs != null && useSequentialStoredFieldsReader(docs, offset, shardCtx.storedFieldsSequentialProportion())) {
+            operator.trackStoredFields(storedFieldsSpec, true);
+            storedFieldLoader = StoredFieldLoader.fromSpecSequential(storedFieldsSpec);
+        } else {
+            operator.trackStoredFields(storedFieldsSpec, false);
+            storedFieldLoader = StoredFieldLoader.fromSpec(storedFieldsSpec);
+        }
+        return new BlockLoaderStoredFieldsFromLeafLoader(
+            storedFieldLoader.getLoader(ctx, null),
+            sourceLoader != null ? sourceLoader.leaf(ctx.reader(), null) : null
+        );
+    }
 
     /**
      * Shared per-load-call work state used by {@link ValuesFromManyReader} and
@@ -160,18 +227,7 @@ public abstract class ValuesReader implements ReleasableIterator<Block[]> {
                     rowStride.add(field);
                 }
             }
-            SourceLoader sourceLoader = null;
-            if (storedFieldsSpec.requiresSource()) {
-                sourceLoader = operator.shardContexts.get(shard).newSourceLoader().apply(storedFieldsSpec.sourcePaths());
-                storedFieldsSpec = storedFieldsSpec.merge(new StoredFieldsSpec(true, false, sourceLoader.requiredStoredFields()));
-            }
-            storedFields = new BlockLoaderStoredFieldsFromLeafLoader(
-                StoredFieldLoader.fromSpec(storedFieldsSpec).getLoader(ctx, null),
-                sourceLoader != null ? sourceLoader.leaf(ctx.reader(), null) : null
-            );
-            if (false == storedFieldsSpec.equals(StoredFieldsSpec.NO_REQUIREMENTS)) {
-                operator.trackStoredFields(storedFieldsSpec, false);
-            }
+            storedFields = buildStoredFieldsLoader(storedFieldsSpec, shard, ctx, null, 0);
         }
 
         void convertAndAccumulate() {
@@ -195,6 +251,20 @@ public abstract class ValuesReader implements ReleasableIterator<Block[]> {
                      */
                 }
             }
+        }
+
+        /**
+         * If {@code block} is a {@link ConstantNullBlock}, closes it and returns
+         * the cached instance from {@link #blockFactory} so that multiple null
+         * fields share the same Java object.
+         */
+        Block deduplicateConstantNull(Block block) {
+            if (block instanceof ConstantNullBlock) {
+                int count = block.getPositionCount();
+                block.close();
+                return blockFactory.constantNulls(count);
+            }
+            return block;
         }
 
         void moveBuildersAndLoadersToShard() {

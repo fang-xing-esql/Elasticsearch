@@ -47,6 +47,7 @@ import org.elasticsearch.compute.data.IntVector;
 import org.elasticsearch.compute.data.LongBlock;
 import org.elasticsearch.compute.data.LongVector;
 import org.elasticsearch.compute.data.Page;
+import org.elasticsearch.compute.lucene.AlwaysReferencedIndexedByShardId;
 import org.elasticsearch.compute.lucene.IndexedByShardIdFromList;
 import org.elasticsearch.compute.lucene.IndexedByShardIdFromSingleton;
 import org.elasticsearch.compute.lucene.ShardContext;
@@ -135,7 +136,7 @@ public class ValuesSourceReaderOperatorTests extends OperatorTestCase {
 
     private Directory directory = newDirectory();
     private MapperService mapperService;
-    private IndexReader reader;
+    IndexReader reader;
     private static final Map<Integer, String> keyToTags = new HashMap<>();
 
     @After
@@ -149,6 +150,10 @@ public class ValuesSourceReaderOperatorTests extends OperatorTestCase {
      */
     protected int docSequenceBytesRefFieldThreshold() {
         return 500;
+    }
+
+    protected Matcher<Integer> expectedSequentialColumnAtATimeReaderCount() {
+        return equalTo(1);
     }
 
     @Override
@@ -1756,9 +1761,10 @@ public class ValuesSourceReaderOperatorTests extends OperatorTestCase {
             checks.strings(results.get(0).getBlock(2), p, key);
         }
         ValuesSourceReaderOperatorStatus status = (ValuesSourceReaderOperatorStatus) runner.statuses().getFirst();
+        System.out.println("FANG!!! status: " + status);
         assertMap(
             status.readersBuilt(),
-            matchesMap().entry("key:column_at_a_time:IntsFromDocValues.Singleton", 1)
+            matchesMap().entry("key:column_at_a_time:IntsFromDocValues.Singleton", expectedSequentialColumnAtATimeReaderCount())
                 .entry("stored_text:column_at_a_time:null", 1)
                 .entry("stored_text:row_stride:BlockStoredFieldsReader.Bytes", 1)
                 .entry("stored_fields[requires_source:false, fields:1, sequential: " + sequential + "]", 1)
@@ -2223,4 +2229,151 @@ public class ValuesSourceReaderOperatorTests extends OperatorTestCase {
             IOUtils.close(closeMe);
         }
     }
+
+    /**
+     * Tests that ValuesFromDocSequence is used for a single-segment page when the number of
+     * BytesRef fields meets the threshold, regardless of whether doc IDs are non-decreasing.
+     * Uses constant shard/segment vectors so {@code singleSegment()} returns true. Doc IDs
+     * are randomly ordered or sorted.
+     */
+    public void testLoadDocSequenceSingleSegment() throws IOException {
+        int keywordFieldCount = 510;
+        int longFieldCount = 10;
+        int totalFields = keywordFieldCount + longFieldCount;
+
+        KeywordFieldMapper.KeywordFieldType[] kwTypes = new KeywordFieldMapper.KeywordFieldType[keywordFieldCount];
+        for (int f = 0; f < keywordFieldCount; f++) {
+            kwTypes[f] = new KeywordFieldMapper.KeywordFieldType("kw" + String.format(Locale.ROOT, "%03d", f));
+        }
+
+        mapperService = new MapperServiceTestCase() {}.createMapperService(MapperServiceTestCase.mapping(b -> {
+            for (int f = 0; f < keywordFieldCount; f++) {
+                b.startObject("kw" + String.format(Locale.ROOT, "%03d", f)).field("type", "keyword").endObject();
+            }
+            for (int f = 0; f < longFieldCount; f++) {
+                b.startObject("n" + String.format(Locale.ROOT, "%03d", f)).field("type", "long").endObject();
+            }
+        }));
+
+        int numDocs = between(20, 50);
+        try (
+            IndexWriter writer = new IndexWriter(
+                directory,
+                newIndexWriterConfig().setMergePolicy(NoMergePolicy.INSTANCE).setMaxBufferedDocs(IndexWriterConfig.DISABLE_AUTO_FLUSH)
+            )
+        ) {
+            for (int d = 0; d < numDocs; d++) {
+                XContentBuilder source = JsonXContent.contentBuilder();
+                source.startObject();
+                for (int f = 0; f < keywordFieldCount; f++) {
+                    source.field("kw" + String.format(Locale.ROOT, "%03d", f), "kw" + f + "_doc" + d);
+                }
+                for (int f = 0; f < longFieldCount; f++) {
+                    source.field("n" + String.format(Locale.ROOT, "%03d", f), (long) d * 1000 + f);
+                }
+                source.endObject();
+                ParsedDocument doc = mapperService.documentParser()
+                    .parseDocument(
+                        new SourceToParse("id" + d, BytesReference.bytes(source), XContentType.JSON),
+                        mapperService.mappingLookup()
+                    );
+                writer.addDocuments(doc.docs());
+            }
+        }
+        reader = DirectoryReader.open(directory);
+        assertThat(reader.leaves(), hasSize(1));
+
+        List<ValuesSourceReaderOperator.FieldInfo> fieldInfos = new ArrayList<>(totalFields);
+        for (int f = 0; f < keywordFieldCount; f++) {
+            MappedFieldType ft = kwTypes[f];
+            fieldInfos.add(
+                new ValuesSourceReaderOperator.FieldInfo(
+                    ft.name(),
+                    ElementType.BYTES_REF,
+                    false,
+                    (ctx, shardIdx) -> ValuesSourceReaderOperator.load(ft.blockLoader(blContext()))
+                )
+            );
+        }
+        for (int f = 0; f < longFieldCount; f++) {
+            MappedFieldType ft = mapperService.fieldType("n" + String.format(Locale.ROOT, "%03d", f));
+            fieldInfos.add(
+                new ValuesSourceReaderOperator.FieldInfo(
+                    ft.name(),
+                    ElementType.LONG,
+                    false,
+                    (ctx, shardIdx) -> ValuesSourceReaderOperator.load(ft.blockLoader(blContext()))
+                )
+            );
+        }
+
+        int[] docIds = IntStream.range(0, numDocs).toArray();
+        boolean shuffled = randomBoolean();
+        if (shuffled) {
+            List<Integer> docIdList = IntStream.of(docIds).boxed().collect(Collectors.toList());
+            Randomness.shuffle(docIdList);
+            for (int i = 0; i < docIds.length; i++) {
+                docIds[i] = docIdList.get(i);
+            }
+        }
+
+        DriverContext driverContext = driverContext();
+        BlockFactory blockFactory = driverContext.blockFactory();
+        IntVector docsVector;
+        try (IntVector.Builder docsBuilder = blockFactory.newIntVectorBuilder(numDocs)) {
+            for (int d = 0; d < numDocs; d++) {
+                docsBuilder.appendInt(docIds[d]);
+            }
+            docsVector = docsBuilder.build();
+        }
+        DocVector docVector = new DocVector(
+            AlwaysReferencedIndexedByShardId.INSTANCE,
+            blockFactory.newConstantIntVector(0, numDocs),
+            blockFactory.newConstantIntVector(0, numDocs),
+            docsVector,
+            DocVector.config().dontIncrementShardRefCounts()
+        );
+        assertTrue("constant shard/segment vectors", docVector.singleSegment());
+
+        Page inputPage = new Page(docVector.asBlock());
+        var readerFactory = new ValuesSourceReaderOperator.Factory(
+            ByteSizeValue.ofGb(1),
+            fieldInfos,
+            new IndexedByShardIdFromSingleton<>(
+                new ValuesSourceReaderOperator.ShardContext(reader, (sourcePaths) -> SourceLoader.FROM_STORED_SOURCE, 0.0)
+            ),
+            randomBoolean(),
+            0,
+            randomDoubleBetween(0.1, 10.0, true),
+            keywordFieldCount
+        );
+
+        var runner = new TestDriverRunner().builder(driverContext);
+        List<Page> results = runner.input(List.of(inputPage)).run(readerFactory);
+        int totalPositions = 0;
+        for (Page page : results) {
+            assertThat(page.getBlockCount(), equalTo(1 + totalFields));
+            for (int p = 0; p < page.getPositionCount(); p++) {
+                DocBlock docBlock = page.getBlock(0);
+                int docId = docBlock.asVector().docs().getInt(p);
+
+                int fieldIdx = 1;
+                BytesRef scratch = new BytesRef();
+                for (int f = 0; f < keywordFieldCount; f++) {
+                    BytesRefBlock block = page.getBlock(fieldIdx++);
+                    assertFalse("kw" + f + " doc " + docId + " should not be null", block.isNull(p));
+                    assertEquals(new BytesRef("kw" + f + "_doc" + docId), block.getBytesRef(block.getFirstValueIndex(p), scratch));
+                }
+                for (int f = 0; f < longFieldCount; f++) {
+                    LongBlock block = page.getBlock(fieldIdx++);
+                    assertFalse("n" + f + " doc " + docId + " should not be null", block.isNull(p));
+                    assertEquals((long) docId * 1000 + f, block.getLong(block.getFirstValueIndex(p)));
+                }
+            }
+            totalPositions += page.getPositionCount();
+        }
+        assertEquals(numDocs, totalPositions);
+        assertDriverContext(driverContext);
+    }
+
 }
