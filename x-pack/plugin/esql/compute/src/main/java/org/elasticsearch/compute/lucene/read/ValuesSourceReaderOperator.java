@@ -326,6 +326,10 @@ public class ValuesSourceReaderOperator extends AbstractPageMappingToIteratorOpe
         storedFields.releaseParsedSource();
     }
 
+    void setColumnAtATimeBytesPerDoc(long columnAtATimeBytesPerDoc) {
+        this.maxColumnAtATimeBytesPerDoc = Math.max(this.maxColumnAtATimeBytesPerDoc, columnAtATimeBytesPerDoc);
+    }
+
     void positionFieldWork(int shard, int segment, int firstDoc) {
         if (lastShard == shard) {
             if (lastSegment == segment) {

@@ -76,15 +76,13 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
 
     public void testManyKeywordFieldsWith10UniqueValuesInSubqueryIntermediateResultsWithSortOneField() throws IOException {
         int docs = docs();
-        heapAttackIT.initManyBigFieldsIndex(docs, "keyword", false, fields());
-        int subqueries = isServerless() ? MIN_SUBQUERIES : MAX_SUBQUERIES;
+        heapAttackIT.initManyBigFieldsIndex(docs, "keyword", false, 600);
         ListMatcher columns = matchesList();
         for (int f = 0; f < fields(); f++) {
             columns = columns.item(matchesMap().entry("name", "f" + String.format(Locale.ROOT, "%03d", f)).entry("type", "keyword"));
         }
-        // serverless behaves differently from stateful
         try {
-            Map<?, ?> response = buildSubqueriesWithSort(subqueries, "manybigfields", "f000");
+            Map<?, ?> response = buildSubqueriesWithSort(MIN_SUBQUERIES, "manybigfields", "f000");
             assertMap(response, matchesMap().entry("columns", columns));
         } catch (ResponseException e) {
             Map<?, ?> map = responseAsMap(e.getResponse());

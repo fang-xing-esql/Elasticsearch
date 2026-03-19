@@ -9,6 +9,7 @@ package org.elasticsearch.compute.lucene.read;
 
 import org.apache.lucene.index.LeafReaderContext;
 import org.elasticsearch.compute.data.Block;
+import org.elasticsearch.compute.data.ConstantNullBlock;
 import org.elasticsearch.compute.data.DocVector;
 import org.elasticsearch.core.Releasable;
 import org.elasticsearch.core.Releasables;
@@ -145,10 +146,7 @@ class ValuesFromDocSequence extends ValuesReader {
                         }
                         operator.trackSourceBytesAndRelease(storedFields);
                         p++;
-                        estimated = estimatedRamBytesUsed(rowStrideReaders) + (long) (p - offset) * Math.max(
-                            0,
-                            operator.maxColumnAtATimeBytesPerDoc
-                        );
+                        estimated = estimatedRamBytesUsed(rowStrideReaders) + estimatedRamBytesUsedInCurrentColumnAtATimeBatch(offset, p);
                         log.trace("{}: bytes loaded {}/{}", p, estimated, operator.jumboBytes);
                     }
                     readerDocs.setCount(p);
@@ -163,12 +161,11 @@ class ValuesFromDocSequence extends ValuesReader {
                     // the subsequent pages after the average ColumnAtATime size is populated.
                     while (p < docs.getPositionCount() && estimated < operator.jumboBytes) {
                         p++;
-                        estimated = (long) (p - offset) * Math.max(0, operator.maxColumnAtATimeBytesPerDoc);
+                        estimated = estimatedRamBytesUsedInCurrentColumnAtATimeBatch(offset, p);
                     }
                     readerDocs.setCount(p);
                     readColumnAtATimeBatch(columnAtATimeReaders, readerDocs, offset);
                 }
-
                 int count = readerDocs.count() - offset;
                 if (log.isDebugEnabled()) {
                     long actual = 0;
@@ -197,21 +194,22 @@ class ValuesFromDocSequence extends ValuesReader {
          * Different from DocSequenceRun, blocks read from ColumnAtATimeReader are not copied into
          * finalBuilders, as this page has a single segment with non-decreasing docIds.
          */
-        private void readColumnAtATimeBatch(List<CurrentWork.ColumnAtATimeWork> catList, ValuesReaderDocs readerDocs, int offset)
-            throws IOException {
+        private void readColumnAtATimeBatch(
+            List<CurrentWork.ColumnAtATimeWork> columnAtATimeReaders,
+            ValuesReaderDocs readerDocs,
+            int offset
+        ) throws IOException {
             int count = readerDocs.count() - offset;
-            for (CurrentWork.ColumnAtATimeWork c : catList) {
+            long totalBytes = 0;
+            for (CurrentWork.ColumnAtATimeWork c : columnAtATimeReaders) {
                 Block block = (Block) c.reader().read(blockFactory, readerDocs, offset, operator.fields[c.idx()].info.nullsFiltered());
                 assert block.getPositionCount() == count : block.getPositionCount() + " == " + count + " " + block;
                 target[c.idx()] = c.convert(block);
                 operator.sanityCheckBlock(c.reader(), count, target[c.idx()], c.idx());
+                totalBytes += target[c.idx()].ramBytesUsed();
             }
             if (count > 0) {
-                long catBytes = 0;
-                for (CurrentWork.ColumnAtATimeWork c : catList) {
-                    catBytes += target[c.idx()].ramBytesUsed();
-                }
-                operator.maxColumnAtATimeBytesPerDoc = Math.max(operator.maxColumnAtATimeBytesPerDoc, catBytes / count);
+                operator.setColumnAtATimeBytesPerDoc(totalBytes / count);
             }
         }
 
@@ -255,23 +253,33 @@ class ValuesFromDocSequence extends ValuesReader {
                 readRowStride(doc);
                 prevDoc = doc;
                 i++;
-                estimated = estimatedRamBytesUsed();
+                estimated = estimatedRamBytesUsed() + estimatedRamBytesUsedInCurrentColumnAtATimeBatch(runStart, i);
                 log.trace("{}: bytes loaded {}/{}", i, estimated, operator.jumboBytes);
             }
             readColumnAtATimeBatch(runStart, i);
             int count = i - offset;
             buildBlocks(count);
+            if (count > 0) {
+                long totalColumnAtATimeBytes = 0;
+                for (int f = 0; f < target.length; f++) {
+                    if (current[f].columnAtATime != null) {
+                        totalColumnAtATimeBytes += target[f].ramBytesUsed();
+                    }
+                }
+                operator.setColumnAtATimeBytesPerDoc(totalColumnAtATimeBytes / count);
+            }
             if (log.isDebugEnabled()) {
                 long actualBytes = 0;
                 for (Block b : target) {
                     actualBytes += b.ramBytesUsed();
                 }
                 log.debug(
-                    "loaded {} positions doc sequence estimated/actual/jumboBytes {}/{}/{} bytes",
+                    "loaded {} positions doc sequence estimated/actual/jumboBytes/averageDocSize {}/{}/{}/{} bytes",
                     count,
                     estimated,
                     actualBytes,
-                    operator.jumboBytes
+                    operator.jumboBytes,
+                    operator.maxColumnAtATimeBytesPerDoc
                 );
             }
         }
@@ -299,10 +307,19 @@ class ValuesFromDocSequence extends ValuesReader {
         private void buildBlocks(int count) {
             convertAndAccumulate();
             for (int f = 0; f < target.length; f++) {
-                target[f] = deduplicateConstantNull(finalBuilders[f].build());
+                if (finalBuilders[f] instanceof ConstantNullBlock.Builder) {
+                    finalBuilders[f].close();
+                    target[f] = blockFactory.constantNulls(count);
+                } else {
+                    target[f] = finalBuilders[f].build();
+                }
                 assert target[f].getPositionCount() == count : target[f].getPositionCount() + " == " + count + " " + target[f];
                 operator.sanityCheckBlock(current[f].rowStride, count, target[f], f);
             }
         }
+    }
+
+    private long estimatedRamBytesUsedInCurrentColumnAtATimeBatch(int start, int end) {
+        return (end - start) * Math.max(0, operator.maxColumnAtATimeBytesPerDoc);
     }
 }

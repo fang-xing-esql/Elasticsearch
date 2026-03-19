@@ -9,7 +9,6 @@ package org.elasticsearch.compute.lucene.read;
 
 import org.apache.lucene.index.LeafReaderContext;
 import org.elasticsearch.compute.data.Block;
-import org.elasticsearch.compute.data.ConstantNullBlock;
 import org.elasticsearch.compute.data.DocVector;
 import org.elasticsearch.core.Nullable;
 import org.elasticsearch.core.Releasable;
@@ -251,20 +250,6 @@ public abstract class ValuesReader implements ReleasableIterator<Block[]> {
                      */
                 }
             }
-        }
-
-        /**
-         * If {@code block} is a {@link ConstantNullBlock}, closes it and returns
-         * the cached instance from {@link #blockFactory} so that multiple null
-         * fields share the same Java object.
-         */
-        Block deduplicateConstantNull(Block block) {
-            if (block instanceof ConstantNullBlock) {
-                int count = block.getPositionCount();
-                block.close();
-                return blockFactory.constantNulls(count);
-            }
-            return block;
         }
 
         void moveBuildersAndLoadersToShard() {
