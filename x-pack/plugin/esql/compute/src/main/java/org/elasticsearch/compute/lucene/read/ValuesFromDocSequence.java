@@ -40,8 +40,10 @@ import static org.elasticsearch.compute.lucene.read.CurrentWork.estimatedRamByte
  *     reads row-stride fields in a main loop with a jumbo-bytes check for partial
  *     page support. Column-at-a-time fields are read once after the loop, for the
  *     same range of positions. When only column-at-a-time fields are present, all
- *     positions in the page are read at once (no jumboBytes splitting), matching
- *     the loading strategy of {@link ValuesFromSingleReader}.
+ *     positions in the first page are read at once (no jumboBytes splitting), matching
+ *     the loading strategy of {@link ValuesFromSingleReader}, the subsequent pages are
+ *     read with a jumbo-bytes check for partial page support according to the average
+ *     column-at-a-time reader size calculated based on the first page.
  * </p>
  */
 class ValuesFromDocSequence extends ValuesReader {
@@ -76,15 +78,10 @@ class ValuesFromDocSequence extends ValuesReader {
      *     Column-at-a-time fields are then read once for the same position range.
      * </p>
      * <p>
-     *     When only column-at-a-time fields are present, all positions in the page
-     *     are read at once without jumboBytes splitting. This matches
-     *     {@link ValuesFromSingleReader} behavior and avoids excessive page
-     *     fragmentation for block types with fixed per-block overhead
-     *     (e.g. {@code OrdinalBytesRefBlock}), where splitting produces more
-     *     total memory pressure, not less.
-     *     {@link ValuesSourceReaderOperator#maxColumnAtATimeBytesPerDoc} is still
-     *     updated so the row-stride branch can estimate CAT costs correctly on
-     *     subsequent mixed pages.
+     *     When only column-at-a-time fields are present, all positions in the first
+     *     page are read at once without jumboBytes splitting. the subsequent pages are
+     *     read with a jumbo-bytes check for partial page support according to the average
+     *     column-at-a-time reader size calculated based on the first page.
      * </p>
      * <p>
      *     Also supports sequential stored field readers (like {@link ValuesFromSingleReader}).
