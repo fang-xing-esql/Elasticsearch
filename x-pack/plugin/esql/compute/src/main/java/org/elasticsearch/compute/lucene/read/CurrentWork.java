@@ -12,6 +12,10 @@ import org.elasticsearch.compute.data.DocVector;
 import org.elasticsearch.core.Nullable;
 import org.elasticsearch.core.Releasable;
 import org.elasticsearch.index.mapper.BlockLoader;
+import org.elasticsearch.index.mapper.BlockLoaderStoredFieldsFromLeafLoader;
+
+import java.io.IOException;
+import java.util.List;
 
 /**
  * Work for a single field for the current segment. If there's a conversion, then this contains
@@ -65,5 +69,55 @@ class CurrentWork implements Releasable {
              */
             builder.close();
         }
+    }
+
+    /**
+     * Work for building a column-at-a-time.
+     * @param reader reads the values
+     * @param idx destination in array of {@linkplain Block}s we build
+     */
+    record ColumnAtATimeWork(
+        BlockLoader.ColumnAtATimeReader reader,
+        @Nullable ValuesSourceReaderOperator.ConverterEvaluator converter,
+        int idx
+    ) {
+        Block convert(Block block) {
+            return converter == null ? block : converter.convert(block);
+        }
+    }
+
+    /**
+     * Work for row-stride readers.
+     * @param reader reads the values
+     * @param converter an optional conversion function to apply on load
+     * @param idx destination in array of {@linkplain Block}s we build
+     */
+    record RowStrideReaderWork(
+        BlockLoader.RowStrideReader reader,
+        Block.Builder builder,
+        @Nullable ValuesSourceReaderOperator.ConverterEvaluator converter,
+        int idx
+    ) implements Releasable {
+        void read(int doc, BlockLoaderStoredFieldsFromLeafLoader storedFields) throws IOException {
+            reader.read(doc, storedFields, builder);
+        }
+
+        Block build() {
+            Block result = builder.build();
+            return converter == null ? result : converter.convert(result);
+        }
+
+        @Override
+        public void close() {
+            builder.close();
+        }
+    }
+
+    static long estimatedRamBytesUsed(List<RowStrideReaderWork> rowStrideReaders) {
+        long estimated = 0;
+        for (RowStrideReaderWork r : rowStrideReaders) {
+            estimated += r.builder().estimatedBytes();
+        }
+        return estimated;
     }
 }

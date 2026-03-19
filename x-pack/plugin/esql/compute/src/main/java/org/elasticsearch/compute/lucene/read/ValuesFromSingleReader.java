@@ -10,8 +10,6 @@ package org.elasticsearch.compute.lucene.read;
 import org.apache.lucene.index.LeafReaderContext;
 import org.elasticsearch.compute.data.Block;
 import org.elasticsearch.compute.data.DocVector;
-import org.elasticsearch.core.Nullable;
-import org.elasticsearch.core.Releasable;
 import org.elasticsearch.core.Releasables;
 import org.elasticsearch.index.mapper.BlockLoader;
 import org.elasticsearch.index.mapper.BlockLoaderStoredFieldsFromLeafLoader;
@@ -22,6 +20,8 @@ import org.elasticsearch.search.fetch.StoredFieldsSpec;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+
+import static org.elasticsearch.compute.lucene.read.CurrentWork.estimatedRamBytesUsed;
 
 /**
  * Loads values from a single leaf. Much more efficient than {@link ValuesFromManyReader}.
@@ -74,20 +74,19 @@ class ValuesFromSingleReader extends ValuesReader {
         StoredFieldsSpec storedFieldsSpec = StoredFieldsSpec.NO_REQUIREMENTS;
         LeafReaderContext ctx = operator.ctx(shard, segment);
 
-        List<ColumnAtATimeWork> columnAtATimeReaders = new ArrayList<>(operator.fields.length);
-        List<RowStrideReaderWork> rowStrideReaders = new ArrayList<>(operator.fields.length);
+        List<CurrentWork.ColumnAtATimeWork> columnAtATimeReaders = new ArrayList<>(operator.fields.length);
+        List<CurrentWork.RowStrideReaderWork> rowStrideReaders = new ArrayList<>(operator.fields.length);
         try (ComputeBlockLoaderFactory loaderBlockFactory = new ComputeBlockLoaderFactory(operator.driverContext.blockFactory())) {
             for (int f = 0; f < operator.fields.length; f++) {
                 ValuesSourceReaderOperator.FieldWork field = operator.fields[f];
                 BlockLoader.ColumnAtATimeReader columnAtATime = field.columnAtATime(ctx);
                 if (columnAtATime != null) {
-                    columnAtATimeReaders.add(new ColumnAtATimeWork(columnAtATime, field.converter, f));
+                    columnAtATimeReaders.add(new CurrentWork.ColumnAtATimeWork(columnAtATime, field.converter, f));
                 } else {
                     rowStrideReaders.add(
-                        new RowStrideReaderWork(
+                        new CurrentWork.RowStrideReaderWork(
                             field.rowStride(ctx),
                             (Block.Builder) field.loader.builder(loaderBlockFactory, docs.count() - offset),
-                            field.loader,
                             field.converter,
                             f
                         )
@@ -99,11 +98,11 @@ class ValuesFromSingleReader extends ValuesReader {
             if (rowStrideReaders.isEmpty() == false) {
                 loadFromRowStrideReaders(jumboBytes, target, storedFieldsSpec, rowStrideReaders, ctx, docs, offset);
             }
-            for (ColumnAtATimeWork r : columnAtATimeReaders) {
-                target[r.idx] = r.convert(
-                    (Block) r.reader.read(loaderBlockFactory, docs, offset, operator.fields[r.idx].info.nullsFiltered())
+            for (CurrentWork.ColumnAtATimeWork r : columnAtATimeReaders) {
+                target[r.idx()] = r.convert(
+                    (Block) r.reader().read(loaderBlockFactory, docs, offset, operator.fields[r.idx()].info.nullsFiltered())
                 );
-                operator.sanityCheckBlock(r.reader, docs.count() - offset, target[r.idx], r.idx);
+                operator.sanityCheckBlock(r.reader(), docs.count() - offset, target[r.idx()], r.idx());
             }
             if (log.isDebugEnabled()) {
                 long total = 0;
@@ -121,7 +120,7 @@ class ValuesFromSingleReader extends ValuesReader {
         long jumboBytes,
         Block[] target,
         StoredFieldsSpec storedFieldsSpec,
-        List<RowStrideReaderWork> rowStrideReaders,
+        List<CurrentWork.RowStrideReaderWork> rowStrideReaders,
         LeafReaderContext ctx,
         ValuesReaderDocs docs,
         int offset
@@ -132,75 +131,24 @@ class ValuesFromSingleReader extends ValuesReader {
         while (p < docs.count() && estimated < jumboBytes) {
             int doc = docs.get(p++);
             storedFields.advanceTo(doc);
-            for (RowStrideReaderWork work : rowStrideReaders) {
+            for (CurrentWork.RowStrideReaderWork work : rowStrideReaders) {
                 work.read(doc, storedFields);
             }
             operator.trackSourceBytesAndRelease(storedFields);
             estimated = estimatedRamBytesUsed(rowStrideReaders);
             log.trace("{}: bytes loaded {}/{}", p, estimated, jumboBytes);
         }
-        for (RowStrideReaderWork work : rowStrideReaders) {
-            target[work.idx] = work.build();
-            operator.sanityCheckBlock(work.reader, p - offset, target[work.idx], work.idx);
+        for (CurrentWork.RowStrideReaderWork work : rowStrideReaders) {
+            target[work.idx()] = work.build();
+            operator.sanityCheckBlock(work.reader(), p - offset, target[work.idx()], work.idx());
         }
         if (log.isDebugEnabled()) {
             long actual = 0;
-            for (RowStrideReaderWork work : rowStrideReaders) {
-                actual += target[work.idx].ramBytesUsed();
+            for (CurrentWork.RowStrideReaderWork work : rowStrideReaders) {
+                actual += target[work.idx()].ramBytesUsed();
             }
             log.debug("loaded {} positions row stride estimated/actual {}/{} bytes", p - offset, estimated, actual);
         }
         docs.setCount(p);
-    }
-
-    /**
-     * Work for building a column-at-a-time.
-     * @param reader reads the values
-     * @param idx destination in array of {@linkplain Block}s we build
-     */
-    private record ColumnAtATimeWork(
-        BlockLoader.ColumnAtATimeReader reader,
-        @Nullable ValuesSourceReaderOperator.ConverterEvaluator converter,
-        int idx
-    ) {
-        Block convert(Block block) {
-            return converter == null ? block : converter.convert(block);
-        }
-    }
-
-    /**
-     * Work for rows stride readers.
-     * @param reader reads the values
-     * @param converter an optional conversion function to apply on load
-     * @param idx destination in array of {@linkplain Block}s we build
-     */
-    private record RowStrideReaderWork(
-        BlockLoader.RowStrideReader reader,
-        Block.Builder builder,
-        BlockLoader loader,
-        @Nullable ValuesSourceReaderOperator.ConverterEvaluator converter,
-        int idx
-    ) implements Releasable {
-        void read(int doc, BlockLoaderStoredFieldsFromLeafLoader storedFields) throws IOException {
-            reader.read(doc, storedFields, builder);
-        }
-
-        Block build() {
-            Block result = builder.build();
-            return converter == null ? result : converter.convert(result);
-        }
-
-        @Override
-        public void close() {
-            builder.close();
-        }
-    }
-
-    private long estimatedRamBytesUsed(List<RowStrideReaderWork> rowStrideReaders) {
-        long estimated = 0;
-        for (RowStrideReaderWork r : rowStrideReaders) {
-            estimated += r.builder.estimatedBytes();
-        }
-        return estimated;
     }
 }

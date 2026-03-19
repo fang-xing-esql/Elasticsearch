@@ -136,7 +136,7 @@ public class ValuesSourceReaderOperatorTests extends OperatorTestCase {
 
     private Directory directory = newDirectory();
     private MapperService mapperService;
-    IndexReader reader;
+    private IndexReader reader;
     private static final Map<Integer, String> keyToTags = new HashMap<>();
 
     @After
@@ -150,10 +150,6 @@ public class ValuesSourceReaderOperatorTests extends OperatorTestCase {
      */
     protected int docSequenceBytesRefFieldThreshold() {
         return 500;
-    }
-
-    protected Matcher<Integer> expectedSequentialColumnAtATimeReaderCount() {
-        return equalTo(1);
     }
 
     @Override
@@ -1761,10 +1757,9 @@ public class ValuesSourceReaderOperatorTests extends OperatorTestCase {
             checks.strings(results.get(0).getBlock(2), p, key);
         }
         ValuesSourceReaderOperatorStatus status = (ValuesSourceReaderOperatorStatus) runner.statuses().getFirst();
-        System.out.println("FANG!!! status: " + status);
         assertMap(
             status.readersBuilt(),
-            matchesMap().entry("key:column_at_a_time:IntsFromDocValues.Singleton", expectedSequentialColumnAtATimeReaderCount())
+            matchesMap().entry("key:column_at_a_time:IntsFromDocValues.Singleton", 1)
                 .entry("stored_text:column_at_a_time:null", 1)
                 .entry("stored_text:row_stride:BlockStoredFieldsReader.Bytes", 1)
                 .entry("stored_fields[requires_source:false, fields:1, sequential: " + sequential + "]", 1)
