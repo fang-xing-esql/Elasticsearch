@@ -110,6 +110,12 @@ public final class QueryPragmas implements Writeable {
 
     public static final Setting<Boolean> FORK_IMPLICIT_LIMIT = Setting.boolSetting("fork_implicit_limit", true);
 
+    public static final Setting<Integer> SUBQUERY_BATCH_SIZE = Setting.intSetting(
+        "subquery_batch_size",
+        ThreadPool.searchOrGetThreadPoolSize(EsExecutors.allocatedProcessors(Settings.EMPTY)),
+        1
+    );
+
     /**
      * Number of parallel parser threads for intra-file text format parsing (CSV, NDJSON).
      * Defaults to allocated processors. Set to 1 to disable parallel parsing.
@@ -272,6 +278,10 @@ public final class QueryPragmas implements Writeable {
 
     public int parsingParallelism() {
         return PARSING_PARALLELISM.get(settings);
+    }
+
+    public int subplanBatchSize() {
+        return SUBQUERY_BATCH_SIZE.get(settings);
     }
 
     /**
