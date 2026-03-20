@@ -76,6 +76,7 @@ import org.elasticsearch.xpack.esql.plan.physical.ExchangeSinkExec;
 import org.elasticsearch.xpack.esql.plan.physical.ExchangeSourceExec;
 import org.elasticsearch.xpack.esql.plan.physical.ExternalSourceExec;
 import org.elasticsearch.xpack.esql.plan.physical.FragmentExec;
+import org.elasticsearch.xpack.esql.plan.physical.MergeExec;
 import org.elasticsearch.xpack.esql.plan.physical.OutputExec;
 import org.elasticsearch.xpack.esql.plan.physical.PhysicalPlan;
 import org.elasticsearch.xpack.esql.plan.physical.TopNExec;
@@ -365,6 +366,9 @@ public class ComputeService {
             ThreadPool.Names.SEARCH,
             ThreadPool.Names.SEARCH_COORDINATION
         );
+        // Check if the plan contains subqueries (UnionAll) vs fork branches before breaking it apart.
+        // Batching is only applied to subqueries, not fork branches.
+        boolean isSubquery = physicalPlan.anyMatch(p -> p instanceof MergeExec me && me.isSubquery());
         Tuple<List<PhysicalPlan>, PhysicalPlan> subplansAndMainPlan = PlannerUtils.breakPlanIntoSubPlansAndMainPlan(physicalPlan);
 
         List<PhysicalPlan> subplans = subplansAndMainPlan.v1();
@@ -412,125 +416,125 @@ public class ComputeService {
         );
 
         exchangeService.addExchangeSourceHandler(mainSessionId, mainExchangeSource);
-        try (var ignored = mainExchangeSource.addEmptySink()) {
-            var finalListener = ActionListener.runBefore(listener, () -> exchangeService.removeExchangeSourceHandler(sessionId));
-            var computeContext = new ComputeContext(
-                mainSessionId,
-                "main.final",
-                LOCAL_CLUSTER,
-                flags,
-                EmptyIndexedByShardId.instance(),
-                configuration,
-                foldContext,
-                mainExchangeSource::createExchangeSource,
-                null
+        var finalListener = ActionListener.runBefore(listener, () -> exchangeService.removeExchangeSourceHandler(sessionId));
+        var computeContext = new ComputeContext(
+            mainSessionId,
+            "main.final",
+            LOCAL_CLUSTER,
+            flags,
+            EmptyIndexedByShardId.instance(),
+            configuration,
+            foldContext,
+            mainExchangeSource::createExchangeSource,
+            null
+        );
+
+        Runnable cancelQueryOnFailure = cancelQueryOnFailure(rootTask);
+
+        try (
+            ComputeListener localListener = new ComputeListener(
+                transportService.getThreadPool(),
+                cancelQueryOnFailure,
+                finalListener.map(profiles -> {
+                    execInfo.markEndQuery();
+                    return new Result(mainPlan.output(), collectedPages, configuration, profiles, execInfo);
+                })
+            )
+        ) {
+            runCompute(
+                rootTask,
+                computeContext,
+                mainPlan,
+                plannerSettings.get(),
+                LocalPhysicalOptimization.ENABLED,
+                planTimeProfile,
+                localListener.acquireCompute()
             );
 
-            Runnable cancelQueryOnFailure = cancelQueryOnFailure(rootTask);
+            // Pre-acquire all compute listeners before closing the ComputeListener.
+            // Exchange sinks are created per-batch inside executeSubplansInBatches so that
+            // only one batch worth of data is buffered at a time, limiting memory usage.
+            int subplanCount = subplans.size();
+            List<ActionListener<DriverCompletionInfo>> subPlanListeners = new ArrayList<>(subplanCount);
+            for (int i = 0; i < subplanCount; i++) {
+                subPlanListeners.add(localListener.acquireCompute());
+            }
 
-            try (
-                ComputeListener localListener = new ComputeListener(
-                    transportService.getThreadPool(),
-                    cancelQueryOnFailure,
-                    finalListener.map(profiles -> {
-                        execInfo.markEndQuery();
-                        return new Result(mainPlan.output(), collectedPages, configuration, profiles, execInfo);
-                    })
-                )
-            ) {
-                runCompute(
-                    rootTask,
-                    computeContext,
-                    mainPlan,
-                    plannerSettings.get(),
-                    LocalPhysicalOptimization.ENABLED,
-                    planTimeProfile,
-                    localListener.acquireCompute()
-                );
-
-                // Pre-acquire all compute listeners and set up exchange sinks for all subplans upfront,
-                // so the main exchange source knows about all sinks before execution starts.
-                int subplanCount = subplans.size();
-                List<ActionListener<DriverCompletionInfo>> subPlanListeners = new ArrayList<>(subplanCount);
-                List<String> childSessionIds = new ArrayList<>(subplanCount);
-                List<ExchangeSinkHandler> exchangeSinks = new ArrayList<>(subplanCount);
-                for (int i = 0; i < subplanCount; i++) {
-                    subPlanListeners.add(localListener.acquireCompute());
-                    var childSessionId = newChildSession(sessionId);
-                    childSessionIds.add(childSessionId);
-                    ExchangeSinkHandler exchangeSink = exchangeService.createSinkHandler(childSessionId, queryPragmas.exchangeBufferSize());
-                    exchangeSinks.add(exchangeSink);
-                    // funnel sub plan pages into the main plan exchange source
-                    mainExchangeSource.addRemoteSink(exchangeSink::fetchPageAsync, true, () -> {}, 1, ActionListener.noop());
-                }
-
-                // Execute subplans in batches; batch size is controlled by the subquery_batch_size pragma
-                int batchSize = queryPragmas.subplanBatchSize();
-                if (LOGGER.isDebugEnabled()) {
-                    LOGGER.debug(
-                        "executing [{}] subplans in batches of [{}] with initial cluster statuses [{}]",
-                        subplans.size(),
-                        batchSize,
-                        initialClusterStatuses
-                    );
-                }
-                System.out.println("executing [" + subplans.size() + "] subplans in batches of [" + batchSize + "] with initial cluster statuses [" + initialClusterStatuses + "]");
-                var inFlightSubplans = new AtomicInteger(0);
-                executeSubplansInBatches(
-                    subplans,
-                    subPlanListeners,
-                    childSessionIds,
-                    exchangeSinks,
-                    0,
+            // Execute subplans in batches only for subqueries; fork branches are not batched.
+            int batchSize = isSubquery ? queryPragmas.subplanBatchSize() : subplans.size();
+            if (LOGGER.isDebugEnabled()) {
+                LOGGER.debug(
+                    "executing [{}] subplans in batches of [{}] with initial cluster statuses [{}]",
+                    subplans.size(),
                     batchSize,
-                    inFlightSubplans,
-                    rootTask,
-                    flags,
-                    configuration,
-                    foldContext,
-                    execInfo,
                     initialClusterStatuses
                 );
             }
+            // Hold an empty sink reference to keep the main exchange source alive across batches.
+            // Each batch adds its own sinks; we release this empty sink when the last batch is dispatched.
+            Releasable emptySinkRef = mainExchangeSource.addEmptySink();
+            var inFlightSubplans = new AtomicInteger(0);
+            executeSubplansInBatches(
+                subplans,
+                subPlanListeners,
+                0,
+                batchSize,
+                inFlightSubplans,
+                emptySinkRef,
+                sessionId,
+                rootTask,
+                flags,
+                configuration,
+                foldContext,
+                execInfo,
+                queryPragmas,
+                mainExchangeSource,
+                initialClusterStatuses
+            );
         }
     }
 
     /**
      * Executes subplans in sequential batches. The batch size is controlled by the {@code subquery_batch_size} pragma.
      * The next batch starts only after all subplans in the current batch have completed.
-     * Exchange sinks for all subplans must be set up before calling this method.
+     * Exchange sinks are created per-batch so that only one batch worth of data is buffered at a time.
+     * The {@code emptySinkRef} keeps the main exchange source alive across batches and is released
+     * when the last batch is dispatched.
      */
     private void executeSubplansInBatches(
         List<PhysicalPlan> subplans,
         List<ActionListener<DriverCompletionInfo>> subPlanListeners,
-        List<String> childSessionIds,
-        List<ExchangeSinkHandler> exchangeSinks,
         int startIndex,
         int batchSize,
         AtomicInteger inFlightSubplans,
+        Releasable emptySinkRef,
+        String sessionId,
         CancellableTask rootTask,
         EsqlFlags flags,
         Configuration configuration,
         FoldContext foldContext,
         EsqlExecutionInfo execInfo,
+        QueryPragmas queryPragmas,
+        ExchangeSourceHandler mainExchangeSource,
         Map<String, EsqlExecutionInfo.Cluster.Status> initialClusterStatuses
     ) {
         if (startIndex >= subplans.size()) {
+            // emptySinkRef was already released when the last batch was dispatched
             return;
         }
         int endIndex = Math.min(startIndex + batchSize, subplans.size());
+        boolean isLastBatch = endIndex >= subplans.size();
         int currentBatchSize = endIndex - startIndex;
         var batchRemaining = new AtomicInteger(currentBatchSize);
         if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug(
-                "executing subplan [{}] to [{}] in a batch", startIndex, endIndex - 1
-            );
+            LOGGER.debug("executing subplan [{}] to [{}] in a batch", startIndex, endIndex - 1);
         }
-        System.out.println("executing subplan " + startIndex + " to " + (endIndex -1));
+
         for (int i = startIndex; i < endIndex; i++) {
             var subplan = subplans.get(i);
-            var childSessionId = childSessionIds.get(i);
-            var exchangeSink = exchangeSinks.get(i);
+            var childSessionId = newChildSession(sessionId);
+            ExchangeSinkHandler exchangeSink = exchangeService.createSinkHandler(childSessionId, queryPragmas.exchangeBufferSize());
+            mainExchangeSource.addRemoteSink(exchangeSink::fetchPageAsync, true, () -> {}, 1, ActionListener.noop());
             var subPlanListener = subPlanListeners.get(i);
             final int subplanIndex = i;
 
@@ -556,16 +560,18 @@ public class ComputeService {
                         executeSubplansInBatches(
                             subplans,
                             subPlanListeners,
-                            childSessionIds,
-                            exchangeSinks,
                             endIndex,
                             batchSize,
                             inFlightSubplans,
+                            emptySinkRef,
+                            sessionId,
                             rootTask,
                             flags,
                             configuration,
                             foldContext,
                             execInfo,
+                            queryPragmas,
+                            mainExchangeSource,
                             initialClusterStatuses
                         );
                     }
@@ -577,16 +583,18 @@ public class ComputeService {
                         executeSubplansInBatches(
                             subplans,
                             subPlanListeners,
-                            childSessionIds,
-                            exchangeSinks,
                             endIndex,
                             batchSize,
                             inFlightSubplans,
+                            emptySinkRef,
+                            sessionId,
                             rootTask,
                             flags,
                             configuration,
                             foldContext,
                             execInfo,
+                            queryPragmas,
+                            mainExchangeSource,
                             initialClusterStatuses
                         );
                     }
@@ -595,6 +603,13 @@ public class ComputeService {
                 initialClusterStatuses,
                 configuration.profile() ? new PlanTimeProfile() : null
             );
+        }
+
+        // Release the empty sink after all batch sinks are registered.
+        // The exchange source transitions from being kept alive by the empty sink
+        // to being kept alive by the batch sinks.
+        if (isLastBatch) {
+            Releasables.closeExpectNoException(emptySinkRef);
         }
     }
 

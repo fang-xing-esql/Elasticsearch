@@ -20,10 +20,23 @@ import java.util.Objects;
 public class MergeExec extends PhysicalPlan {
 
     private final List<Attribute> output;
+    private final boolean subquery;
 
     public MergeExec(Source source, List<PhysicalPlan> children, List<Attribute> output) {
+        this(source, children, output, false);
+    }
+
+    public MergeExec(Source source, List<PhysicalPlan> children, List<Attribute> output, boolean subquery) {
         super(source, children);
         this.output = output;
+        this.subquery = subquery;
+    }
+
+    /**
+     * Returns {@code true} if this MergeExec was created from a subquery (UnionAll), {@code false} if from a FORK.
+     */
+    public boolean isSubquery() {
+        return subquery;
     }
 
     /**
@@ -45,12 +58,12 @@ public class MergeExec extends PhysicalPlan {
 
     @Override
     public PhysicalPlan replaceChildren(List<PhysicalPlan> newChildren) {
-        return new MergeExec(source(), newChildren, output());
+        return new MergeExec(source(), newChildren, output(), subquery);
     }
 
     @Override
     protected NodeInfo<MergeExec> info() {
-        return NodeInfo.create(this, MergeExec::new, children(), output);
+        return NodeInfo.create(this, MergeExec::new, children(), output, subquery);
     }
 
     @Override
@@ -60,7 +73,7 @@ public class MergeExec extends PhysicalPlan {
 
     @Override
     public int hashCode() {
-        return Objects.hash(children());
+        return Objects.hash(children(), subquery);
     }
 
     @Override
@@ -68,6 +81,6 @@ public class MergeExec extends PhysicalPlan {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         MergeExec other = (MergeExec) o;
-        return Objects.equals(this.children(), other.children());
+        return subquery == other.subquery && Objects.equals(this.children(), other.children());
     }
 }
