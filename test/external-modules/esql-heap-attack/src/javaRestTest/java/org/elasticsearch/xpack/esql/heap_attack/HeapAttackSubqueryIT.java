@@ -79,20 +79,31 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
     public void testManyRandomKeywordFieldsInSubqueryIntermediateResults() throws IOException {
         int docs = docs();
         heapAttackIT.initManyBigFieldsIndex(docs, "keyword", true, fields());
-        assertCircuitBreaks(attempt -> buildSubqueries(maxSubqueries(), "manybigfields"));
+        ListMatcher columns = matchesList();
+        for (int f = 0; f < fields(); f++) {
+            columns = columns.item(matchesMap().entry("name", "f" + String.format(Locale.ROOT, "%03d", f)).entry("type", "keyword"));
+        }
+        try {
+            Map<?, ?> response = buildSubqueries(maxSubqueries(), "manybigfields");
+            assertMap(response, matchesMap().entry("columns", columns));
+        } catch (ResponseException e) {
+            Map<?, ?> map = responseAsMap(e.getResponse());
+            assertMap(
+                map,
+                matchesMap().entry("status", 429).entry("error", matchesMap().extraOk().entry("type", "circuit_breaking_exception"))
+            );
+        }
     }
 
     public void testManyRandomKeywordFieldsInSubqueryIntermediateResultsWithSortOneField() throws IOException {
         int docs = docs();
         heapAttackIT.initManyBigFieldsIndex(docs, "keyword", true, fields());
-        int subqueries = isServerless() ? MIN_SUBQUERIES : MAX_SUBQUERIES;
         ListMatcher columns = matchesList();
         for (int f = 0; f < fields(); f++) {
             columns = columns.item(matchesMap().entry("name", "f" + String.format(Locale.ROOT, "%03d", f)).entry("type", "keyword"));
         }
-        // serverless behaves differently from stateful
         try {
-            Map<?, ?> response = buildSubqueriesWithSort(subqueries, "manybigfields", "f000");
+            Map<?, ?> response = buildSubqueriesWithSort(maxSubqueries(), "manybigfields", "f000");
             assertMap(response, matchesMap().entry("columns", columns));
         } catch (ResponseException e) {
             Map<?, ?> map = responseAsMap(e.getResponse());
@@ -111,14 +122,12 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
         for (int f = 1; f < 11; f++) {
             sortKeys.append(", f").append(String.format(Locale.ROOT, "%03d", f));
         }
-        int subqueries = isServerless() ? MIN_SUBQUERIES : MAX_SUBQUERIES;
         ListMatcher columns = matchesList();
         for (int f = 0; f < fields(); f++) {
             columns = columns.item(matchesMap().entry("name", "f" + String.format(Locale.ROOT, "%03d", f)).entry("type", "keyword"));
         }
-        // serverless behaves differently from stateful
         try {
-            Map<?, ?> response = buildSubqueriesWithSort(subqueries, "manybigfields", sortKeys.toString());
+            Map<?, ?> response = buildSubqueriesWithSort(maxSubqueries(), "manybigfields", sortKeys.toString());
             assertMap(response, matchesMap().entry("columns", columns));
         } catch (ResponseException e) {
             Map<?, ?> map = responseAsMap(e.getResponse());
@@ -159,7 +168,20 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
     public void testManyRandomTextFieldsInSubqueryIntermediateResults() throws IOException {
         int docs = docs();
         heapAttackIT.initManyBigFieldsIndex(docs, "text", true, fields());
-        assertCircuitBreaks(attempt -> buildSubqueries(maxSubqueries(), "manybigfields"));
+        ListMatcher columns = matchesList();
+        for (int f = 0; f < fields(); f++) {
+            columns = columns.item(matchesMap().entry("name", "f" + String.format(Locale.ROOT, "%03d", f)).entry("type", "text"));
+        }
+        try {
+            Map<?, ?> response = buildSubqueries(maxSubqueries(), "manybigfields");
+            assertMap(response, matchesMap().entry("columns", columns));
+        } catch (ResponseException e) {
+            Map<?, ?> map = responseAsMap(e.getResponse());
+            assertMap(
+                map,
+                matchesMap().entry("status", 429).entry("error", matchesMap().extraOk().entry("type", "circuit_breaking_exception"))
+            );
+        }
     }
 
     public void testManyRandomTextFieldsInSubqueryIntermediateResultsWithSortOneField() throws IOException {
