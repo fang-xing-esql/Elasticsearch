@@ -50,6 +50,8 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
 
     private static final int MAX_DOC_SERVERLESS = 100;
 
+    private static final int SUBQUERY_BATCH_SIZE_SERVERLESS = 2;
+
     @Before
     public void checkCapability() {
         assumeTrue("Subquery is behind snapshot", Build.current().isSnapshot());
@@ -306,7 +308,7 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
         for (int i = 1; i < subqueries; i++) {
             query.append(", ").append(subquery);
         }
-        query.append(" \"}");
+        query.append(endQuery());
         return responseAsMap(query(query.toString(), "columns"));
     }
 
@@ -323,7 +325,7 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
         for (int i = 1; i < subqueries; i++) {
             query.append(", ").append(subquery);
         }
-        query.append(" \"}");
+        query.append(endQuery());
         return responseAsMap(query(query.toString(), "columns,values"));
     }
 
@@ -335,7 +337,7 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
         for (int i = 1; i < subqueries; i++) {
             query.append(", ").append(subquery);
         }
-        query.append(" \"}");
+        query.append(endQuery());
         return responseAsMap(query(query.toString(), "columns"));
     }
 
@@ -346,8 +348,16 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
         for (int i = 1; i < subqueries; i++) {
             query.append(", ").append(subquery);
         }
-        query.append(" | SORT ").append(sortKeys).append(" \"}");
+        query.append(" | SORT ").append(sortKeys).append(endQuery());
         return responseAsMap(query(query.toString(), "columns, values"));
+    }
+
+    private static String endQuery() throws IOException {
+        return " \"" + subqueryBatchPragma() + "}";
+    }
+
+    private static String subqueryBatchPragma() throws IOException {
+        return isServerless() ? ", \"pragma\":{\"subquery_batch_size\":" + SUBQUERY_BATCH_SIZE_SERVERLESS + "}" : "";
     }
 
     private static int docs() throws IOException {
