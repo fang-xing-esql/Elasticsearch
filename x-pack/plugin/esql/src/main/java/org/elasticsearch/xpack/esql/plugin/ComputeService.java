@@ -96,6 +96,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -447,38 +448,153 @@ public class ComputeService {
                     localListener.acquireCompute()
                 );
 
-                for (int i = 0; i < subplans.size(); i++) {
-                    var subplan = subplans.get(i);
+                // Pre-acquire all compute listeners and set up exchange sinks for all subplans upfront,
+                // so the main exchange source knows about all sinks before execution starts.
+                int subplanCount = subplans.size();
+                List<ActionListener<DriverCompletionInfo>> subPlanListeners = new ArrayList<>(subplanCount);
+                List<String> childSessionIds = new ArrayList<>(subplanCount);
+                List<ExchangeSinkHandler> exchangeSinks = new ArrayList<>(subplanCount);
+                for (int i = 0; i < subplanCount; i++) {
+                    subPlanListeners.add(localListener.acquireCompute());
                     var childSessionId = newChildSession(sessionId);
+                    childSessionIds.add(childSessionId);
                     ExchangeSinkHandler exchangeSink = exchangeService.createSinkHandler(childSessionId, queryPragmas.exchangeBufferSize());
+                    exchangeSinks.add(exchangeSink);
                     // funnel sub plan pages into the main plan exchange source
                     mainExchangeSource.addRemoteSink(exchangeSink::fetchPageAsync, true, () -> {}, 1, ActionListener.noop());
-                    var subPlanListener = localListener.acquireCompute();
+                }
 
-                    executePlan(
-                        childSessionId,
-                        rootTask,
-                        flags,
-                        subplan,
-                        configuration,
-                        foldContext,
-                        execInfo,
-                        "subplan-" + i,
-                        ActionListener.wrap(result -> {
-                            exchangeSink.addCompletionListener(
-                                ActionListener.running(() -> { exchangeService.finishSinkHandler(childSessionId, null); })
-                            );
-                            subPlanListener.onResponse(result.completionInfo());
-                        }, e -> {
-                            exchangeService.finishSinkHandler(childSessionId, e);
-                            subPlanListener.onFailure(e);
-                        }),
-                        () -> exchangeSink.createExchangeSink(() -> {}),
-                        initialClusterStatuses,
-                        configuration.profile() ? new PlanTimeProfile() : null
+                // Execute subplans in batches; batch size is controlled by the subquery_batch_size pragma
+                int batchSize = queryPragmas.subplanBatchSize();
+                if (LOGGER.isDebugEnabled()) {
+                    LOGGER.debug(
+                        "executing [{}] subplans in batches of [{}] with initial cluster statuses [{}]",
+                        subplans.size(),
+                        batchSize,
+                        initialClusterStatuses
                     );
                 }
+                System.out.println("executing [" + subplans.size() + "] subplans in batches of [" + batchSize + "] with initial cluster statuses [" + initialClusterStatuses + "]");
+                var inFlightSubplans = new AtomicInteger(0);
+                executeSubplansInBatches(
+                    subplans,
+                    subPlanListeners,
+                    childSessionIds,
+                    exchangeSinks,
+                    0,
+                    batchSize,
+                    inFlightSubplans,
+                    rootTask,
+                    flags,
+                    configuration,
+                    foldContext,
+                    execInfo,
+                    initialClusterStatuses
+                );
             }
+        }
+    }
+
+    /**
+     * Executes subplans in sequential batches. The batch size is controlled by the {@code subquery_batch_size} pragma.
+     * The next batch starts only after all subplans in the current batch have completed.
+     * Exchange sinks for all subplans must be set up before calling this method.
+     */
+    private void executeSubplansInBatches(
+        List<PhysicalPlan> subplans,
+        List<ActionListener<DriverCompletionInfo>> subPlanListeners,
+        List<String> childSessionIds,
+        List<ExchangeSinkHandler> exchangeSinks,
+        int startIndex,
+        int batchSize,
+        AtomicInteger inFlightSubplans,
+        CancellableTask rootTask,
+        EsqlFlags flags,
+        Configuration configuration,
+        FoldContext foldContext,
+        EsqlExecutionInfo execInfo,
+        Map<String, EsqlExecutionInfo.Cluster.Status> initialClusterStatuses
+    ) {
+        if (startIndex >= subplans.size()) {
+            return;
+        }
+        int endIndex = Math.min(startIndex + batchSize, subplans.size());
+        int currentBatchSize = endIndex - startIndex;
+        var batchRemaining = new AtomicInteger(currentBatchSize);
+        if (LOGGER.isDebugEnabled()) {
+            LOGGER.debug(
+                "executing subplan [{}] to [{}] in a batch", startIndex, endIndex - 1
+            );
+        }
+        System.out.println("executing subplan " + startIndex + " to " + (endIndex -1));
+        for (int i = startIndex; i < endIndex; i++) {
+            var subplan = subplans.get(i);
+            var childSessionId = childSessionIds.get(i);
+            var exchangeSink = exchangeSinks.get(i);
+            var subPlanListener = subPlanListeners.get(i);
+            final int subplanIndex = i;
+
+            int currentInFlight = inFlightSubplans.incrementAndGet();
+            assert currentInFlight <= batchSize : "in-flight subplans [" + currentInFlight + "] exceeds batch size [" + batchSize + "]";
+
+            executePlan(
+                childSessionId,
+                rootTask,
+                flags,
+                subplan,
+                configuration,
+                foldContext,
+                execInfo,
+                "subplan-" + subplanIndex,
+                ActionListener.wrap(result -> {
+                    inFlightSubplans.decrementAndGet();
+                    exchangeSink.addCompletionListener(
+                        ActionListener.running(() -> { exchangeService.finishSinkHandler(childSessionId, null); })
+                    );
+                    subPlanListener.onResponse(result.completionInfo());
+                    if (batchRemaining.decrementAndGet() == 0) {
+                        executeSubplansInBatches(
+                            subplans,
+                            subPlanListeners,
+                            childSessionIds,
+                            exchangeSinks,
+                            endIndex,
+                            batchSize,
+                            inFlightSubplans,
+                            rootTask,
+                            flags,
+                            configuration,
+                            foldContext,
+                            execInfo,
+                            initialClusterStatuses
+                        );
+                    }
+                }, e -> {
+                    inFlightSubplans.decrementAndGet();
+                    exchangeService.finishSinkHandler(childSessionId, e);
+                    subPlanListener.onFailure(e);
+                    if (batchRemaining.decrementAndGet() == 0) {
+                        executeSubplansInBatches(
+                            subplans,
+                            subPlanListeners,
+                            childSessionIds,
+                            exchangeSinks,
+                            endIndex,
+                            batchSize,
+                            inFlightSubplans,
+                            rootTask,
+                            flags,
+                            configuration,
+                            foldContext,
+                            execInfo,
+                            initialClusterStatuses
+                        );
+                    }
+                }),
+                () -> exchangeSink.createExchangeSink(() -> {}),
+                initialClusterStatuses,
+                configuration.profile() ? new PlanTimeProfile() : null
+            );
         }
     }
 

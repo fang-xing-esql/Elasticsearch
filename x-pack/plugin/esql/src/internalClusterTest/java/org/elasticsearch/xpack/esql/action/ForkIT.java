@@ -13,6 +13,7 @@ import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.compute.operator.DriverProfile;
 import org.elasticsearch.xpack.esql.VerificationException;
 import org.elasticsearch.xpack.esql.parser.ParsingException;
+import org.elasticsearch.xpack.esql.plugin.QueryPragmas;
 import org.junit.Before;
 
 import java.util.Arrays;
@@ -1056,6 +1057,105 @@ public class ForkIT extends AbstractEsqlIntegTestCase {
         var e = expectThrows(ParsingException.class, () -> run(query));
         assertTrue(e.getMessage().contains("Fork supports up to 8 branches"));
 
+    }
+
+    public void testBatchSizeOne() {
+        var query = """
+            FROM test
+            | FORK
+               ( WHERE content:"fox" )
+               ( WHERE content:"dog" )
+               ( WHERE content:"cat" )
+            | KEEP _fork, id, content
+            | SORT _fork, id
+            """;
+        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.SUBQUERY_BATCH_SIZE.getKey(), 1).build());
+        try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
+            assertColumnNames(resp.columns(), List.of("_fork", "id", "content"));
+            assertColumnTypes(resp.columns(), List.of("keyword", "integer", "text"));
+            Iterable<Iterable<Object>> expectedValues = List.of(
+                List.of("fork1", 1, "This is a brown fox"),
+                List.of("fork1", 6, "The quick brown fox jumps over the lazy dog"),
+                List.of("fork2", 2, "This is a brown dog"),
+                List.of("fork2", 3, "This dog is really brown"),
+                List.of("fork2", 4, "The dog is brown but this document is very very long"),
+                List.of("fork2", 6, "The quick brown fox jumps over the lazy dog"),
+                List.of("fork3", 5, "There is also a white cat")
+            );
+            assertValues(resp.values(), expectedValues);
+        }
+    }
+
+    public void testBatchSizeTwo() {
+        var query = """
+            FROM test
+            | FORK
+               ( WHERE id == 6 )
+               ( WHERE id == 2 )
+               ( WHERE id == 5 )
+               ( WHERE id == 1 )
+               ( WHERE id == 3 )
+            | SORT _fork, id
+            | KEEP _fork, id, content
+            """;
+        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.SUBQUERY_BATCH_SIZE.getKey(), 2).build());
+        try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
+            assertColumnNames(resp.columns(), List.of("_fork", "id", "content"));
+            assertColumnTypes(resp.columns(), List.of("keyword", "integer", "text"));
+            Iterable<Iterable<Object>> expectedValues = List.of(
+                List.of("fork1", 6, "The quick brown fox jumps over the lazy dog"),
+                List.of("fork2", 2, "This is a brown dog"),
+                List.of("fork3", 5, "There is also a white cat"),
+                List.of("fork4", 1, "This is a brown fox"),
+                List.of("fork5", 3, "This dog is really brown")
+            );
+            assertValues(resp.values(), expectedValues);
+        }
+    }
+
+    public void testBatchSizeOneWithStats() {
+        var query = """
+            FROM test
+            | FORK (STATS x=COUNT(*), y=MV_SORT(VALUES(id)) )
+                   (WHERE id == 2)
+            | KEEP _fork, x, y, id
+            | SORT _fork, id
+            """;
+        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.SUBQUERY_BATCH_SIZE.getKey(), 1).build());
+        try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
+            assertColumnNames(resp.columns(), List.of("_fork", "x", "y", "id"));
+            Iterable<Iterable<Object>> expectedValues = List.of(
+                Arrays.stream(new Object[] { "fork1", 6L, List.of(1, 2, 3, 4, 5, 6), null }).toList(),
+                Arrays.stream(new Object[] { "fork2", null, null, 2 }).toList()
+            );
+            assertValues(resp.values(), expectedValues);
+        }
+    }
+
+    public void testBatchSizeTwoWithEmptyBranches() {
+        var query = """
+            FROM test
+            | FORK
+               ( WHERE content:"rabbit" )
+               ( WHERE content:"dog" )
+               ( WHERE content:"lion" )
+               ( WHERE content:"cat" )
+            | KEEP _fork, id, content
+            | SORT _fork, id
+            """;
+        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.SUBQUERY_BATCH_SIZE.getKey(), 2).build());
+        try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
+            assertColumnNames(resp.columns(), List.of("_fork", "id", "content"));
+            assertColumnTypes(resp.columns(), List.of("keyword", "integer", "text"));
+            Iterable<Iterable<Object>> expectedValues = List.of(
+                List.of("fork2", 2, "This is a brown dog"),
+                List.of("fork2", 3, "This dog is really brown"),
+                List.of("fork2", 4, "The dog is brown but this document is very very long"),
+                List.of("fork2", 6, "The quick brown fox jumps over the lazy dog"),
+                List.of("fork4", 5, "There is also a white cat")
+            );
+            assertValues(resp.values(), expectedValues);
+        }
     }
 
     private void createAndPopulateIndices() {
