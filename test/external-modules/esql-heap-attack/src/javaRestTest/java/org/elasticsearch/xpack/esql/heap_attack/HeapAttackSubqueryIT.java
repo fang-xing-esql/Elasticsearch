@@ -87,11 +87,7 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
             Map<?, ?> response = buildSubqueries(maxSubqueries(), "manybigfields");
             assertMap(response, matchesMap().entry("columns", columns));
         } catch (ResponseException e) {
-            Map<?, ?> map = responseAsMap(e.getResponse());
-            assertMap(
-                map,
-                matchesMap().entry("status", 429).entry("error", matchesMap().extraOk().entry("type", "circuit_breaking_exception"))
-            );
+            verifyCircuitBreakingException(e);
         }
     }
 
@@ -106,11 +102,7 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
             Map<?, ?> response = buildSubqueriesWithSort(maxSubqueries(), "manybigfields", "f000");
             assertMap(response, matchesMap().entry("columns", columns));
         } catch (ResponseException e) {
-            Map<?, ?> map = responseAsMap(e.getResponse());
-            assertMap(
-                map,
-                matchesMap().entry("status", 429).entry("error", matchesMap().extraOk().entry("type", "circuit_breaking_exception"))
-            );
+            verifyCircuitBreakingException(e);
         }
     }
 
@@ -130,11 +122,7 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
             Map<?, ?> response = buildSubqueriesWithSort(maxSubqueries(), "manybigfields", sortKeys.toString());
             assertMap(response, matchesMap().entry("columns", columns));
         } catch (ResponseException e) {
-            Map<?, ?> map = responseAsMap(e.getResponse());
-            assertMap(
-                map,
-                matchesMap().entry("status", 429).entry("error", matchesMap().extraOk().entry("type", "circuit_breaking_exception"))
-            );
+            verifyCircuitBreakingException(e);
         }
     }
 
@@ -157,11 +145,7 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
             Map<?, ?> response = buildSubqueriesWithSort(MAX_SUBQUERIES, "manybigfields", sortKeys.toString());
             assertMap(response, matchesMap().entry("columns", columns));
         } catch (ResponseException e) {
-            Map<?, ?> map = responseAsMap(e.getResponse());
-            assertMap(
-                map,
-                matchesMap().entry("status", 429).entry("error", matchesMap().extraOk().entry("type", "circuit_breaking_exception"))
-            );
+            verifyCircuitBreakingException(e);
         }
     }
 
@@ -176,11 +160,7 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
             Map<?, ?> response = buildSubqueries(maxSubqueries(), "manybigfields");
             assertMap(response, matchesMap().entry("columns", columns));
         } catch (ResponseException e) {
-            Map<?, ?> map = responseAsMap(e.getResponse());
-            assertMap(
-                map,
-                matchesMap().entry("status", 429).entry("error", matchesMap().extraOk().entry("type", "circuit_breaking_exception"))
-            );
+            verifyCircuitBreakingException(e);
         }
     }
 
@@ -195,11 +175,7 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
             Map<?, ?> response = buildSubqueriesWithSort(maxSubqueries(), "manybigfields", " substring(f000, 5) ");
             assertMap(response, matchesMap().entry("columns", columns));
         } catch (ResponseException e) {
-            Map<?, ?> map = responseAsMap(e.getResponse());
-            assertMap(
-                map,
-                matchesMap().entry("status", 429).entry("error", matchesMap().extraOk().entry("type", "circuit_breaking_exception"))
-            );
+            verifyCircuitBreakingException(e);
         }
     }
 
@@ -424,5 +400,13 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
         // serverless has 6 shards, non-serverless has 1 shard, the number of exchange operators increases when the number of subqueries
         // increase, limiting the number of subqueries to reduce the gc lagging and intermittent OOMs in serverless
         return isServerless() ? MAX_SUBQUERIES_SERVERLESS : MAX_SUBQUERIES;
+    }
+
+    private static void verifyCircuitBreakingException(ResponseException re) throws IOException {
+        Map<?, ?> map = responseAsMap(re.getResponse());
+        assertMap(
+            map,
+            matchesMap().entry("status", 429).entry("error", matchesMap().extraOk().entry("type", "circuit_breaking_exception"))
+        );
     }
 }
