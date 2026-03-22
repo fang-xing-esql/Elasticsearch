@@ -187,7 +187,20 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
     public void testManyRandomTextFieldsInSubqueryIntermediateResultsWithSortOneField() throws IOException {
         int docs = docs();
         heapAttackIT.initManyBigFieldsIndex(docs, "text", true, fields());
-        assertCircuitBreaks(attempt -> buildSubqueriesWithSort(maxSubqueries(), "manybigfields", " substring(f000, 5) "));
+        ListMatcher columns = matchesList();
+        for (int f = 0; f < fields(); f++) {
+            columns = columns.item(matchesMap().entry("name", "f" + String.format(Locale.ROOT, "%03d", f)).entry("type", "keyword"));
+        }
+        try {
+            Map<?, ?> response = buildSubqueriesWithSort(maxSubqueries(), "manybigfields", " substring(f000, 5) ");
+            assertMap(response, matchesMap().entry("columns", columns));
+        } catch (ResponseException e) {
+            Map<?, ?> map = responseAsMap(e.getResponse());
+            assertMap(
+                map,
+                matchesMap().entry("status", 429).entry("error", matchesMap().extraOk().entry("type", "circuit_breaking_exception"))
+            );
+        }
     }
 
     public void testManyRandomTextFieldsInSubqueryIntermediateResultsWithSortManyFields() throws IOException {
@@ -198,7 +211,20 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
         for (int f = 1; f < 5; f++) {
             sortKeys.append(", substring(f").append(String.format(Locale.ROOT, "%03d", f)).append(", 5) ");
         }
-        assertCircuitBreaks(attempt -> buildSubqueriesWithSort(maxSubqueries(), "manybigfields", sortKeys.toString()));
+        ListMatcher columns = matchesList();
+        for (int f = 0; f < fields(); f++) {
+            columns = columns.item(matchesMap().entry("name", "f" + String.format(Locale.ROOT, "%03d", f)).entry("type", "keyword"));
+        }
+        try {
+            Map<?, ?> response = buildSubqueriesWithSort(maxSubqueries(), "manybigfields", sortKeys.toString());
+            assertMap(response, matchesMap().entry("columns", columns));
+        } catch (ResponseException e) {
+            Map<?, ?> map = responseAsMap(e.getResponse());
+            assertMap(
+                map,
+                matchesMap().entry("status", 429).entry("error", matchesMap().extraOk().entry("type", "circuit_breaking_exception"))
+            );
+        }
     }
 
     public void testManyKeywordFieldsWith10UniqueValuesInSubqueryIntermediateResultsWithAggNoGrouping() throws IOException {

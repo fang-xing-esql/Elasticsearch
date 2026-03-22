@@ -14,12 +14,9 @@ import org.elasticsearch.xpack.esql.plugin.QueryPragmas;
 import org.junit.Before;
 
 import java.util.Arrays;
-import java.util.Iterator;
 import java.util.List;
-import java.util.function.Predicate;
 
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertAcked;
-import static org.elasticsearch.xpack.esql.EsqlTestUtils.getValuesList;
 import static org.elasticsearch.xpack.esql.action.EsqlQueryRequest.syncEsqlQueryRequest;
 
 /**
@@ -135,6 +132,255 @@ public class SubqueryIT extends AbstractEsqlIntegTestCase {
         }
     }
 
+    /**
+     * Batch size larger than number of subqueries - all subqueries should execute in a single batch.
+     */
+    public void testBatchSizeLargerThanSubqueryCount() {
+        var query = """
+            FROM
+               ( FROM test | WHERE id == 1 ),
+               ( FROM test | WHERE id == 2 )
+            | KEEP id, content
+            | SORT id
+            """;
+        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.SUBQUERY_BATCH_SIZE.getKey(), 8).build());
+        try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
+            assertColumnNames(resp.columns(), List.of("id", "content"));
+            assertColumnTypes(resp.columns(), List.of("integer", "text"));
+            Iterable<Iterable<Object>> expectedValues = List.of(List.of(1, "This is a brown fox"), List.of(2, "This is a brown dog"));
+            assertValues(resp.values(), expectedValues);
+        }
+    }
+
+    /**
+     * Batch size equals number of subqueries - exactly one batch, no recursion.
+     */
+    public void testBatchSizeEqualsSubqueryCount() {
+        var query = """
+            FROM
+               ( FROM test | WHERE content:"fox" ),
+               ( FROM test | WHERE content:"cat" ),
+               ( FROM test | WHERE id == 2 )
+            | KEEP id, content
+            | SORT id
+            """;
+        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.SUBQUERY_BATCH_SIZE.getKey(), 3).build());
+        try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
+            assertColumnNames(resp.columns(), List.of("id", "content"));
+            assertColumnTypes(resp.columns(), List.of("integer", "text"));
+            Iterable<Iterable<Object>> expectedValues = List.of(
+                List.of(1, "This is a brown fox"),
+                List.of(2, "This is a brown dog"),
+                List.of(5, "There is also a white cat"),
+                List.of(6, "The quick brown fox jumps over the lazy dog")
+            );
+            assertValues(resp.values(), expectedValues);
+        }
+    }
+
+    /**
+     * Single subquery with batch size 1 - minimal edge case.
+     */
+    public void testSingleSubqueryWithBatchSizeOne() {
+        var query = """
+            FROM
+               ( FROM test | WHERE content:"fox" )
+            | KEEP id, content
+            | SORT id
+            """;
+        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.SUBQUERY_BATCH_SIZE.getKey(), 1).build());
+        try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
+            assertColumnNames(resp.columns(), List.of("id", "content"));
+            assertColumnTypes(resp.columns(), List.of("integer", "text"));
+            Iterable<Iterable<Object>> expectedValues = List.of(
+                List.of(1, "This is a brown fox"),
+                List.of(6, "The quick brown fox jumps over the lazy dog")
+            );
+            assertValues(resp.values(), expectedValues);
+        }
+    }
+
+    /**
+     * Different schemas across subqueries in different batches.
+     * One subquery returns STATS columns, another returns raw columns.
+     * Missing columns should be null.
+     */
+    public void testDifferentSchemasAcrossBatches() {
+        var query = """
+            FROM
+               ( FROM test | STATS cnt = COUNT(*) ),
+               ( FROM test | WHERE id == 1 | KEEP id ),
+               ( FROM test | STATS mx = MAX(id) )
+            | KEEP cnt, id, mx
+            | SORT cnt NULLS LAST, id NULLS LAST
+            """;
+        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.SUBQUERY_BATCH_SIZE.getKey(), 1).build());
+        try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
+            assertColumnNames(resp.columns(), List.of("cnt", "id", "mx"));
+            Iterable<Iterable<Object>> expectedValues = List.of(
+                Arrays.stream(new Object[] { 6L, null, null }).toList(),
+                Arrays.stream(new Object[] { null, 1, null }).toList(),
+                Arrays.stream(new Object[] { null, null, 6 }).toList()
+            );
+            assertValues(resp.values(), expectedValues);
+        }
+    }
+
+    /**
+     * All subqueries return empty results across multiple batches.
+     */
+    public void testAllEmptyBranches() {
+        var query = """
+            FROM
+               ( FROM test | WHERE id == 999 ),
+               ( FROM test | WHERE id == 888 ),
+               ( FROM test | WHERE id == 777 )
+            | KEEP id, content
+            | SORT id
+            """;
+        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.SUBQUERY_BATCH_SIZE.getKey(), 1).build());
+        try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
+            assertColumnNames(resp.columns(), List.of("id", "content"));
+            assertColumnTypes(resp.columns(), List.of("integer", "text"));
+            Iterable<Iterable<Object>> expectedValues = List.of();
+            assertValues(resp.values(), expectedValues);
+        }
+    }
+
+    /**
+     * Duplicate rows across subqueries - UNION ALL semantics should preserve all duplicates,
+     * even when subqueries are in different batches.
+     */
+    public void testDuplicateRowsAcrossBatches() {
+        var query = """
+            FROM
+               ( FROM test | WHERE id == 1 ),
+               ( FROM test | WHERE id == 1 ),
+               ( FROM test | WHERE id == 1 )
+            | KEEP id, content
+            | SORT id
+            """;
+        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.SUBQUERY_BATCH_SIZE.getKey(), 1).build());
+        try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
+            assertColumnNames(resp.columns(), List.of("id", "content"));
+            assertColumnTypes(resp.columns(), List.of("integer", "text"));
+            Iterable<Iterable<Object>> expectedValues = List.of(
+                List.of(1, "This is a brown fox"),
+                List.of(1, "This is a brown fox"),
+                List.of(1, "This is a brown fox")
+            );
+            assertValues(resp.values(), expectedValues);
+        }
+    }
+
+    /**
+     * No explicit batch size pragma - uses the default (processor count).
+     * Verifies the default path works correctly.
+     */
+    public void testDefaultBatchSize() {
+        var query = """
+            FROM
+               ( FROM test | WHERE content:"fox" ),
+               ( FROM test | WHERE content:"dog" ),
+               ( FROM test | WHERE content:"cat" )
+            | KEEP id, content
+            | SORT id
+            """;
+        try (var resp = run(query)) {
+            assertColumnNames(resp.columns(), List.of("id", "content"));
+            assertColumnTypes(resp.columns(), List.of("integer", "text"));
+            Iterable<Iterable<Object>> expectedValues = List.of(
+                List.of(1, "This is a brown fox"),
+                List.of(2, "This is a brown dog"),
+                List.of(3, "This dog is really brown"),
+                List.of(4, "The dog is brown but this document is very very long"),
+                List.of(5, "There is also a white cat"),
+                List.of(6, "The quick brown fox jumps over the lazy dog"),
+                List.of(6, "The quick brown fox jumps over the lazy dog")
+            );
+            assertValues(resp.values(), expectedValues);
+        }
+    }
+
+    /**
+     * Empty batch followed by non-empty batch - first batch produces no rows,
+     * second batch produces rows. Verifies batch transitions from empty to non-empty.
+     */
+    public void testEmptyBatchFollowedByNonEmptyBatch() {
+        var query = """
+            FROM
+               ( FROM test | WHERE id == 999 ),
+               ( FROM test | WHERE id == 888 ),
+               ( FROM test | WHERE id == 1 ),
+               ( FROM test | WHERE id == 2 )
+            | KEEP id, content
+            | SORT id
+            """;
+        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.SUBQUERY_BATCH_SIZE.getKey(), 2).build());
+        try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
+            assertColumnNames(resp.columns(), List.of("id", "content"));
+            assertColumnTypes(resp.columns(), List.of("integer", "text"));
+            Iterable<Iterable<Object>> expectedValues = List.of(List.of(1, "This is a brown fox"), List.of(2, "This is a brown dog"));
+            assertValues(resp.values(), expectedValues);
+        }
+    }
+
+    /**
+     * Non-empty batch followed by empty batch - first batch produces rows,
+     * second batch produces nothing. Verifies final empty batch is handled cleanly.
+     */
+    public void testNonEmptyBatchFollowedByEmptyBatch() {
+        var query = """
+            FROM
+               ( FROM test | WHERE id == 1 ),
+               ( FROM test | WHERE id == 2 ),
+               ( FROM test | WHERE id == 999 ),
+               ( FROM test | WHERE id == 888 )
+            | KEEP id, content
+            | SORT id
+            """;
+        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.SUBQUERY_BATCH_SIZE.getKey(), 2).build());
+        try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
+            assertColumnNames(resp.columns(), List.of("id", "content"));
+            assertColumnTypes(resp.columns(), List.of("integer", "text"));
+            Iterable<Iterable<Object>> expectedValues = List.of(List.of(1, "This is a brown fox"), List.of(2, "This is a brown dog"));
+            assertValues(resp.values(), expectedValues);
+        }
+    }
+
+    /**
+     * Many subqueries with batch size 1 - maximal sequential batching with many recursive calls.
+     */
+    public void testManySubqueriesWithBatchSizeOne() {
+        var query = """
+            FROM
+               ( FROM test | WHERE id == 1 ),
+               ( FROM test | WHERE id == 2 ),
+               ( FROM test | WHERE id == 3 ),
+               ( FROM test | WHERE id == 4 ),
+               ( FROM test | WHERE id == 5 ),
+               ( FROM test | WHERE id == 6 ),
+               ( FROM test | WHERE id == 1 )
+            | KEEP id, content
+            | SORT id
+            """;
+        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.SUBQUERY_BATCH_SIZE.getKey(), 1).build());
+        try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
+            assertColumnNames(resp.columns(), List.of("id", "content"));
+            assertColumnTypes(resp.columns(), List.of("integer", "text"));
+            Iterable<Iterable<Object>> expectedValues = List.of(
+                List.of(1, "This is a brown fox"),
+                List.of(1, "This is a brown fox"),
+                List.of(2, "This is a brown dog"),
+                List.of(3, "This dog is really brown"),
+                List.of(4, "The dog is brown but this document is very very long"),
+                List.of(5, "There is also a white cat"),
+                List.of(6, "The quick brown fox jumps over the lazy dog")
+            );
+            assertValues(resp.values(), expectedValues);
+        }
+    }
+
     private void createAndPopulateIndex() {
         var indexName = "test";
         var client = client().admin().indices();
@@ -152,9 +398,5 @@ public class SubqueryIT extends AbstractEsqlIntegTestCase {
             .setRefreshPolicy(WriteRequest.RefreshPolicy.IMMEDIATE)
             .get();
         ensureYellow(indexName);
-    }
-
-    static Iterator<Iterator<Object>> valuesFilter(Iterator<Iterator<Object>> values, Predicate<Iterator<Object>> filter) {
-        return getValuesList(values).stream().filter(row -> filter.test(row.iterator())).map(List::iterator).toList().iterator();
     }
 }
