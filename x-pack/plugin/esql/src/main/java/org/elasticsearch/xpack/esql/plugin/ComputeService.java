@@ -76,7 +76,6 @@ import org.elasticsearch.xpack.esql.plan.physical.ExchangeSinkExec;
 import org.elasticsearch.xpack.esql.plan.physical.ExchangeSourceExec;
 import org.elasticsearch.xpack.esql.plan.physical.ExternalSourceExec;
 import org.elasticsearch.xpack.esql.plan.physical.FragmentExec;
-import org.elasticsearch.xpack.esql.plan.physical.MergeExec;
 import org.elasticsearch.xpack.esql.plan.physical.OutputExec;
 import org.elasticsearch.xpack.esql.plan.physical.PhysicalPlan;
 import org.elasticsearch.xpack.esql.plan.physical.TopNExec;
@@ -368,7 +367,6 @@ public class ComputeService {
         );
         // Check if the plan contains subqueries (UnionAll) vs fork branches before breaking it apart.
         // Batching is only applied to subqueries, not fork branches.
-        boolean isSubquery = physicalPlan.anyMatch(p -> p instanceof MergeExec me && me.isSubquery());
         Tuple<List<PhysicalPlan>, PhysicalPlan> subplansAndMainPlan = PlannerUtils.breakPlanIntoSubPlansAndMainPlan(physicalPlan);
 
         List<PhysicalPlan> subplans = subplansAndMainPlan.v1();
@@ -460,8 +458,8 @@ public class ComputeService {
                 subPlanListeners.add(localListener.acquireCompute());
             }
 
-            // Execute subplans in batches only for subqueries; fork branches are not batched.
-            int batchSize = isSubquery ? queryPragmas.subplanBatchSize() : subplans.size();
+            // Execute branches in batches only for subquery and fork .
+            int batchSize = queryPragmas.branchBatchSize();
             if (LOGGER.isDebugEnabled()) {
                 LOGGER.debug(
                     "executing [{}] subplans in batches of [{}] with initial cluster statuses [{}]",
@@ -495,7 +493,7 @@ public class ComputeService {
     }
 
     /**
-     * Executes subplans in sequential batches. The batch size is controlled by the {@code subquery_batch_size} pragma.
+     * Executes subplans in sequential batches. The batch size is controlled by the {@code branch_batch_size} pragma.
      * The next batch starts only after all subplans in the current batch have completed.
      * Exchange sinks are created per-batch so that only one batch worth of data is buffered at a time.
      * The {@code emptySinkRef} keeps the main exchange source alive across batches and is released

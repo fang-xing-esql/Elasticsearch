@@ -110,8 +110,8 @@ public final class QueryPragmas implements Writeable {
 
     public static final Setting<Boolean> FORK_IMPLICIT_LIMIT = Setting.boolSetting("fork_implicit_limit", true);
 
-    public static final Setting<Integer> SUBQUERY_BATCH_SIZE = Setting.intSetting(
-        "subquery_batch_size",
+    public static final Setting<Integer> BRANCH_BATCH_SIZE = Setting.intSetting(
+        "branch_batch_size",
         ThreadPool.searchOrGetThreadPoolSize(EsExecutors.allocatedProcessors(Settings.EMPTY)),
         1
     );
@@ -280,8 +280,8 @@ public final class QueryPragmas implements Writeable {
         return PARSING_PARALLELISM.get(settings);
     }
 
-    public int subplanBatchSize() {
-        return SUBQUERY_BATCH_SIZE.get(settings);
+    public int branchBatchSize() {
+        return BRANCH_BATCH_SIZE.get(settings);
     }
 
     /**
