@@ -46,11 +46,9 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
 
     private static final int MAX_STRING_FIELD_SERVERLESS = 600;
 
-    private static final int MAX_DOC = 200;
+    private static final int MAX_DOC = 100;
 
-    private static final int MAX_DOC_SERVERLESS = 100;
-
-    private static final int SUBQUERY_BATCH_SIZE_SERVERLESS = 2;
+    private static final int BRANCH_BATCH_SIZE_SERVERLESS = 2;
 
     @Before
     public void checkCapability() {
@@ -381,13 +379,11 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
     }
 
     private static String subqueryBatchPragma() throws IOException {
-        return isServerless() ? ", \"pragma\":{\"subquery_batch_size\":" + SUBQUERY_BATCH_SIZE_SERVERLESS + "}" : "";
+        return isServerless() ? ", \"pragma\":{\"branch_batch_size\":" + BRANCH_BATCH_SIZE_SERVERLESS + "}" : "";
     }
 
-    private static int docs() throws IOException {
-        // serverless has 6 shards, non-serverless has 1 shard,
-        // limiting the number of docs to reduce the gc lagging and intermittent OOMs in serverless
-        return isServerless() ? MAX_DOC_SERVERLESS : MAX_DOC;
+    private static int docs() {
+        return MAX_DOC;
     }
 
     private static int fields() throws IOException {
