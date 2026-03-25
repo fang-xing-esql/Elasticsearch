@@ -15,6 +15,8 @@ import org.elasticsearch.action.search.ShardSearchFailure;
 import org.elasticsearch.cluster.RemoteException;
 import org.elasticsearch.cluster.project.ProjectResolver;
 import org.elasticsearch.cluster.service.ClusterService;
+import org.elasticsearch.common.breaker.CircuitBreaker;
+import org.elasticsearch.common.breaker.CircuitBreakingException;
 import org.elasticsearch.common.util.BigArrays;
 import org.elasticsearch.common.util.Maps;
 import org.elasticsearch.common.util.concurrent.RunOnce;
@@ -480,12 +482,14 @@ public class ComputeService {
             // Each batch adds its own sinks; we release this empty sink when the last batch is dispatched.
             Releasable emptySinkRef = mainExchangeSource.addEmptySink();
             var inFlightSubplans = new AtomicInteger(0);
+            var circuitBroken = new AtomicBoolean(false);
             executeSubplansInBatches(
                 subplans,
                 subPlanListeners,
                 0,
                 batchSize,
                 inFlightSubplans,
+                circuitBroken,
                 emptySinkRef,
                 sessionId,
                 rootTask,
@@ -513,6 +517,7 @@ public class ComputeService {
         int startIndex,
         int batchSize,
         AtomicInteger inFlightSubplans,
+        AtomicBoolean circuitBroken,
         Releasable emptySinkRef,
         String sessionId,
         CancellableTask rootTask,
@@ -526,6 +531,17 @@ public class ComputeService {
     ) {
         if (startIndex >= subplans.size()) {
             // emptySinkRef was already released when the last batch was dispatched
+            return;
+        }
+        if (circuitBroken.get()) {
+            Releasables.closeExpectNoException(emptySinkRef);
+            var cbException = new CircuitBreakingException(
+                "skipped due to circuit breaking in a previous batch",
+                CircuitBreaker.Durability.TRANSIENT
+            );
+            for (int i = startIndex; i < subplans.size(); i++) {
+                subPlanListeners.get(i).onFailure(cbException);
+            }
             return;
         }
         int endIndex = Math.min(startIndex + batchSize, subplans.size());
@@ -569,6 +585,7 @@ public class ComputeService {
                             endIndex,
                             batchSize,
                             inFlightSubplans,
+                            circuitBroken,
                             emptySinkRef,
                             sessionId,
                             rootTask,
@@ -583,6 +600,9 @@ public class ComputeService {
                     }
                 }, e -> {
                     inFlightSubplans.decrementAndGet();
+                    if (ExceptionsHelper.unwrapCause(e) instanceof CircuitBreakingException) {
+                        circuitBroken.set(true);
+                    }
                     exchangeService.finishSinkHandler(childSessionId, e);
                     subPlanListener.onFailure(e);
                     if (batchRemaining.decrementAndGet() == 0) {
@@ -592,6 +612,7 @@ public class ComputeService {
                             endIndex,
                             batchSize,
                             inFlightSubplans,
+                            circuitBroken,
                             emptySinkRef,
                             sessionId,
                             rootTask,
