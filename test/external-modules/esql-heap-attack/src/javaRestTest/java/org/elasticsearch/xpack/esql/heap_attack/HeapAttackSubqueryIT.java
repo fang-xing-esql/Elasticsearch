@@ -117,7 +117,11 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
             columns = columns.item(matchesMap().entry("name", "f" + String.format(Locale.ROOT, "%03d", f)).entry("type", "keyword"));
         }
         try {
-            Map<?, ?> response = buildSubqueriesWithSort(maxSubqueries(), "manybigfields", sortKeys.toString());
+            Map<?, ?> response = buildSubqueriesWithSort(
+                isServerless() ? MIN_SUBQUERIES : MAX_SUBQUERIES,
+                "manybigfields",
+                sortKeys.toString()
+            );
             assertMap(response, matchesMap().entry("columns", columns));
         } catch (ResponseException e) {
             verifyCircuitBreakingException(e);
