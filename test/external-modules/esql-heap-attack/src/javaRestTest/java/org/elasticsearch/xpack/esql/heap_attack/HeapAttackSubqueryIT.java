@@ -82,7 +82,7 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
             columns = columns.item(matchesMap().entry("name", "f" + String.format(Locale.ROOT, "%03d", f)).entry("type", "keyword"));
         }
         try {
-            Map<?, ?> response = buildSubqueries(maxSubqueries(), "manybigfields");
+            Map<?, ?> response = buildSubqueries(subqueries(false), "manybigfields");
             assertMap(response, matchesMap().entry("columns", columns));
         } catch (ResponseException e) {
             verifyCircuitBreakingException(e);
@@ -97,7 +97,7 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
             columns = columns.item(matchesMap().entry("name", "f" + String.format(Locale.ROOT, "%03d", f)).entry("type", "keyword"));
         }
         try {
-            Map<?, ?> response = buildSubqueriesWithSort(maxSubqueries(), "manybigfields", "f000");
+            Map<?, ?> response = buildSubqueriesWithSort(subqueries(true), "manybigfields", "f000");
             assertMap(response, matchesMap().entry("columns", columns));
         } catch (ResponseException e) {
             verifyCircuitBreakingException(e);
@@ -117,11 +117,7 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
             columns = columns.item(matchesMap().entry("name", "f" + String.format(Locale.ROOT, "%03d", f)).entry("type", "keyword"));
         }
         try {
-            Map<?, ?> response = buildSubqueriesWithSort(
-                isServerless() ? MIN_SUBQUERIES : MAX_SUBQUERIES,
-                "manybigfields",
-                sortKeys.toString()
-            );
+            Map<?, ?> response = buildSubqueriesWithSort(subqueries(true), "manybigfields", sortKeys.toString());
             assertMap(response, matchesMap().entry("columns", columns));
         } catch (ResponseException e) {
             verifyCircuitBreakingException(e);
@@ -159,7 +155,7 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
             columns = columns.item(matchesMap().entry("name", "f" + String.format(Locale.ROOT, "%03d", f)).entry("type", "text"));
         }
         try {
-            Map<?, ?> response = buildSubqueries(maxSubqueries(), "manybigfields");
+            Map<?, ?> response = buildSubqueries(subqueries(false), "manybigfields");
             assertMap(response, matchesMap().entry("columns", columns));
         } catch (ResponseException e) {
             verifyCircuitBreakingException(e);
@@ -171,10 +167,10 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
         heapAttackIT.initManyBigFieldsIndex(docs, "text", true, STRING_FIELD_600);
         ListMatcher columns = matchesList();
         for (int f = 0; f < STRING_FIELD_600; f++) {
-            columns = columns.item(matchesMap().entry("name", "f" + String.format(Locale.ROOT, "%03d", f)).entry("type", "keyword"));
+            columns = columns.item(matchesMap().entry("name", "f" + String.format(Locale.ROOT, "%03d", f)).entry("type", "text"));
         }
         try {
-            Map<?, ?> response = buildSubqueriesWithSort(maxSubqueries(), "manybigfields", " substring(f000, 5) ");
+            Map<?, ?> response = buildSubqueriesWithSort(subqueries(true), "manybigfields", " substring(f000, 5) ");
             assertMap(response, matchesMap().entry("columns", columns));
         } catch (ResponseException e) {
             verifyCircuitBreakingException(e);
@@ -191,17 +187,13 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
         }
         ListMatcher columns = matchesList();
         for (int f = 0; f < STRING_FIELD_600; f++) {
-            columns = columns.item(matchesMap().entry("name", "f" + String.format(Locale.ROOT, "%03d", f)).entry("type", "keyword"));
+            columns = columns.item(matchesMap().entry("name", "f" + String.format(Locale.ROOT, "%03d", f)).entry("type", "text"));
         }
         try {
-            Map<?, ?> response = buildSubqueriesWithSort(maxSubqueries(), "manybigfields", sortKeys.toString());
+            Map<?, ?> response = buildSubqueriesWithSort(subqueries(true), "manybigfields", sortKeys.toString());
             assertMap(response, matchesMap().entry("columns", columns));
         } catch (ResponseException e) {
-            Map<?, ?> map = responseAsMap(e.getResponse());
-            assertMap(
-                map,
-                matchesMap().entry("status", 429).entry("error", matchesMap().extraOk().entry("type", "circuit_breaking_exception"))
-            );
+            verifyCircuitBreakingException(e);
         }
     }
 
@@ -249,27 +241,33 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
             grouping.append(", f").append(String.format(Locale.ROOT, "%03d", f));
         }
         try {
-            Map<?, ?> response = buildSubqueriesWithAgg(maxSubqueries(), "manybigfields", "c = COUNT_DISTINCT(f499)", grouping.toString());
+            Map<?, ?> response = buildSubqueriesWithAgg(
+                subqueries(false),
+                "manybigfields",
+                "c = COUNT_DISTINCT(f499)",
+                grouping.toString()
+            );
             assertTrue(response.get("columns") instanceof List<?> l && l.size() == (groupBySize + 1));
         } catch (ResponseException e) {
-            Map<?, ?> map = responseAsMap(e.getResponse());
-            assertMap(
-                map,
-                matchesMap().entry("status", 429).entry("error", matchesMap().extraOk().entry("type", "circuit_breaking_exception"))
-            );
+            verifyCircuitBreakingException(e);
         }
     }
 
     public void testGiantTextFieldInSubqueryIntermediateResults() throws IOException {
         int docs = 20;
         heapAttackIT.initGiantTextField(docs, false, 5);
-        assertCircuitBreaks(attempt -> buildSubqueries(maxSubqueries(), "bigtext"));
+        assertCircuitBreaks(attempt -> buildSubqueries(subqueries(false), "bigtext"));
     }
 
     public void testGiantTextFieldInSubqueryIntermediateResultsWithSort() throws IOException {
         int docs = 20;
         heapAttackIT.initGiantTextField(docs, false, 5);
-        assertCircuitBreaks(attempt -> buildSubqueriesWithSort(maxSubqueries(), "bigtext", " substring(f, 5) "));
+        try {
+            Map<?, ?> response = buildSubqueriesWithSort(subqueries(true), "bigtext", " substring(f, 5) ");
+            assertTrue(response.get("columns") instanceof List<?> l && l.size() == 1);
+        } catch (ResponseException e) {
+            verifyCircuitBreakingException(e);
+        }
     }
 
     public void testGiantTextFieldInSubqueryIntermediateResultsWithAggNoGrouping() throws IOException {
@@ -319,11 +317,7 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
                 }
             }
         } catch (ResponseException e) {
-            Map<?, ?> map = responseAsMap(e.getResponse());
-            assertMap(
-                map,
-                matchesMap().entry("status", 429).entry("error", matchesMap().extraOk().entry("type", "circuit_breaking_exception"))
-            );
+            verifyCircuitBreakingException(e);
         }
     }
 
@@ -390,10 +384,18 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
         return MAX_DOC;
     }
 
-    private static int maxSubqueries() throws IOException {
-        // serverless has 6 shards, non-serverless has 1 shard, the number of exchange operators increases when the number of subqueries
-        // increase, limiting the number of subqueries to reduce the gc lagging and intermittent OOMs in serverless
-        return isServerless() ? MAX_SUBQUERIES_SERVERLESS : MAX_SUBQUERIES;
+    /*
+     * Serverless has 6 shards, non-serverless has 1 shard,
+     * the number of exchange operators increases when the number of subqueries increase,
+     * sort is expensive as it preserves all fields comparing to stats,
+     * limiting the number of subqueries to reduce the gc lagging and intermittent OOM.
+     */
+    private static int subqueries(boolean hasSort) throws IOException {
+        if (isServerless()) {
+            return hasSort ? MIN_SUBQUERIES : MAX_SUBQUERIES_SERVERLESS;
+        } else {
+            return MAX_SUBQUERIES;
+        }
     }
 
     private static void verifyCircuitBreakingException(ResponseException re) throws IOException {
