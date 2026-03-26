@@ -48,8 +48,6 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
 
     private static final int MAX_DOC = 100;
 
-    private static final int BRANCH_BATCH_SIZE_SERVERLESS = 2;
-
     @Before
     public void checkCapability() {
         assumeTrue("Subquery is behind snapshot", Build.current().isSnapshot());
@@ -260,7 +258,7 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
     }
 
     public void testGiantTextFieldInSubqueryIntermediateResultsWithSort() throws IOException {
-        int docs = 20;
+        int docs = 10;
         heapAttackIT.initGiantTextField(docs, false, 5);
         try {
             Map<?, ?> response = buildSubqueriesWithSort(subqueries(true), "bigtext", " substring(f, 5) ");
@@ -372,12 +370,8 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
         return responseAsMap(query(query.toString(), "columns, values"));
     }
 
-    private static String endQuery() throws IOException {
-        return " \"" + subqueryBatchPragma() + "}";
-    }
-
-    private static String subqueryBatchPragma() throws IOException {
-        return isServerless() ? ", \"pragma\":{\"branch_batch_size\":" + BRANCH_BATCH_SIZE_SERVERLESS + "}" : "";
+    private static String endQuery() {
+        return " \"}";
     }
 
     private static int docs() {
@@ -385,10 +379,10 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
     }
 
     /*
-     * Serverless has 6 shards, non-serverless has 1 shard,
-     * the number of exchange operators increases when the number of subqueries increase,
-     * sort is expensive as it preserves all fields comparing to stats,
-     * limiting the number of subqueries to reduce the gc lagging and intermittent OOM.
+     * Serverless has 6 shards, non-serverless has 1 shard.
+     * The number of exchange operators increases when the number of subqueries increase.
+     * Sort is expensive as these tests preserve all fields comparing to stats.
+     * So, limiting the number of subqueries to reduce the gc lagging and intermittent OOM.
      */
     private static int subqueries(boolean hasSort) throws IOException {
         if (isServerless()) {

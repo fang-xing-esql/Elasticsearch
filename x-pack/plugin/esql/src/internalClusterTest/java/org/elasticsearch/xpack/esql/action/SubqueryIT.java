@@ -45,7 +45,7 @@ public class SubqueryIT extends AbstractEsqlIntegTestCase {
             | KEEP id, content
             | SORT id
             """;
-        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_BATCH_SIZE.getKey(), 1).build());
+        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_PARALLEL_DEGREE.getKey(), 1).build());
         try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
             assertColumnNames(resp.columns(), List.of("id", "content"));
             assertColumnTypes(resp.columns(), List.of("integer", "text"));
@@ -73,7 +73,7 @@ public class SubqueryIT extends AbstractEsqlIntegTestCase {
             | SORT id
             | KEEP id, content
             """;
-        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_BATCH_SIZE.getKey(), 2).build());
+        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_PARALLEL_DEGREE.getKey(), 2).build());
         try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
             assertColumnNames(resp.columns(), List.of("id", "content"));
             assertColumnTypes(resp.columns(), List.of("integer", "text"));
@@ -96,7 +96,7 @@ public class SubqueryIT extends AbstractEsqlIntegTestCase {
             | KEEP x, y, id
             | SORT x NULLS LAST
             """;
-        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_BATCH_SIZE.getKey(), 1).build());
+        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_PARALLEL_DEGREE.getKey(), 1).build());
         try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
             assertColumnNames(resp.columns(), List.of("x", "y", "id"));
             Iterable<Iterable<Object>> expectedValues = List.of(
@@ -117,7 +117,7 @@ public class SubqueryIT extends AbstractEsqlIntegTestCase {
             | KEEP id, content
             | SORT id
             """;
-        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_BATCH_SIZE.getKey(), 2).build());
+        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_PARALLEL_DEGREE.getKey(), 2).build());
         try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
             assertColumnNames(resp.columns(), List.of("id", "content"));
             assertColumnTypes(resp.columns(), List.of("integer", "text"));
@@ -143,7 +143,7 @@ public class SubqueryIT extends AbstractEsqlIntegTestCase {
             | KEEP id, content
             | SORT id
             """;
-        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_BATCH_SIZE.getKey(), 8).build());
+        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_PARALLEL_DEGREE.getKey(), 8).build());
         try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
             assertColumnNames(resp.columns(), List.of("id", "content"));
             assertColumnTypes(resp.columns(), List.of("integer", "text"));
@@ -164,7 +164,7 @@ public class SubqueryIT extends AbstractEsqlIntegTestCase {
             | KEEP id, content
             | SORT id
             """;
-        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_BATCH_SIZE.getKey(), 3).build());
+        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_PARALLEL_DEGREE.getKey(), 3).build());
         try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
             assertColumnNames(resp.columns(), List.of("id", "content"));
             assertColumnTypes(resp.columns(), List.of("integer", "text"));
@@ -188,7 +188,7 @@ public class SubqueryIT extends AbstractEsqlIntegTestCase {
             | KEEP id, content
             | SORT id
             """;
-        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_BATCH_SIZE.getKey(), 1).build());
+        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_PARALLEL_DEGREE.getKey(), 1).build());
         try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
             assertColumnNames(resp.columns(), List.of("id", "content"));
             assertColumnTypes(resp.columns(), List.of("integer", "text"));
@@ -214,7 +214,7 @@ public class SubqueryIT extends AbstractEsqlIntegTestCase {
             | KEEP cnt, id, mx
             | SORT cnt NULLS LAST, id NULLS LAST
             """;
-        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_BATCH_SIZE.getKey(), 1).build());
+        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_PARALLEL_DEGREE.getKey(), 1).build());
         try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
             assertColumnNames(resp.columns(), List.of("cnt", "id", "mx"));
             Iterable<Iterable<Object>> expectedValues = List.of(
@@ -238,7 +238,7 @@ public class SubqueryIT extends AbstractEsqlIntegTestCase {
             | KEEP id, content
             | SORT id
             """;
-        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_BATCH_SIZE.getKey(), 1).build());
+        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_PARALLEL_DEGREE.getKey(), 1).build());
         try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
             assertColumnNames(resp.columns(), List.of("id", "content"));
             assertColumnTypes(resp.columns(), List.of("integer", "text"));
@@ -260,7 +260,7 @@ public class SubqueryIT extends AbstractEsqlIntegTestCase {
             | KEEP id, content
             | SORT id
             """;
-        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_BATCH_SIZE.getKey(), 1).build());
+        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_PARALLEL_DEGREE.getKey(), 1).build());
         try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
             assertColumnNames(resp.columns(), List.of("id", "content"));
             assertColumnTypes(resp.columns(), List.of("integer", "text"));
@@ -316,7 +316,7 @@ public class SubqueryIT extends AbstractEsqlIntegTestCase {
             | KEEP id, content
             | SORT id
             """;
-        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_BATCH_SIZE.getKey(), 2).build());
+        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_PARALLEL_DEGREE.getKey(), 2).build());
         try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
             assertColumnNames(resp.columns(), List.of("id", "content"));
             assertColumnTypes(resp.columns(), List.of("integer", "text"));
@@ -339,7 +339,7 @@ public class SubqueryIT extends AbstractEsqlIntegTestCase {
             | KEEP id, content
             | SORT id
             """;
-        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_BATCH_SIZE.getKey(), 2).build());
+        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_PARALLEL_DEGREE.getKey(), 2).build());
         try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
             assertColumnNames(resp.columns(), List.of("id", "content"));
             assertColumnTypes(resp.columns(), List.of("integer", "text"));
@@ -364,7 +364,7 @@ public class SubqueryIT extends AbstractEsqlIntegTestCase {
             | KEEP id, content
             | SORT id
             """;
-        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_BATCH_SIZE.getKey(), 1).build());
+        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_PARALLEL_DEGREE.getKey(), 1).build());
         try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
             assertColumnNames(resp.columns(), List.of("id", "content"));
             assertColumnTypes(resp.columns(), List.of("integer", "text"));

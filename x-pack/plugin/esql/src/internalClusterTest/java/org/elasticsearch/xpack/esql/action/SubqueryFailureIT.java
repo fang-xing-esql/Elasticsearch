@@ -302,7 +302,7 @@ public class SubqueryFailureIT extends AbstractEsqlIntegTestCase {
         int batchSize = randomIntBetween(1, 3);
         var pragmas = new QueryPragmas(
             Settings.builder()
-                .put(QueryPragmas.BRANCH_BATCH_SIZE.getKey(), batchSize)
+                .put(QueryPragmas.BRANCH_PARALLEL_DEGREE.getKey(), batchSize)
                 .put(QueryPragmas.MAX_CONCURRENT_SHARDS_PER_NODE.getKey(), 1)
                 .build()
         );
@@ -320,6 +320,6 @@ public class SubqueryFailureIT extends AbstractEsqlIntegTestCase {
     }
 
     private static QueryPragmas batchPragmas(int batchSize) {
-        return new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_BATCH_SIZE.getKey(), batchSize).build());
+        return new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_PARALLEL_DEGREE.getKey(), batchSize).build());
     }
 }

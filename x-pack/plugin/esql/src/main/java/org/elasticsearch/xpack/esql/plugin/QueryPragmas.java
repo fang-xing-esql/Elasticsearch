@@ -110,11 +110,11 @@ public final class QueryPragmas implements Writeable {
 
     public static final Setting<Boolean> FORK_IMPLICIT_LIMIT = Setting.boolSetting("fork_implicit_limit", true);
 
-    public static final Setting<Integer> BRANCH_BATCH_SIZE = Setting.intSetting(
-        "branch_batch_size",
-        ThreadPool.searchOrGetThreadPoolSize(EsExecutors.allocatedProcessors(Settings.EMPTY)),
-        1
-    );
+    /**
+     * The number of branches to execute in parallel. This is a safeguard to avoid overloading the cluster with too many parallel branches.
+     * This applies to forks and subqueries.
+     */
+    public static final Setting<Integer> BRANCH_PARALLEL_DEGREE = Setting.intSetting("branch_parallel_degree", 2, 1);
 
     /**
      * Number of parallel parser threads for intra-file text format parsing (CSV, NDJSON).
@@ -280,8 +280,8 @@ public final class QueryPragmas implements Writeable {
         return PARSING_PARALLELISM.get(settings);
     }
 
-    public int branchBatchSize() {
-        return BRANCH_BATCH_SIZE.get(settings);
+    public int branchParallelDegree() {
+        return BRANCH_PARALLEL_DEGREE.get(settings);
     }
 
     /**

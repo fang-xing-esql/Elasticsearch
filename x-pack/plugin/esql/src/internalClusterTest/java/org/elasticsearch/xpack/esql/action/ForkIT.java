@@ -1071,7 +1071,7 @@ public class ForkIT extends AbstractEsqlIntegTestCase {
             | KEEP _fork, id, content
             | SORT _fork, id
             """;
-        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_BATCH_SIZE.getKey(), 10).build());
+        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_PARALLEL_DEGREE.getKey(), 10).build());
         try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
             assertColumnNames(resp.columns(), List.of("_fork", "id", "content"));
             assertColumnTypes(resp.columns(), List.of("keyword", "integer", "text"));
@@ -1097,7 +1097,7 @@ public class ForkIT extends AbstractEsqlIntegTestCase {
             | KEEP _fork, id, content
             | SORT _fork, id
             """;
-        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_BATCH_SIZE.getKey(), 3).build());
+        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_PARALLEL_DEGREE.getKey(), 3).build());
         try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
             assertColumnNames(resp.columns(), List.of("_fork", "id", "content"));
             assertColumnTypes(resp.columns(), List.of("keyword", "integer", "text"));
@@ -1125,7 +1125,7 @@ public class ForkIT extends AbstractEsqlIntegTestCase {
             | KEEP _fork, id, content
             | SORT _fork, id
             """;
-        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_BATCH_SIZE.getKey(), 1).build());
+        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_PARALLEL_DEGREE.getKey(), 1).build());
         try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
             assertColumnNames(resp.columns(), List.of("_fork", "id", "content"));
             assertColumnTypes(resp.columns(), List.of("keyword", "integer", "text"));
@@ -1150,7 +1150,7 @@ public class ForkIT extends AbstractEsqlIntegTestCase {
             | KEEP _fork, id, content
             | SORT _fork, id
             """;
-        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_BATCH_SIZE.getKey(), 1).build());
+        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_PARALLEL_DEGREE.getKey(), 1).build());
         try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
             assertColumnNames(resp.columns(), List.of("_fork", "id", "content"));
             assertColumnTypes(resp.columns(), List.of("keyword", "integer", "text"));
@@ -1180,7 +1180,7 @@ public class ForkIT extends AbstractEsqlIntegTestCase {
             | KEEP _fork, id, content
             | SORT _fork, id
             """;
-        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_BATCH_SIZE.getKey(), 1).build());
+        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_PARALLEL_DEGREE.getKey(), 1).build());
         try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
             assertColumnNames(resp.columns(), List.of("_fork", "id", "content"));
             assertColumnTypes(resp.columns(), List.of("keyword", "integer", "text"));
@@ -1204,7 +1204,7 @@ public class ForkIT extends AbstractEsqlIntegTestCase {
             | KEEP _fork, id, content
             | SORT _fork, id
             """;
-        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_BATCH_SIZE.getKey(), 2).build());
+        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_PARALLEL_DEGREE.getKey(), 2).build());
         try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
             assertColumnNames(resp.columns(), List.of("_fork", "id", "content"));
             assertColumnTypes(resp.columns(), List.of("keyword", "integer", "text"));
@@ -1232,7 +1232,7 @@ public class ForkIT extends AbstractEsqlIntegTestCase {
             | KEEP _fork, id, content
             | SORT _fork, id
             """;
-        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_BATCH_SIZE.getKey(), 2).build());
+        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_PARALLEL_DEGREE.getKey(), 2).build());
         try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
             assertColumnNames(resp.columns(), List.of("_fork", "id", "content"));
             assertColumnTypes(resp.columns(), List.of("keyword", "integer", "text"));
@@ -1259,7 +1259,7 @@ public class ForkIT extends AbstractEsqlIntegTestCase {
             | KEEP _fork, cnt, id, mx
             | SORT _fork
             """;
-        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_BATCH_SIZE.getKey(), 1).build());
+        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_PARALLEL_DEGREE.getKey(), 1).build());
         try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
             assertColumnNames(resp.columns(), List.of("_fork", "cnt", "id", "mx"));
             Iterable<Iterable<Object>> expectedValues = List.of(
@@ -1289,7 +1289,7 @@ public class ForkIT extends AbstractEsqlIntegTestCase {
             | KEEP _fork, id, content
             | SORT _fork, id
             """;
-        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_BATCH_SIZE.getKey(), 1).build());
+        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_PARALLEL_DEGREE.getKey(), 1).build());
         try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
             assertColumnNames(resp.columns(), List.of("_fork", "id", "content"));
             assertColumnTypes(resp.columns(), List.of("keyword", "integer", "text"));
@@ -1321,7 +1321,7 @@ public class ForkIT extends AbstractEsqlIntegTestCase {
             | KEEP _fork, id, content
             | SORT _fork, id
             """;
-        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_BATCH_SIZE.getKey(), 1).build());
+        var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_PARALLEL_DEGREE.getKey(), 1).build());
         try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
             assertColumnNames(resp.columns(), List.of("_fork", "id", "content"));
             assertColumnTypes(resp.columns(), List.of("keyword", "integer", "text"));
