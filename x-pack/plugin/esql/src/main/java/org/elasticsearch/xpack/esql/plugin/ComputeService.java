@@ -500,6 +500,7 @@ public class ComputeService {
         final ExchangeSourceHandler mainExchangeSource;
         final Map<String, EsqlExecutionInfo.Cluster.Status> initialClusterStatuses;
         final AtomicInteger nextId = new AtomicInteger();
+        final AtomicInteger completedSubPlanCount = new AtomicInteger();
         final Releasable emptySinkRef;
 
         SubPlansExecutor(
@@ -553,12 +554,6 @@ public class ComputeService {
             var childSessionId = newChildSession(sessionId);
             ExchangeSinkHandler exchangeSink = exchangeService.createSinkHandler(childSessionId, queryPragmas.exchangeBufferSize());
             mainExchangeSource.addRemoteSink(exchangeSink::fetchPageAsync, true, () -> {}, 1, ActionListener.noop());
-            // Release the empty sink after the last subplan's exchange sink is registered.
-            // This must happen after addRemoteSink to avoid a race where the exchange source
-            // sees zero outstanding sinks and finishes before this subplan's sink is tracked.
-            if (subPlanIndex == subplans.size() - 1) {
-                emptySinkRef.close();
-            }
             var subPlanListener = subPlanListeners.get(subPlanIndex);
             executePlan(
                 childSessionId,
@@ -577,19 +572,29 @@ public class ComputeService {
                         ActionListener.running(() -> { exchangeService.finishSinkHandler(childSessionId, null); })
                     );
                     subPlanListener.onResponse(result.completionInfo());
-                    tryExecuteNextSubPlan();
+                    onSubPlanCompleted();
                 }, e -> {
                     if (LOGGER.isDebugEnabled()) {
                         LOGGER.debug("subplan [{}] finished with an error [{}]", subPlanIndex, e.getMessage());
                     }
                     exchangeService.finishSinkHandler(childSessionId, e);
                     subPlanListener.onFailure(e);
-                    tryExecuteNextSubPlan();
+                    onSubPlanCompleted();
                 }),
                 () -> exchangeSink.createExchangeSink(() -> {}),
                 initialClusterStatuses,
                 configuration.profile() ? new PlanTimeProfile() : null
             );
+        }
+
+        void onSubPlanCompleted() {
+            if (completedSubPlanCount.incrementAndGet() == subplans.size()) {
+                // All subplans have completed — release the empty sink so the exchange source
+                // can finish once all subplan sinks have been consumed by the coordinator.
+                emptySinkRef.close();
+            } else {
+                tryExecuteNextSubPlan();
+            }
         }
     }
 
