@@ -40,11 +40,11 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
     // the upper limit is defined in {@code Fork.MAX_BRANCHES}
     private static final int MAX_SUBQUERIES = 8;
 
-    private static final int MAX_SUBQUERIES_SERVERLESS = 4;
+    private static final int MAX_SUBQUERIES_SERVERLESS = 5;
 
     private static final int STRING_FIELDS_1K = 1000;
 
-    private static final int STRING_FIELD_600 = 600;
+    private static final int STRING_FIELD_700 = 700;
 
     private static final int MAX_DOC = 100;
 
@@ -57,7 +57,7 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
         heapAttackIT.initManyBigFieldsIndex(MAX_DOC, "keyword", false, STRING_FIELDS_1K);
         for (int subquery : List.of(MIN_SUBQUERIES, MAX_SUBQUERIES)) {
             ListMatcher columns = matchesList();
-            int fieldsToRead = subquery < MAX_SUBQUERIES ? STRING_FIELDS_1K : STRING_FIELD_600; // with 1000 fields we circuit break
+            int fieldsToRead = subquery < MAX_SUBQUERIES ? STRING_FIELDS_1K : STRING_FIELD_700; // with 1000 fields we circuit break
             StringBuilder query = new StringBuilder("manybigfields | KEEP ");
             for (int f = 0; f < fieldsToRead; f++) {
                 String fieldName = "f" + String.format(Locale.ROOT, "%03d", f);
@@ -74,9 +74,9 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
 
     public void testManyRandomKeywordFieldsInSubqueryIntermediateResults() throws IOException {
         int docs = docs();
-        heapAttackIT.initManyBigFieldsIndex(docs, "keyword", true, STRING_FIELD_600);
+        heapAttackIT.initManyBigFieldsIndex(docs, "keyword", true, STRING_FIELD_700);
         ListMatcher columns = matchesList();
-        for (int f = 0; f < STRING_FIELD_600; f++) {
+        for (int f = 0; f < STRING_FIELD_700; f++) {
             columns = columns.item(matchesMap().entry("name", "f" + String.format(Locale.ROOT, "%03d", f)).entry("type", "keyword"));
         }
         try {
@@ -89,9 +89,9 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
 
     public void testManyRandomKeywordFieldsInSubqueryIntermediateResultsWithSortOneField() throws IOException {
         int docs = docs();
-        heapAttackIT.initManyBigFieldsIndex(docs, "keyword", true, STRING_FIELD_600);
+        heapAttackIT.initManyBigFieldsIndex(docs, "keyword", true, STRING_FIELD_700);
         ListMatcher columns = matchesList();
-        for (int f = 0; f < STRING_FIELD_600; f++) {
+        for (int f = 0; f < STRING_FIELD_700; f++) {
             columns = columns.item(matchesMap().entry("name", "f" + String.format(Locale.ROOT, "%03d", f)).entry("type", "keyword"));
         }
         try {
@@ -104,14 +104,14 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
 
     public void testManyRandomKeywordFieldsInSubqueryIntermediateResultsWithSortManyFields() throws IOException {
         int docs = docs();
-        heapAttackIT.initManyBigFieldsIndex(docs, "keyword", true, STRING_FIELD_600);
+        heapAttackIT.initManyBigFieldsIndex(docs, "keyword", true, STRING_FIELD_700);
         StringBuilder sortKeys = new StringBuilder();
         sortKeys.append("f000");
         for (int f = 1; f < 11; f++) {
             sortKeys.append(", f").append(String.format(Locale.ROOT, "%03d", f));
         }
         ListMatcher columns = matchesList();
-        for (int f = 0; f < STRING_FIELD_600; f++) {
+        for (int f = 0; f < STRING_FIELD_700; f++) {
             columns = columns.item(matchesMap().entry("name", "f" + String.format(Locale.ROOT, "%03d", f)).entry("type", "keyword"));
         }
         try {
@@ -147,9 +147,9 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
 
     public void testManyRandomTextFieldsInSubqueryIntermediateResults() throws IOException {
         int docs = docs();
-        heapAttackIT.initManyBigFieldsIndex(docs, "text", true, STRING_FIELD_600);
+        heapAttackIT.initManyBigFieldsIndex(docs, "text", true, STRING_FIELD_700);
         ListMatcher columns = matchesList();
-        for (int f = 0; f < STRING_FIELD_600; f++) {
+        for (int f = 0; f < STRING_FIELD_700; f++) {
             columns = columns.item(matchesMap().entry("name", "f" + String.format(Locale.ROOT, "%03d", f)).entry("type", "text"));
         }
         try {
@@ -162,9 +162,9 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
 
     public void testManyRandomTextFieldsInSubqueryIntermediateResultsWithSortOneField() throws IOException {
         int docs = docs();
-        heapAttackIT.initManyBigFieldsIndex(docs, "text", true, STRING_FIELD_600);
+        heapAttackIT.initManyBigFieldsIndex(docs, "text", true, STRING_FIELD_700);
         ListMatcher columns = matchesList();
-        for (int f = 0; f < STRING_FIELD_600; f++) {
+        for (int f = 0; f < STRING_FIELD_700; f++) {
             columns = columns.item(matchesMap().entry("name", "f" + String.format(Locale.ROOT, "%03d", f)).entry("type", "text"));
         }
         try {
@@ -177,14 +177,14 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
 
     public void testManyRandomTextFieldsInSubqueryIntermediateResultsWithSortManyFields() throws IOException {
         int docs = docs();
-        heapAttackIT.initManyBigFieldsIndex(docs, "text", true, STRING_FIELD_600);
+        heapAttackIT.initManyBigFieldsIndex(docs, "text", true, STRING_FIELD_700);
         StringBuilder sortKeys = new StringBuilder();
         sortKeys.append(" substring(f000, 5) ");
         for (int f = 1; f < 5; f++) {
             sortKeys.append(", substring(f").append(String.format(Locale.ROOT, "%03d", f)).append(", 5) ");
         }
         ListMatcher columns = matchesList();
-        for (int f = 0; f < STRING_FIELD_600; f++) {
+        for (int f = 0; f < STRING_FIELD_700; f++) {
             columns = columns.item(matchesMap().entry("name", "f" + String.format(Locale.ROOT, "%03d", f)).entry("type", "text"));
         }
         try {
@@ -231,7 +231,7 @@ public class HeapAttackSubqueryIT extends HeapAttackTestCase {
 
     public void testManyRandomKeywordFieldsInSubqueryIntermediateResultsWithAggGBYManyFields() throws IOException {
         int docs = docs();
-        heapAttackIT.initManyBigFieldsIndex(docs, "keyword", true, STRING_FIELD_600);
+        heapAttackIT.initManyBigFieldsIndex(docs, "keyword", true, STRING_FIELD_700);
         StringBuilder grouping = new StringBuilder();
         grouping.append("f000");
         int groupBySize = 100;
