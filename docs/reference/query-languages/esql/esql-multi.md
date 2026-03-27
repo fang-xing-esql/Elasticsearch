@@ -11,3 +11,4 @@ navigation_title: Query multiple sources
 
 * [Query multiple indices](esql-multi-index.md)
 * [Query across clusters](esql-cross-clusters.md)
+* [Subquery](esql-subquery.md)
