@@ -10,6 +10,7 @@ package org.elasticsearch.xpack.esql.optimizer.rules.logical;
 import org.elasticsearch.compute.data.BlockUtils;
 import org.elasticsearch.compute.data.Page;
 import org.elasticsearch.index.IndexMode;
+import org.elasticsearch.xpack.esql.analysis.Analyzer;
 import org.elasticsearch.xpack.esql.core.expression.Alias;
 import org.elasticsearch.xpack.esql.core.expression.Attribute;
 import org.elasticsearch.xpack.esql.core.expression.AttributeSet;
@@ -226,8 +227,8 @@ public final class PruneColumns extends Rule<LogicalPlan, LogicalPlan> {
     private static LogicalPlan pruneColumnsInFork(Fork fork, AttributeSet.Builder used) {
 
         // exit early for UnionAll
-        if (fork instanceof UnionAll) {
-            return fork;
+        if (fork instanceof UnionAll unionAll) {
+            return pruneNoFieldsInUnionAll(unionAll, used);
         }
 
         // prune the output attributes of fork based on usage from the rest of the plan
@@ -283,6 +284,35 @@ public final class PruneColumns extends Rule<LogicalPlan, LogicalPlan> {
             fork = fork.replaceSubPlansAndOutput(newChildren, prunedForkAttrs);
         }
         return fork;
+    }
+
+    /**
+     * If a UnionAll child is a Project that only projects the synthetic {@code <no-fields>} marker
+     * (produced when an index has no mapped fields), replace it with a Project with empty output.
+     * The {@code <no-fields>} marker is not a real field and cannot be extracted or projected at
+     * execution time. Stripping it here aligns the children's output with the UnionAll's own output
+     * (which is already empty because {@link Fork#outputUnion} filters out {@code <no-fields>}).
+     */
+    private static LogicalPlan pruneNoFieldsInUnionAll(UnionAll unionAll, AttributeSet.Builder used) {
+        if (unionAll.output().isEmpty() == false || used.build().names().contains(Analyzer.NO_FIELDS_NAME)) {
+            return unionAll;
+        }
+        List<LogicalPlan> newChildren = new ArrayList<>();
+        boolean changed = false;
+        for (LogicalPlan child : unionAll.children()) {
+            if (child instanceof Project project && isNoFieldsOnly(project)) {
+                newChildren.add(new Project(project.source(), project.child(), List.of()));
+                changed = true;
+            } else {
+                newChildren.add(child);
+            }
+        }
+        return changed ? unionAll.replaceSubPlansAndOutput(newChildren, unionAll.output()) : unionAll;
+    }
+
+    private static boolean isNoFieldsOnly(Project project) {
+        var projections = project.projections();
+        return projections.size() == 1 && projections.getFirst().name().equals(Analyzer.NO_FIELDS_NAME);
     }
 
     /**

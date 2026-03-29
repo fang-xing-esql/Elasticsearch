@@ -79,6 +79,45 @@ emp_no:integer | languages:integer
 10093          | 3
 ;
 
+subqueryInFromWithNoFieldCountEmpty
+required_capability: subquery_in_from_command
+required_capability: subquery_in_from_command_without_implicit_limit
+required_capability: subquery_in_from_command_prune_no_fields
+
+FROM employees, (FROM employees)
+| STATS cnt = count()
+;
+
+cnt:long
+200
+;
+
+subqueryInFromWithNoFieldCountStar
+required_capability: subquery_in_from_command
+required_capability: subquery_in_from_command_without_implicit_limit
+required_capability: subquery_in_from_command_prune_no_fields
+
+FROM employees, (FROM employees)
+| STATS cnt = count(*)
+;
+
+cnt:long
+200
+;
+
+subqueryInFromWithNoFieldCountOne
+required_capability: subquery_in_from_command
+required_capability: subquery_in_from_command_without_implicit_limit
+required_capability: subquery_in_from_command_prune_no_fields
+
+FROM employees, (FROM employees)
+| STATS cnt = count(1)
+;
+
+cnt:long
+200
+;
+
 subqueryInFromWithEvalInSubquery
 required_capability: subquery_in_from_command
 
