@@ -3813,7 +3813,7 @@ public class PhysicalPlanOptimizerTests extends ESTestCase {
      *           \_EsQueryExec[no_fields_index]
      */
     public void testProjectAwayColumnsWithSubqueryCount() {
-        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_PRUNE_NO_FIELDS.isEnabled());
+        assumeTrue("Prune no-fields in subquery", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_PRUNE_NO_FIELDS.isEnabled());
         for (String count : List.of("count()", "count(*)", "count(1)")) {
             String query = LoggerMessageFormat.format(null, """
                 FROM no_fields_index, (FROM no_fields_index)
