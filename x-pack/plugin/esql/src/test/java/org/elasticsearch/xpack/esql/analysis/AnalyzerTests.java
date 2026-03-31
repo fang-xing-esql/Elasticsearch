@@ -6206,6 +6206,64 @@ public class AnalyzerTests extends ESTestCase {
         }
     }
 
+    public void testCountWithForkWithNoFields() {
+        for (String count : List.of("count()", "count(*)", "count(1)")) {
+            String query = LoggerMessageFormat.format(null, """
+                FROM no_fields_index
+                | FORK (WHERE 1 == 1) (WHERE 2 == 2)
+                | STATS {}
+                """, count);
+            var plan = basic().addNoFieldsIndex().query(query);
+
+            Limit limit = as(plan, Limit.class);
+            Aggregate aggregate = as(limit.child(), Aggregate.class);
+            Fork fork = as(aggregate.child(), Fork.class);
+            assertEquals(1, fork.output().size());
+            assertEquals(2, fork.children().size());
+
+            for (int i = 0; i < 2; i++) {
+                limit = as(fork.children().get(i), Limit.class);
+                Project project = as(limit.child(), Project.class);
+                assertEquals(1, project.projections().size());
+                ReferenceAttribute referenceAttribute = as(project.projections().getFirst(), ReferenceAttribute.class);
+                assertEquals("_fork", referenceAttribute.name());
+                Eval eval = as(project.child(), Eval.class);
+                Filter filter = as(eval.child(), Filter.class);
+                EsRelation relation = as(filter.child(), EsRelation.class);
+                assertEquals("no_fields_index", relation.indexPattern());
+            }
+        }
+    }
+
+    public void testCountWithForkWithEmptyIndex() {
+        for (String count : List.of("count()", "count(*)", "count(1)")) {
+            String query = LoggerMessageFormat.format(null, """
+                FROM empty_index
+                | FORK (WHERE 1 == 1) (WHERE 2 == 2)
+                | STATS {}
+                """, count);
+            var plan = basic().addEmptyIndex().query(query);
+
+            Limit limit = as(plan, Limit.class);
+            Aggregate aggregate = as(limit.child(), Aggregate.class);
+            Fork fork = as(aggregate.child(), Fork.class);
+            assertEquals(1, fork.output().size());
+            assertEquals(2, fork.children().size());
+
+            for (int i = 0; i < 2; i++) {
+                limit = as(fork.children().get(i), Limit.class);
+                Project project = as(limit.child(), Project.class);
+                assertEquals(1, project.projections().size());
+                ReferenceAttribute referenceAttribute = as(project.projections().getFirst(), ReferenceAttribute.class);
+                assertEquals("_fork", referenceAttribute.name());
+                Eval eval = as(project.child(), Eval.class);
+                Filter filter = as(eval.child(), Filter.class);
+                EsRelation relation = as(filter.child(), EsRelation.class);
+                assertEquals("empty_index", relation.indexPattern());
+            }
+        }
+    }
+
     public void testLookupJoinOnFieldNotAnywhereElse() {
         assumeTrue(
             "requires LOOKUP JOIN ON boolean expression capability",

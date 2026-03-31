@@ -1197,7 +1197,7 @@ public class EsqlCapabilities {
         /**
          * Prune no-fields in subquery project.
          */
-        SUBQUERY_IN_FROM_COMMAND_PRUNE_NO_FIELDS(Build.current().isSnapshot()),
+        SUBQUERY_IN_FROM_COMMAND_PRUNE_NO_FIELDS,
 
         /**
          * Support for views in cluster state (and REST API).
