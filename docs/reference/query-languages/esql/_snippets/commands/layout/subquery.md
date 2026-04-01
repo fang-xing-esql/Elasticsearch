@@ -5,42 +5,61 @@ stack: preview 9.4.0
 
 A subquery is a complete ES|QL query wrapped in parentheses that can be used
 in place of an index pattern in the [`FROM`](/reference/query-languages/esql/commands/from.md) command.
-Each subquery is executed independently, and the results are combined using
-UNION ALL semantics.
+Each subquery is executed independently. The final output combines all these
+results into a single list, including any duplicate rows.
 
 ## Syntax
 
 ```esql
-FROM index_pattern, ( FROM index_pattern | <processing_commands> ), ...
+FROM index_pattern [, (FROM index_pattern [METADATA fields] [| processing_commands])]* [METADATA fields] <1>
+FROM (FROM index_pattern [METADATA fields] [| processing_commands]) [, (FROM index_pattern [METADATA fields] [| processing_commands])]* [METADATA fields] <2>
 ```
 
 A subquery starts with a `FROM` source command followed by zero or more piped
 processing commands, all enclosed in parentheses. Multiple subqueries and regular
 index patterns can be combined in a single `FROM` clause, separated by commas.
 
+1. When an index pattern is present, zero or more subqueries can follow.
+2. Without an index pattern, one or more subqueries are required.
+
 ## Description
 
 Subqueries enable you to combine results from multiple independently processed
 data sources within a single query. Each subquery runs its own pipeline of
 processing commands (such as `WHERE`, `EVAL`, `STATS`, or `SORT`) and the
-results are unioned together with results from other index patterns or subqueries
+results are combined together with results from other index patterns or subqueries
 in the `FROM` clause.
 
 Fields that exist in one source but not another are filled with `null` values.
 
-Subqueries support but not limit to the following processing commands:
-- Filtering with `WHERE`
-- Field transformations with `EVAL`
-- Aggregations with `STATS`
-- Sorting with `SORT` and limiting with `LIMIT`
-- Enrichment with `ENRICH` or `LOOKUP JOIN`
-- Pattern extraction with `GROK` or `DISSECT`
-- The `METADATA` directive on either the subquery or the outer `FROM`
+The subquery pipeline can include commands such as the following:
 
-::::{note}
-The `FROM` clause can also consist entirely of subqueries, with no regular index
-pattern required.
-::::
+Source commands:
+
+- [`FROM`](/reference/query-languages/esql/commands/from.md)
+
+Processing commands:
+
+- [`CHANGE_POINT`](/reference/query-languages/esql/commands/change-point.md)
+- [`COMPLETION`](/reference/query-languages/esql/commands/completion.md)
+- [`DISSECT`](/reference/query-languages/esql/commands/dissect.md)
+- [`DROP`](/reference/query-languages/esql/commands/drop.md)
+- [`ENRICH`](/reference/query-languages/esql/commands/enrich.md)
+- [`EVAL`](/reference/query-languages/esql/commands/eval.md)
+- [`GROK`](/reference/query-languages/esql/commands/grok.md)
+- [`INLINE STATS`](/reference/query-languages/esql/commands/inlinestats-by.md)
+- [`KEEP`](/reference/query-languages/esql/commands/keep.md)
+- [`LIMIT`](/reference/query-languages/esql/commands/limit.md)
+- [`LOOKUP JOIN`](/reference/query-languages/esql/commands/lookup-join.md)
+- [`MV_EXPAND`](/reference/query-languages/esql/commands/mv_expand.md)
+- [`RENAME`](/reference/query-languages/esql/commands/rename.md)
+- [`RERANK`](/reference/query-languages/esql/commands/rerank.md)
+- [`SAMPLE`](/reference/query-languages/esql/commands/sample.md)
+- [`SORT`](/reference/query-languages/esql/commands/sort.md)
+- [`STATS`](/reference/query-languages/esql/commands/stats-by.md)
+- [`WHERE`](/reference/query-languages/esql/commands/where.md)
+
+The `METADATA` directive is also supported on either the subquery or the outer `FROM`.
 
 ## Examples
 
@@ -93,6 +112,10 @@ FROM (FROM employees)
 | 10092 | 1 |
 | 10093 | 3 |
 
+The `FROM` clause contains only a subquery with no regular index pattern. The
+subquery wraps the `employees` index, and the outer query filters, sorts, and
+projects the results.
+
 ### Filter data inside a subquery
 
 Apply a `WHERE` clause inside the subquery to pre-filter data before combining:
@@ -118,6 +141,10 @@ FROM
 | sample_data | null | null | 172.21.3.15 |
 | sample_data | null | null | 172.21.3.15 |
 | sample_data | null | null | 172.21.3.15 |
+
+The `WHERE` inside the subquery filters `sample_data` to only rows where
+`client_ip` is `172.21.3.15` before combining with `employees`. The `_index`
+metadata field shows which index each row originated from.
 
 ### Aggregate data inside a subquery
 
@@ -145,13 +172,16 @@ FROM
 | sample_data | null | null | 1 | 172.21.2.162 |
 | sample_data | null | null | 4 | 172.21.3.15 |
 
+The `STATS` inside the subquery aggregates `sample_data` by counting rows per
+`client_ip` before combining with `employees`. The `cnt` column is `null` for
+`employees` rows since that field only exists in the subquery output.
+
 ### Combine multiple subqueries
 
 Multiple subqueries can be combined in a single `FROM` clause:
 
 ```esql
 FROM
-    employees,
     (FROM sample_data metadata _index
      | STATS cnt = count(*) by _index, client_ip),
     (FROM sample_data_str metadata _index
@@ -159,14 +189,19 @@ FROM
     metadata _index
 | EVAL client_ip = client_ip::ip, _index = MV_LAST(SPLIT(_index, ":"))
 | WHERE client_ip == "172.21.3.15" AND cnt >0
-| SORT _index, emp_no, client_ip
-| KEEP _index, emp_no, languages, cnt, client_ip
+| SORT _index, client_ip
+| KEEP _index, cnt, client_ip
 ```
 
-| _index:keyword | emp_no:integer | languages:integer | cnt:long | client_ip:ip |
-| --- | --- | --- | --- | --- |
-| sample_data | null | null | 4 | 172.21.3.15 |
-| sample_data_str | null | null | 4 | 172.21.3.15 |
+| _index:keyword | cnt:long | client_ip:ip |
+| --- | --- | --- |
+| sample_data | 4 | 172.21.3.15 |
+| sample_data_str | 4 | 172.21.3.15 |
+
+Two subqueries aggregate `sample_data` and `sample_data_str` separately, each
+counting rows by `client_ip`. The results are combined with `employees` and
+then filtered to only show rows where `client_ip` is `172.21.3.15`. The `_index`
+field confirms each row's source.
 
 ### Use LOOKUP JOIN inside a subquery
 
@@ -196,6 +231,10 @@ FROM
 | null | null | 172.21.3.15 | Production |
 | null | null | 172.21.3.15 | Production |
 
+The `LOOKUP JOIN` inside the subquery joins each `sample_data` row with the
+`env` field from `clientips_lookup` based on `client_ip`. The `env` column is
+`null` for `employees` rows since the lookup only applies within the subquery.
+
 ### Sort and limit inside a subquery
 
 Use `SORT` and `LIMIT` inside a subquery to return only top results:
@@ -218,3 +257,8 @@ FROM
 | 10092 | 1 | null | null |
 | 10093 | 3 | null | null |
 | null | null | 4 | 172.21.3.15 |
+
+The subquery aggregates `sample_data` by `client_ip`, sorts by count in
+descending order, and limits to the top result. Only the `client_ip` with the
+highest count (`172.21.3.15` with 4 occurrences) is included when combined with
+`employees`.
