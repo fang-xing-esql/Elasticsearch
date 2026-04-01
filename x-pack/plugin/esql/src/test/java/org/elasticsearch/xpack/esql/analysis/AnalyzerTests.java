@@ -1366,7 +1366,6 @@ public class AnalyzerTests extends ESTestCase {
     }
 
     public void testImplicitDefaultLimitAfterLimitBy() {
-        assumeTrue("LIMIT BY requires snapshot builds", EsqlCapabilities.Cap.ESQL_LIMIT_BY.isEnabled());
         var plan = basic().query("from test | limit 1 by emp_no");
 
         var defaultLimit = as(plan, Limit.class);
@@ -2336,7 +2335,7 @@ public class AnalyzerTests extends ESTestCase {
             | LOOKUP_🐔 int_number_names ON int
             """;
         if (Build.current().isSnapshot() == false) {
-            basic().error(query, ParsingException.class, containsString("line 3:3: mismatched input 'LOOKUP_🐔' expecting {"));
+            basic().error(query, ParsingException.class, containsString("3:3: mismatched input 'LOOKUP_🐔' expecting {"));
             return;
         }
         LogicalPlan plan = basic().query(query);
@@ -2389,7 +2388,7 @@ public class AnalyzerTests extends ESTestCase {
             | LOOKUP_🐔 int_number_names ON garbage
             """;
         if (Build.current().isSnapshot() == false) {
-            basic().error(query, ParsingException.class, containsString("line 2:3: mismatched input 'LOOKUP_🐔' expecting {"));
+            basic().error(query, ParsingException.class, containsString("2:3: mismatched input 'LOOKUP_🐔' expecting {"));
             return;
         }
         basic().error(query, containsString("Unknown column in lookup target [garbage]"));
@@ -2401,7 +2400,7 @@ public class AnalyzerTests extends ESTestCase {
             | LOOKUP_🐔 garbage ON a
             """;
         if (Build.current().isSnapshot() == false) {
-            basic().error(query, ParsingException.class, containsString("line 2:3: mismatched input 'LOOKUP_🐔' expecting {"));
+            basic().error(query, ParsingException.class, containsString("2:3: mismatched input 'LOOKUP_🐔' expecting {"));
             return;
         }
         basic().error(query, containsString("Unknown table [garbage]"));
@@ -2414,7 +2413,7 @@ public class AnalyzerTests extends ESTestCase {
             | LOOKUP_🐔 int_number_names ON int
             """;
         if (Build.current().isSnapshot() == false) {
-            basic().error(query, ParsingException.class, containsString("line 3:3: mismatched input 'LOOKUP_🐔' expecting {"));
+            basic().error(query, ParsingException.class, containsString("3:3: mismatched input 'LOOKUP_🐔' expecting {"));
             return;
         }
         basic().error(query, containsString("column type mismatch, table column was [integer] and original column was [keyword]"));
