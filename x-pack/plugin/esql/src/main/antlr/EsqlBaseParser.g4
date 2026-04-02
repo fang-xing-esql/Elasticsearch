@@ -45,6 +45,7 @@ sourceCommand
     | promqlCommand
     // in development
     | {this.isDevVersion()}? explainCommand
+    | {this.isExternalDataSourcesEnabled()}? externalCommand
     ;
 
 processingCommand
@@ -70,10 +71,13 @@ processingCommand
     | fuseCommand
     | uriPartsCommand
     | metricsInfoCommand
+    | registeredDomainCommand
+    | tsInfoCommand
+    | userAgentCommand
+    | mmrCommand
     // in development
     | {this.isDevVersion()}? lookupCommand
     | {this.isDevVersion()}? insistCommand
-    | {this.isDevVersion()}? mmrCommand
     ;
 
 whereCommand
@@ -104,13 +108,17 @@ timeSeriesCommand
     : TS indexPatternAndMetadataFields
     ;
 
+externalCommand
+    : DEV_EXTERNAL stringOrParameter commandNamedParameters
+    ;
+
 indexPatternAndMetadataFields
     : indexPatternOrSubquery (COMMA indexPatternOrSubquery)* metadata?
     ;
 
 indexPatternOrSubquery
     : indexPattern
-    | {this.isDevVersion()}? subquery
+    | subquery
     ;
 
 subquery
@@ -214,7 +222,11 @@ stringOrParameter
     ;
 
 limitCommand
-    : LIMIT constant
+    : LIMIT constant limitByGroupKey?
+    ;
+
+limitByGroupKey:
+    BY booleanExpression (COMMA booleanExpression)*
     ;
 
 sortCommand
@@ -297,7 +309,12 @@ sampleCommand
     ;
 
 changePointCommand
-    : CHANGE_POINT value=qualifiedName (ON key=qualifiedName)? (AS targetType=qualifiedName COMMA targetPvalue=qualifiedName)?
+    : CHANGE_POINT value=qualifiedName (changePointConfiguration)*
+    ;
+
+changePointConfiguration
+    : ON key=qualifiedName
+    | AS targetType=qualifiedName COMMA targetPvalue=qualifiedName
     ;
 
 forkCommand
@@ -354,6 +371,10 @@ metricsInfoCommand
     : METRICS_INFO
     ;
 
+tsInfoCommand
+    : TS_INFO
+    ;
+
 //
 // In development
 //
@@ -369,6 +390,14 @@ uriPartsCommand
     : URI_PARTS qualifiedName ASSIGN primaryExpression
     ;
 
+registeredDomainCommand
+    : REGISTERED_DOMAIN qualifiedName ASSIGN primaryExpression
+    ;
+
+userAgentCommand
+    : USER_AGENT qualifiedName ASSIGN primaryExpression commandNamedParameters
+    ;
+
 setCommand
     : SET setField SEMICOLON
     ;
@@ -378,7 +407,7 @@ setField
     ;
 
 mmrCommand
-    :  DEV_MMR (queryVector=mmrQueryVectorParams)? ON diversifyField=qualifiedName MMR_LIMIT limitValue=integerValue commandNamedParameters
+    :  MMR (queryVector=mmrQueryVectorParams)? ON diversifyField=qualifiedName MMR_LIMIT limitValue=integerValue commandNamedParameters
     ;
 
 mmrQueryVectorParams

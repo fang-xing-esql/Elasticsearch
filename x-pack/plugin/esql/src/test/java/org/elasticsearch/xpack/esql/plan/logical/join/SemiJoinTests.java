@@ -20,8 +20,6 @@ import org.elasticsearch.xpack.esql.core.tree.Source;
 import org.elasticsearch.xpack.esql.core.type.DataType;
 import org.elasticsearch.xpack.esql.expression.predicate.logical.Not;
 import org.elasticsearch.xpack.esql.expression.predicate.operator.comparison.In;
-import org.elasticsearch.xpack.esql.index.IndexResolution;
-import org.elasticsearch.xpack.esql.plan.IndexPattern;
 import org.elasticsearch.xpack.esql.plan.logical.EsRelation;
 import org.elasticsearch.xpack.esql.plan.logical.Filter;
 import org.elasticsearch.xpack.esql.plan.logical.Limit;
@@ -32,15 +30,12 @@ import org.elasticsearch.xpack.esql.plan.logical.local.LocalSupplier;
 
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 
+import static org.elasticsearch.xpack.esql.EsqlTestUtils.analyzer;
 import static org.elasticsearch.xpack.esql.EsqlTestUtils.as;
 import static org.elasticsearch.xpack.esql.EsqlTestUtils.getFieldAttribute;
 import static org.elasticsearch.xpack.esql.EsqlTestUtils.withDefaultLimitWarning;
-import static org.elasticsearch.xpack.esql.analysis.AnalyzerTestUtils.analyze;
-import static org.elasticsearch.xpack.esql.analysis.AnalyzerTestUtils.analyzer;
-import static org.elasticsearch.xpack.esql.analysis.AnalyzerTestUtils.loadMapping;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.instanceOf;
 import static org.hamcrest.Matchers.notNullValue;
@@ -281,13 +276,7 @@ public class SemiJoinTests extends ESTestCase {
     // -- helpers --
 
     private static LogicalPlan analyzeWithBothIndices(String query) {
-        Map<IndexPattern, IndexResolution> indexResolutions = Map.of(
-            new IndexPattern(Source.EMPTY, "test"),
-            loadMapping("mapping-basic.json", "test"),
-            new IndexPattern(Source.EMPTY, "employees"),
-            loadMapping("mapping-basic.json", "employees")
-        );
-        return analyze(query, analyzer(indexResolutions));
+        return analyzer().addIndex("test", "mapping-basic.json").addIndex("employees", "mapping-basic.json").query(query);
     }
 
     private static LocalRelation emptyLocalRelation(List<Attribute> output) {
