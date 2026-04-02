@@ -94,7 +94,7 @@ public class SemiJoin extends Join implements SortPreserving {
     }
 
     public boolean isAntiJoin() {
-        return JoinTypes.ANTI.equals(config().type());
+        return false;
     }
 
     /**

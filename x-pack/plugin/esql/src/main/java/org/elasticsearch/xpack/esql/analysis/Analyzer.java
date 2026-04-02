@@ -154,6 +154,7 @@ import org.elasticsearch.xpack.esql.plan.logical.fuse.FuseScoreEval;
 import org.elasticsearch.xpack.esql.plan.logical.inference.Completion;
 import org.elasticsearch.xpack.esql.plan.logical.inference.InferencePlan;
 import org.elasticsearch.xpack.esql.plan.logical.inference.Rerank;
+import org.elasticsearch.xpack.esql.plan.logical.join.AntiJoin;
 import org.elasticsearch.xpack.esql.plan.logical.join.Join;
 import org.elasticsearch.xpack.esql.plan.logical.join.JoinConfig;
 import org.elasticsearch.xpack.esql.plan.logical.join.JoinType;
@@ -236,7 +237,7 @@ public class Analyzer extends ParameterizedRuleExecutor<LogicalPlan, AnalyzerCon
         new Batch<>(
             "Initialize",
             Limiter.ONCE,
-            new ResolveInSubquery(),
+            new ResolveInSubqueryToJoin(),
             new ResolveConfigurationAware(),
             new ResolveTable(),
             new ResolveExternalRelations(),
@@ -251,7 +252,7 @@ public class Analyzer extends ParameterizedRuleExecutor<LogicalPlan, AnalyzerCon
         new Batch<>(
             "Resolution",
             new ResolveRefs(),
-            new ResolveSemiAntiJoinFields(),
+            new ResolveSemiAntiJoinRightField(),
             new ImplicitCasting(),
             new ResolveUnionTypes(),  // Must be after ResolveRefs, so union types can be found
             new InsertDefaultInnerTimeSeriesAggregate(),
@@ -664,7 +665,7 @@ public class Analyzer extends ParameterizedRuleExecutor<LogicalPlan, AnalyzerCon
                 case MvExpand p -> resolveMvExpand(p, childrenOutput);
                 case Lookup l -> resolveLookup(l, childrenOutput);
                 case LookupJoin j -> resolveLookupJoin(j, context);
-                case SemiJoin sj -> resolveSemiJoin(sj);
+                case SemiJoin sj -> resolveSemiAntiJoin(sj);
                 case Insist i -> resolveInsist(i, childrenOutput, context);
                 case Fuse fuse -> resolveFuse(fuse, childrenOutput);
                 case Rerank r -> resolveRerank(r, childrenOutput, context);
@@ -1037,14 +1038,19 @@ public class Analyzer extends ParameterizedRuleExecutor<LogicalPlan, AnalyzerCon
          * Resolves the leftFields of a SemiJoin against the left child's output only, avoiding
          * ambiguity with fields from the right (subquery) side.
          */
-        private SemiJoin resolveSemiJoin(SemiJoin semiJoin) {
-            List<Attribute> leftKeys = resolveUsingColumns(semiJoin.config().leftFields(), semiJoin.left().output(), "left");
+        private SemiJoin resolveSemiAntiJoin(SemiJoin semiJoin) {
+            List<Attribute> leftFields = semiJoin.config().leftFields();
+            boolean allResolved = leftFields.stream().noneMatch(UnresolvedAttribute.class::isInstance);
+            List<Attribute> leftKeys = allResolved ? leftFields : resolveUsingColumns(leftFields, semiJoin.left().output(), "left");
             JoinConfig resolved = new JoinConfig(
                 semiJoin.config().type(),
                 leftKeys,
                 semiJoin.config().rightFields(),
                 semiJoin.config().joinOnConditions()
             );
+            if (semiJoin instanceof AntiJoin) {
+                return new AntiJoin(semiJoin.source(), semiJoin.left(), semiJoin.right(), resolved);
+            }
             return new SemiJoin(semiJoin.source(), semiJoin.left(), semiJoin.right(), resolved);
         }
 
@@ -3476,9 +3482,9 @@ public class Analyzer extends ParameterizedRuleExecutor<LogicalPlan, AnalyzerCon
      * the subquery plan becomes a child of the Join and is visible to subsequent rules (ResolveTable, etc.).
      * <p>
      * The join's rightFields are left empty at this stage because the subquery output is not yet resolved.
-     * {@link ResolveSemiAntiJoinFields} fills them in during the Resolution batch.
+     * {@link ResolveSemiAntiJoinRightField} fills them in during the Resolution batch.
      */
-    static class ResolveInSubquery extends AnalyzerRules.AnalyzerRule<Filter> {
+    static class ResolveInSubqueryToJoin extends AnalyzerRules.AnalyzerRule<Filter> {
 
         @Override
         protected LogicalPlan rule(Filter filter) {
@@ -3486,7 +3492,9 @@ public class Analyzer extends ParameterizedRuleExecutor<LogicalPlan, AnalyzerCon
             List<Expression> conjuncts = Predicates.splitAnd(condition);
 
             List<Expression> remaining = new ArrayList<>();
-            LogicalPlan current = filter.child();
+            // Collect subquery joins to be placed on top
+            record SubqueryJoin(Source source, LogicalPlan subquery, JoinConfig config, boolean anti) {}
+            List<SubqueryJoin> subqueryJoins = new ArrayList<>();
 
             for (Expression conjunct : conjuncts) {
                 boolean negated = false;
@@ -3497,7 +3505,6 @@ public class Analyzer extends ParameterizedRuleExecutor<LogicalPlan, AnalyzerCon
                 }
 
                 if (expr instanceof InSubquery inSubquery) {
-                    JoinType joinType = negated ? JoinTypes.ANTI : JoinTypes.SEMI;
                     Expression leftValue = inSubquery.value();
 
                     List<Attribute> leftFields;
@@ -3508,22 +3515,34 @@ public class Analyzer extends ParameterizedRuleExecutor<LogicalPlan, AnalyzerCon
                         continue;
                     }
 
-                    JoinConfig config = new JoinConfig(joinType, leftFields, emptyList(), null);
-                    current = new SemiJoin(inSubquery.source(), current, inSubquery.subquery(), config);
+                    if (negated) {
+                        JoinConfig config = new JoinConfig(JoinTypes.ANTI, leftFields, emptyList(), null);
+                        subqueryJoins.add(new SubqueryJoin(inSubquery.source(), inSubquery.subquery(), config, true));
+                    } else {
+                        JoinConfig config = new JoinConfig(JoinTypes.SEMI, leftFields, emptyList(), null);
+                        subqueryJoins.add(new SubqueryJoin(inSubquery.source(), inSubquery.subquery(), config, false));
+                    }
                 } else {
                     remaining.add(conjunct);
                 }
             }
 
-            if (current == filter.child()) {
+            if (subqueryJoins.isEmpty()) {
                 return filter;
             }
 
-            if (remaining.isEmpty()) {
-                return current;
+            // Build the left side: remaining filter conditions on top of the original child, or just the child
+            LogicalPlan current = remaining.isEmpty()
+                ? filter.child()
+                : new Filter(filter.source(), filter.child(), Predicates.combineAnd(remaining));
+
+            // Stack SemiJoin/AntiJoin on top
+            for (SubqueryJoin sj : subqueryJoins) {
+                current = sj.anti
+                    ? new AntiJoin(sj.source, current, sj.subquery, sj.config)
+                    : new SemiJoin(sj.source, current, sj.subquery, sj.config);
             }
-            Expression remainingCondition = Predicates.combineAnd(remaining);
-            return new Filter(filter.source(), current, remainingCondition);
+            return current;
         }
 
         @Override
@@ -3533,11 +3552,11 @@ public class Analyzer extends ParameterizedRuleExecutor<LogicalPlan, AnalyzerCon
     }
 
     /**
-     * Resolves the rightFields of SEMI/ANTI joins that were created by {@link ResolveInSubquery} with
+     * Resolves the rightFields of SEMI/ANTI joins that were created by {@link ResolveInSubqueryToJoin} with
      * empty rightFields. Once the subquery (right child) is resolved enough to expose its output,
      * this rule sets rightFields to the subquery's single output column.
      */
-    static class ResolveSemiAntiJoinFields extends AnalyzerRules.AnalyzerRule<SemiJoin> {
+    static class ResolveSemiAntiJoinRightField extends AnalyzerRules.AnalyzerRule<SemiJoin> {
 
         @Override
         protected LogicalPlan rule(SemiJoin join) {
@@ -3556,11 +3575,18 @@ public class Analyzer extends ParameterizedRuleExecutor<LogicalPlan, AnalyzerCon
                     "IN subquery must return exactly one column, found [" + rightOutput.size() + "]"
                 );
                 JoinConfig errorConfig = new JoinConfig(type, join.config().leftFields(), singletonList(errorAttr), null);
-                return new SemiJoin(join.source(), join.left(), join.right(), errorConfig);
+                return makeSemiOrAntiJoin(join, errorConfig);
             }
             Attribute rightField = rightOutput.get(0);
             JoinConfig resolvedConfig = new JoinConfig(type, join.config().leftFields(), singletonList(rightField), null);
-            return new SemiJoin(join.source(), join.left(), join.right(), resolvedConfig);
+            return makeSemiOrAntiJoin(join, resolvedConfig);
+        }
+
+        private static SemiJoin makeSemiOrAntiJoin(SemiJoin join, JoinConfig config) {
+            if (join instanceof AntiJoin) {
+                return new AntiJoin(join.source(), join.left(), join.right(), config);
+            }
+            return new SemiJoin(join.source(), join.left(), join.right(), config);
         }
 
         @Override

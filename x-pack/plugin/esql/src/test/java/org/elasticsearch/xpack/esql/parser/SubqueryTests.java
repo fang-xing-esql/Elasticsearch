@@ -11,14 +11,14 @@ import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.common.logging.LoggerMessageFormat;
 import org.elasticsearch.xpack.esql.action.EsqlCapabilities;
 import org.elasticsearch.xpack.esql.core.expression.Attribute;
-import org.elasticsearch.xpack.esql.core.expression.Literal;
-import org.elasticsearch.xpack.esql.core.expression.UnresolvedAttribute;
-import org.elasticsearch.xpack.esql.core.expression.MetadataAttribute;
 import org.elasticsearch.xpack.esql.core.expression.Expression;
+import org.elasticsearch.xpack.esql.core.expression.Literal;
+import org.elasticsearch.xpack.esql.core.expression.MetadataAttribute;
 import org.elasticsearch.xpack.esql.core.expression.NamedExpression;
+import org.elasticsearch.xpack.esql.core.expression.UnresolvedAttribute;
 import org.elasticsearch.xpack.esql.expression.predicate.logical.And;
-import org.elasticsearch.xpack.esql.expression.predicate.logical.Or;
 import org.elasticsearch.xpack.esql.expression.predicate.logical.Not;
+import org.elasticsearch.xpack.esql.expression.predicate.logical.Or;
 import org.elasticsearch.xpack.esql.expression.predicate.operator.comparison.GreaterThan;
 import org.elasticsearch.xpack.esql.expression.predicate.operator.comparison.In;
 import org.elasticsearch.xpack.esql.expression.predicate.operator.comparison.InSubquery;
@@ -1136,7 +1136,7 @@ public class SubqueryTests extends AbstractStatementParserTests {
      *   \_UnresolvedRelation[]
      */
     public void testWhereInSubqueryBasic() {
-        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
+        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.IN_SUBQUERY.isEnabled());
         String query = "FROM main_index | WHERE x IN (FROM sub_index)";
 
         LogicalPlan plan = query(query);
@@ -1159,7 +1159,7 @@ public class SubqueryTests extends AbstractStatementParserTests {
      *   \_UnresolvedRelation[]
      */
     public void testWhereNotInSubquery() {
-        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
+        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.IN_SUBQUERY.isEnabled());
         String query = "FROM main_index | WHERE x NOT IN (FROM sub_index)";
 
         LogicalPlan plan = query(query);
@@ -1177,7 +1177,7 @@ public class SubqueryTests extends AbstractStatementParserTests {
      * (NOT) IN subquery with multiple processing commands in the subquery.
      */
     public void testWhereInSubqueryMultipleProcessingCommands() {
-        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
+        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.IN_SUBQUERY.isEnabled());
         boolean negated = randomBoolean();
         String notClause = negated ? "NOT" : "";
         String query = LoggerMessageFormat.format(null, """
@@ -1246,7 +1246,7 @@ public class SubqueryTests extends AbstractStatementParserTests {
      * WHERE (NOT) IN subquery ends with different modes to verify lexer mode transitions.
      */
     public void testWhereInSubqueryEndsWithDifferentModes() {
-        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
+        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.IN_SUBQUERY.isEnabled());
         List<String> processingCommands = List.of(
             "WHERE a > 10",
             "EVAL b = a * 2",
@@ -1291,7 +1291,7 @@ public class SubqueryTests extends AbstractStatementParserTests {
      *   \_UnresolvedRelation[]
      */
     public void testWhereInSubqueryWithOtherConditions() {
-        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
+        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.IN_SUBQUERY.isEnabled());
         String query = "FROM main_index | WHERE a > 5 AND x IN (FROM sub_index | KEEP y)";
 
         LogicalPlan plan = query(query);
@@ -1307,7 +1307,7 @@ public class SubqueryTests extends AbstractStatementParserTests {
      * Existing value list IN still works after the grammar changes.
      */
     public void testWhereInValueListStillWorks() {
-        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
+        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.IN_SUBQUERY.isEnabled());
         String query = "FROM main_index | WHERE x IN (1, 2, 3)";
 
         LogicalPlan plan = query(query);
@@ -1348,7 +1348,7 @@ public class SubqueryTests extends AbstractStatementParserTests {
      * Multiple IN and/or NOT IN subqueries in the same WHERE clause, combined with AND or OR.
      */
     public void testMultipleInSubqueries() {
-        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
+        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.IN_SUBQUERY.isEnabled());
         boolean firstNegated = randomBoolean();
         boolean secondNegated = randomBoolean();
         boolean useAnd = randomBoolean();
@@ -1406,16 +1406,14 @@ public class SubqueryTests extends AbstractStatementParserTests {
      * Two IN predicates in the same WHERE clause, each randomly an IN value-list or IN subquery, with random NOT.
      */
     public void testWhereInSubqueryMixedWithInList() {
-        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
+        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.IN_SUBQUERY.isEnabled());
         boolean leftIsSubquery = randomBoolean();
         boolean rightIsSubquery = randomBoolean();
         boolean leftNegated = randomBoolean();
         boolean rightNegated = randomBoolean();
 
-        String leftPart = "x " + (leftNegated ? "NOT " : "")
-            + (leftIsSubquery ? "IN (FROM sub1 | KEEP a)" : "IN (1, 2, 3)");
-        String rightPart = "y " + (rightNegated ? "NOT " : "")
-            + (rightIsSubquery ? "IN (FROM sub2 | KEEP b)" : "IN (4, 5, 6)");
+        String leftPart = "x " + (leftNegated ? "NOT " : "") + (leftIsSubquery ? "IN (FROM sub1 | KEEP a)" : "IN (1, 2, 3)");
+        String rightPart = "y " + (rightNegated ? "NOT " : "") + (rightIsSubquery ? "IN (FROM sub2 | KEEP b)" : "IN (4, 5, 6)");
         String query = LoggerMessageFormat.format(null, """
             FROM main_index | WHERE {} AND {}
             """, leftPart, rightPart);
@@ -1447,7 +1445,7 @@ public class SubqueryTests extends AbstractStatementParserTests {
      * IN subquery where the subquery's FROM command includes METADATA fields.
      */
     public void testWhereInSubqueryWithMetadata() {
-        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
+        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.IN_SUBQUERY.isEnabled());
         String query = """
             FROM main_index
             | WHERE x IN (FROM sub_index METADATA _id, _index | KEEP _id)
@@ -1460,10 +1458,7 @@ public class SubqueryTests extends AbstractStatementParserTests {
         Keep keep = as(inSubquery.subquery(), Keep.class);
         UnresolvedRelation subRelation = as(keep.child(), UnresolvedRelation.class);
         assertEquals("sub_index", subRelation.indexPattern().indexPattern());
-        List<String> metadataFieldNames = subRelation.metadataFields()
-            .stream()
-            .map(NamedExpression::name)
-            .toList();
+        List<String> metadataFieldNames = subRelation.metadataFields().stream().map(NamedExpression::name).toList();
         assertEquals(List.of("_id", "_index"), metadataFieldNames);
     }
 
@@ -1471,7 +1466,7 @@ public class SubqueryTests extends AbstractStatementParserTests {
      * IN subquery where the subquery's FROM command references a remote cluster index.
      */
     public void testWhereInSubqueryWithRemoteCluster() {
-        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
+        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.IN_SUBQUERY.isEnabled());
         String query = """
             FROM main_index
             | WHERE x IN (FROM remote_cluster:sub_index | KEEP a)
@@ -1491,7 +1486,7 @@ public class SubqueryTests extends AbstractStatementParserTests {
      * {@code FROM main | WHERE x IN (FROM sub1, (FROM sub2) | KEEP a)}
      */
     public void testWhereInSubqueryWithNestedFromSubquery() {
-        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
+        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.IN_SUBQUERY.isEnabled());
         assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         String query = """
             FROM main_index
@@ -1517,7 +1512,7 @@ public class SubqueryTests extends AbstractStatementParserTests {
      * {@code FROM main | WHERE x IN (FROM sub1 | WHERE y IN (FROM sub2 | KEEP b) | KEEP a)}
      */
     public void testWhereInSubqueryWithNestedInSubquery() {
-        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
+        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.IN_SUBQUERY.isEnabled());
         String query = """
             FROM main_index
             | WHERE x IN (FROM sub1 | WHERE y IN (FROM sub2 | KEEP b) | KEEP a)
@@ -1542,34 +1537,70 @@ public class SubqueryTests extends AbstractStatementParserTests {
         assertEquals("main_index", main.indexPattern().indexPattern());
     }
 
+    /**
+     * FROM subquery where one branch contains a WHERE IN subquery:
+     * {@code FROM main, (FROM sub1 | WHERE x IN (FROM sub2 | KEEP a) | KEEP x)}
+     */
+    public void testFromSubqueryWithWhereInSubqueryInside() {
+        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.IN_SUBQUERY.isEnabled());
+        assumeTrue("Requires FROM subquery support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
+        String query = """
+            FROM main,
+                 (FROM sub1 | WHERE x IN (FROM sub2 | KEEP a) | KEEP x)
+            """;
+
+        LogicalPlan plan = query(query);
+        UnionAll unionAll = as(plan, UnionAll.class);
+        assertEquals(2, unionAll.children().size());
+
+        // main query
+        UnresolvedRelation mainRelation = as(unionAll.children().get(0), UnresolvedRelation.class);
+        assertEquals("main", mainRelation.indexPattern().indexPattern());
+
+        // FROM subquery branch: Subquery -> Keep -> Filter(InSubquery) -> UnresolvedRelation
+        Subquery subquery = as(unionAll.children().get(1), Subquery.class);
+        Keep keep = as(subquery.plan(), Keep.class);
+        Filter filter = as(keep.child(), Filter.class);
+        InSubquery inSubquery = as(filter.condition(), InSubquery.class);
+
+        // the IN subquery's plan
+        Keep innerKeep = as(inSubquery.subquery(), Keep.class);
+        UnresolvedRelation sub2 = as(innerKeep.child(), UnresolvedRelation.class);
+        assertEquals("sub2", sub2.indexPattern().indexPattern());
+
+        // the FROM of the branch
+        UnresolvedRelation sub1 = as(filter.child(), UnresolvedRelation.class);
+        assertEquals("sub1", sub1.indexPattern().indexPattern());
+    }
+
     // ---- WHERE IN subquery negative tests ----
 
     public void testWhereInSubqueryRejectsTsSourceCommand() {
-        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
+        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.IN_SUBQUERY.isEnabled());
         var e = expectThrows(ParsingException.class, () -> query("FROM main | WHERE x IN (TS sub_index)"));
         assertThat(e.getMessage(), containsString("no viable alternative at input 'x IN (TS'"));
     }
 
     public void testWhereInSubqueryRejectsRowSourceCommand() {
-        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
+        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.IN_SUBQUERY.isEnabled());
         var e = expectThrows(ParsingException.class, () -> query("FROM main | WHERE x IN (ROW a = 1)"));
         assertThat(e.getMessage(), containsString("no viable alternative at input 'x IN (ROW'"));
     }
 
     public void testWhereInSubqueryRejectsShowSourceCommand() {
-        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
+        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.IN_SUBQUERY.isEnabled());
         var e = expectThrows(ParsingException.class, () -> query("FROM main | WHERE x IN (SHOW INFO)"));
         assertThat(e.getMessage(), containsString("no viable alternative at input 'x IN (SHOW'"));
     }
 
     public void testWhereInSubqueryRejectsPromqlSourceCommand() {
-        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
+        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.IN_SUBQUERY.isEnabled());
         var e = expectThrows(ParsingException.class, () -> query("FROM main | WHERE x IN (PROMQL 'up')"));
         assertThat(e.getMessage(), containsString("no viable alternative at input 'x IN (PROMQL'"));
     }
 
     public void testWhereInSubqueryRejectsSubqueryWithTrailingTokens() {
-        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
+        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.IN_SUBQUERY.isEnabled());
         var e1 = expectThrows(ParsingException.class, () -> query("FROM main | WHERE x IN (FROM sub | KEEP a, 1)"));
         assertThat(e1.getMessage(), containsString("token recognition error at: '1'"));
         var e2 = expectThrows(ParsingException.class, () -> query("FROM main | WHERE x IN (FROM sub | KEEP a KEEP b)"));
@@ -1577,19 +1608,19 @@ public class SubqueryTests extends AbstractStatementParserTests {
     }
 
     public void testWhereInSubqueryRejectsMissingClosingParen() {
-        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
+        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.IN_SUBQUERY.isEnabled());
         var e = expectThrows(ParsingException.class, () -> query("FROM main | WHERE x IN (FROM sub"));
         assertThat(e.getMessage(), containsString("mismatched input '<EOF>' expecting {'|', ')'}"));
     }
 
     public void testWhereInSubqueryRejectsEmptySubquery() {
-        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
+        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.IN_SUBQUERY.isEnabled());
         var e = expectThrows(ParsingException.class, () -> query("FROM main | WHERE x IN ()"));
         assertThat(e.getMessage(), containsString("no viable alternative at input 'x IN ()'"));
     }
 
     public void testWhereInSubqueryRejectsMultipleFromCommands() {
-        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
+        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.IN_SUBQUERY.isEnabled());
         var e = expectThrows(ParsingException.class, () -> query("FROM main | WHERE x IN (FROM sub1 | FROM sub2)"));
         assertThat(e.getMessage(), containsString("mismatched input 'FROM'"));
     }

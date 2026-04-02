@@ -113,7 +113,8 @@ public enum FeatureMetric {
     METRICS_INFO(MetricsInfo.class::isInstance),
     REGISTERED_DOMAIN(RegisteredDomain.class::isInstance),
     TS_INFO(TsInfo.class::isInstance),
-    USER_AGENT(UserAgent.class::isInstance);
+    USER_AGENT(UserAgent.class::isInstance),
+    IN_SUBQUERY(SemiJoin.class::isInstance);
 
     /**
      * List here plans we want to exclude from telemetry
@@ -125,7 +126,6 @@ public enum FeatureMetric {
         Limit.class, // LIMIT is managed in another way, see above
         FuseScoreEval.class,
         Aggregate.class, // STATS is managed in another way, see above
-        SemiJoin.class, // internal node replaced by Filter before execution
         LocalRelation.class // produced as a short-circuit for empty index patterns (e.g. PROMQL on missing index)
     );
 
