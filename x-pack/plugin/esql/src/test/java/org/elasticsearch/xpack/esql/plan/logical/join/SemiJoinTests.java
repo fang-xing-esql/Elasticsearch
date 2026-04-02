@@ -50,7 +50,7 @@ public class SemiJoinTests extends ESTestCase {
      * with SEMI type after analysis.
      */
     public void testAnalyzerProducesSemiJoinForWhereIn() {
-        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.SUBQUERY_IN_WHERE_IN.isEnabled());
+        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
         var plan = analyzeWithBothIndices("FROM test | WHERE emp_no IN (FROM employees | KEEP emp_no)");
 
         var limit = as(plan, Limit.class);
@@ -77,7 +77,7 @@ public class SemiJoinTests extends ESTestCase {
      * with ANTI type.
      */
     public void testAnalyzerProducesAntiJoinForWhereNotIn() {
-        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.SUBQUERY_IN_WHERE_IN.isEnabled());
+        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
         var plan = analyzeWithBothIndices("FROM test | WHERE emp_no NOT IN (FROM employees | KEEP emp_no)");
 
         var limit = as(plan, Limit.class);
@@ -91,7 +91,7 @@ public class SemiJoinTests extends ESTestCase {
      * Verifies that an IN subquery combined with another filter condition produces a Filter on top of the SemiJoin.
      */
     public void testSemiJoinWithRemainingFilterCondition() {
-        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.SUBQUERY_IN_WHERE_IN.isEnabled());
+        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
         var plan = analyzeWithBothIndices("FROM test | WHERE emp_no IN (FROM employees | KEEP emp_no) AND salary > 50000");
 
         var limit = as(plan, Limit.class);
@@ -105,7 +105,7 @@ public class SemiJoinTests extends ESTestCase {
      * Verifies that the SemiJoin output only includes left-side columns.
      */
     public void testSemiJoinOutputIsLeftOnly() {
-        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.SUBQUERY_IN_WHERE_IN.isEnabled());
+        assumeTrue("Requires WHERE IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
         var plan = analyzeWithBothIndices("FROM test | WHERE emp_no IN (FROM employees | KEEP emp_no)");
 
         var limit = as(plan, Limit.class);

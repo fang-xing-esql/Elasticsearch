@@ -1186,10 +1186,6 @@ public class EsqlCapabilities {
          */
         SUBQUERY_IN_FROM_COMMAND,
 
-        /**
-         * Support non-correlated subqueries in WHERE IN expressions.
-         */
-        SUBQUERY_IN_WHERE_IN(Build.current().isSnapshot()),
 
         /**
          * Support non-correlated subqueries in the FROM clause without implicit limit.
@@ -1205,6 +1201,11 @@ public class EsqlCapabilities {
          * Prune no-fields in subquery project.
          */
         SUBQUERY_IN_FROM_COMMAND_PRUNE_NO_FIELDS,
+
+        /**
+         * Support WHERE IN non-correlated subqueries.
+         */
+        WHERE_IN_SUBQUERY(Build.current().isSnapshot()),
 
         /**
          * Support for views in cluster state (and REST API).

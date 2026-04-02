@@ -81,7 +81,8 @@ public abstract class LexerConfig extends Lexer {
         return matchesKeywordAtOffset(offset, "from")
             || matchesKeywordAtOffset(offset, "row")
             || matchesKeywordAtOffset(offset, "show")
-            || matchesKeywordAtOffset(offset, "ts");
+            || matchesKeywordAtOffset(offset, "ts")
+            || matchesKeywordAtOffset(offset, "promql");
     }
 
     private boolean matchesKeywordAtOffset(int offset, String keyword) {

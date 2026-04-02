@@ -41,6 +41,7 @@ IN_QUOTED_STRING
     | '"""' (~[\r\n])*? '"""' '"'? '"'?)
     -> type(QUOTED_STRING), popMode
     ;
+IN_NAMED_OR_POSITIONAL_PARAM : NAMED_OR_POSITIONAL_PARAM -> type(NAMED_OR_POSITIONAL_PARAM), popMode;
 IN_PARAM : '?' -> type(PARAM), popMode;
 
 IN_LINE_COMMENT
