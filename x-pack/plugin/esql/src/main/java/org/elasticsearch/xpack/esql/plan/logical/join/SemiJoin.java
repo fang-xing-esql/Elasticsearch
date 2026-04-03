@@ -10,29 +10,40 @@ package org.elasticsearch.xpack.esql.plan.logical.join;
 import org.elasticsearch.common.io.stream.NamedWriteableRegistry;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.compute.data.Block;
+import org.elasticsearch.compute.data.BlockUtils;
 import org.elasticsearch.compute.data.Page;
 import org.elasticsearch.xpack.esql.core.expression.Attribute;
 import org.elasticsearch.xpack.esql.core.expression.Expression;
 import org.elasticsearch.xpack.esql.core.expression.Literal;
 import org.elasticsearch.xpack.esql.core.expression.NamedExpression;
+import org.elasticsearch.xpack.esql.core.expression.Nullability;
+import org.elasticsearch.xpack.esql.core.expression.ReferenceAttribute;
+import org.elasticsearch.xpack.esql.core.type.DataType;
 import org.elasticsearch.xpack.esql.core.tree.NodeInfo;
 import org.elasticsearch.xpack.esql.core.tree.Source;
 import org.elasticsearch.xpack.esql.core.util.Holder;
 import org.elasticsearch.xpack.esql.expression.predicate.logical.Not;
+import org.elasticsearch.xpack.esql.expression.predicate.nulls.IsNotNull;
+import org.elasticsearch.xpack.esql.expression.predicate.nulls.IsNull;
 import org.elasticsearch.xpack.esql.expression.predicate.operator.comparison.In;
 import org.elasticsearch.xpack.esql.io.stream.PlanStreamInput;
 import org.elasticsearch.xpack.esql.plan.logical.Filter;
 import org.elasticsearch.xpack.esql.plan.logical.LogicalPlan;
+import org.elasticsearch.xpack.esql.plan.logical.Project;
 import org.elasticsearch.xpack.esql.plan.logical.SortPreserving;
 import org.elasticsearch.xpack.esql.plan.logical.local.CopyingLocalSupplier;
 import org.elasticsearch.xpack.esql.plan.logical.local.LocalRelation;
+import org.elasticsearch.xpack.esql.plan.logical.local.LocalSupplier;
+import org.elasticsearch.xpack.esql.planner.PlannerUtils;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
 import static org.elasticsearch.compute.data.BlockUtils.toJavaObject;
+import static org.elasticsearch.xpack.esql.plan.logical.join.JoinTypes.LEFT;
 
 /**
  * A semi or anti join used to implement {@code WHERE field IN (subquery)} and
@@ -98,34 +109,95 @@ public class SemiJoin extends Join implements SortPreserving {
     }
 
     /**
-     * Converts this SemiJoin into a {@link Filter} once the subquery result is available.
-     * Extracts all values from the subquery's single output column and builds an
-     * {@code IN (v1, v2, ...)} expression (or {@code NOT IN} for anti joins).
+     * Converts this SemiJoin/AntiJoin into an executable plan once the subquery result is available.
+     * <p>
+     * For small result sets ({@code <= HASH_JOIN_THRESHOLD} values), builds a {@code Filter(IN(...))} or
+     * {@code Filter(NOT IN(...))} expression with literal values.
+     * <p>
+     * For large result sets, creates a LEFT {@link Join} with the deduplicated subquery result as a
+     * {@link LocalRelation}, followed by a {@link Filter} on the right join key
+     * ({@code IS NOT NULL} for SEMI, {@code IS NULL} for ANTI) and a {@link Project} to drop the
+     * right-side column. The mapper converts the LEFT Join + LocalRelation into a HashJoinExec.
      */
-    public static LogicalPlan inlineData(SemiJoin semiJoin, LocalRelation data) {
+    public static LogicalPlan inlineData(SemiJoin semiJoin, LocalRelation data, int hashJoinThreshold) {
         List<Attribute> schema = data.output();
         Page page = data.supplier().get();
 
-        List<Expression> values = new ArrayList<>();
+        List<Object> rawValues = new ArrayList<>();
         if (page != null && page.getBlockCount() > 0 && schema.isEmpty() == false) {
             Block block = page.getBlock(0);
             for (int i = 0; i < block.getPositionCount(); i++) {
-                Object value = toJavaObject(block, i);
-                values.add(new Literal(semiJoin.source(), value, schema.get(0).dataType()));
+                rawValues.add(toJavaObject(block, i));
             }
         }
 
         Attribute leftField = semiJoin.config().leftFields().get(0);
-        Expression condition;
-        if (values.isEmpty()) {
-            condition = semiJoin.isAntiJoin() ? Literal.TRUE : Literal.FALSE;
-        } else {
-            condition = new In(semiJoin.source(), leftField, values);
-            if (semiJoin.isAntiJoin()) {
-                condition = new Not(semiJoin.source(), condition);
-            }
+        Source source = semiJoin.source();
+
+        if (rawValues.isEmpty()) {
+            Expression condition = semiJoin.isAntiJoin() ? Literal.TRUE : Literal.FALSE;
+            return new Filter(source, semiJoin.left(), condition);
         }
-        return new Filter(semiJoin.source(), semiJoin.left(), condition);
+
+        if (rawValues.size() <= hashJoinThreshold) {
+            return inlineAsFilter(semiJoin, rawValues, schema.get(0).dataType(), leftField, source);
+        }
+
+        return inlineAsHashJoin(semiJoin, rawValues, schema, data, leftField, source);
+    }
+
+    private static LogicalPlan inlineAsFilter(
+        SemiJoin semiJoin,
+        List<Object> rawValues,
+        DataType dataType,
+        Attribute leftField,
+        Source source
+    ) {
+        List<Expression> literals = rawValues.stream()
+            .map(v -> (Expression) new Literal(source, v, dataType))
+            .toList();
+        Expression condition = new In(source, leftField, literals);
+        if (semiJoin.isAntiJoin()) {
+            condition = new Not(source, condition);
+        }
+        return new Filter(source, semiJoin.left(), condition);
+    }
+
+    private static LogicalPlan inlineAsHashJoin(
+        SemiJoin semiJoin,
+        List<Object> rawValues,
+        List<Attribute> schema,
+        LocalRelation data,
+        Attribute leftField,
+        Source source
+    ) {
+        // Deduplicate values to prevent duplicate rows from the left join
+        Set<Object> uniqueValues = new LinkedHashSet<>(rawValues);
+
+        // Add a sentinel column to the right side. The LEFT join excludes right-side key columns from
+        // its output, so we need a non-key column to check for null (matched vs unmatched rows).
+        Attribute sentinelAttr = new ReferenceAttribute(source, null, "$$matched", DataType.BOOLEAN, Nullability.TRUE, null, false);
+
+        // Build a deduplicated LocalRelation with the sentinel column
+        List<List<Object>> rows = uniqueValues.stream().map(v -> List.<Object>of(v, true)).toList();
+        Block[] blocks = BlockUtils.fromList(PlannerUtils.NON_BREAKING_BLOCK_FACTORY, rows);
+        List<Attribute> extendedSchema = new ArrayList<>(schema);
+        extendedSchema.add(sentinelAttr);
+        LocalRelation deduplicatedData = new LocalRelation(source, extendedSchema, LocalSupplier.of(new Page(blocks)));
+
+        // Create LEFT Join with deduplicated LocalRelation
+        JoinConfig leftJoinConfig = new JoinConfig(LEFT, semiJoin.config().leftFields(), semiJoin.config().rightFields(), null);
+        Join leftJoin = new Join(source, semiJoin.left(), deduplicatedData, leftJoinConfig);
+
+        // Filter on sentinel: IS NOT NULL for SEMI (keep matches), IS NULL for ANTI (keep non-matches)
+        Expression filterCondition = semiJoin.isAntiJoin()
+            ? new IsNull(source, sentinelAttr)
+            : new IsNotNull(source, sentinelAttr);
+        Filter filter = new Filter(source, leftJoin, filterCondition);
+
+        // Project: drop the right-side columns to preserve semi-join output semantics
+        List<NamedExpression> leftOutput = new ArrayList<>(semiJoin.left().output());
+        return new Project(source, filter, leftOutput);
     }
 
     /**
@@ -158,10 +230,15 @@ public class SemiJoin extends Join implements SortPreserving {
         return new LogicalPlanTuple(plan, originalHolder.get());
     }
 
-    public static LogicalPlan newMainPlan(LogicalPlan optimizedPlan, LogicalPlanTuple subPlans, LocalRelation resultWrapper) {
+    public static LogicalPlan newMainPlan(
+        LogicalPlan optimizedPlan,
+        LogicalPlanTuple subPlans,
+        LocalRelation resultWrapper,
+        int hashJoinThreshold
+    ) {
         LogicalPlan newPlan = optimizedPlan.transformUp(
             SemiJoin.class,
-            sj -> sj.right() == subPlans.originalSubPlan() ? inlineData(sj, resultWrapper) : sj
+            sj -> sj.right() == subPlans.originalSubPlan() ? inlineData(sj, resultWrapper, hashJoinThreshold) : sj
         );
         newPlan.setOptimized();
         return newPlan;

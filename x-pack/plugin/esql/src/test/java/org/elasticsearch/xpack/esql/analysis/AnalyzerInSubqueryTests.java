@@ -19,6 +19,8 @@ import org.elasticsearch.xpack.esql.core.expression.Literal;
 import org.elasticsearch.xpack.esql.core.tree.Source;
 import org.elasticsearch.xpack.esql.core.type.DataType;
 import org.elasticsearch.xpack.esql.expression.predicate.logical.Not;
+import org.elasticsearch.xpack.esql.expression.predicate.nulls.IsNotNull;
+import org.elasticsearch.xpack.esql.expression.predicate.nulls.IsNull;
 import org.elasticsearch.xpack.esql.expression.predicate.operator.comparison.In;
 import org.elasticsearch.xpack.esql.plan.logical.Aggregate;
 import org.elasticsearch.xpack.esql.plan.logical.EsRelation;
@@ -31,11 +33,14 @@ import org.elasticsearch.xpack.esql.plan.logical.Project;
 import org.elasticsearch.xpack.esql.plan.logical.Subquery;
 import org.elasticsearch.xpack.esql.plan.logical.UnionAll;
 import org.elasticsearch.xpack.esql.plan.logical.join.AntiJoin;
+import org.elasticsearch.xpack.esql.plan.logical.join.Join;
 import org.elasticsearch.xpack.esql.plan.logical.join.JoinType;
 import org.elasticsearch.xpack.esql.plan.logical.join.JoinTypes;
 import org.elasticsearch.xpack.esql.plan.logical.join.SemiJoin;
 import org.elasticsearch.xpack.esql.plan.logical.local.LocalRelation;
 import org.elasticsearch.xpack.esql.plan.logical.local.LocalSupplier;
+import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.xpack.esql.planner.PlannerSettings;
 import org.hamcrest.Matcher;
 import org.junit.Before;
 
@@ -54,6 +59,8 @@ import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.nullValue;
 
 public class AnalyzerInSubqueryTests extends ESTestCase {
+
+    private static final int HASH_JOIN_THRESHOLD = PlannerSettings.IN_SUBQUERY_HASH_JOIN_THRESHOLD.getDefault(Settings.EMPTY);
 
     @Before
     public void checkInSubquerySupport() {
@@ -608,7 +615,7 @@ public class AnalyzerInSubqueryTests extends ESTestCase {
         Block[] blocks = new Block[] { BlockUtils.constantBlock(TestBlockFactory.getNonBreakingInstance(), 10, 3) };
         LocalRelation result = new LocalRelation(Source.EMPTY, List.of(rightField), LocalSupplier.of(new Page(blocks)));
 
-        LogicalPlan inlined = SemiJoin.inlineData(semiJoin, result);
+        LogicalPlan inlined = SemiJoin.inlineData(semiJoin, result, HASH_JOIN_THRESHOLD);
         var filter = as(inlined, Filter.class);
         var inExpr = as(filter.condition(), In.class);
         assertThat(inExpr.value(), equalTo(leftField));
@@ -627,7 +634,7 @@ public class AnalyzerInSubqueryTests extends ESTestCase {
         Block[] blocks = new Block[] { BlockUtils.constantBlock(TestBlockFactory.getNonBreakingInstance(), 10, 2) };
         LocalRelation result = new LocalRelation(Source.EMPTY, List.of(rightField), LocalSupplier.of(new Page(blocks)));
 
-        LogicalPlan inlined = SemiJoin.inlineData(semiJoin, result);
+        LogicalPlan inlined = SemiJoin.inlineData(semiJoin, result, HASH_JOIN_THRESHOLD);
         var filter = as(inlined, Filter.class);
         var not = as(filter.condition(), Not.class);
         as(not.field(), In.class);
@@ -645,13 +652,81 @@ public class AnalyzerInSubqueryTests extends ESTestCase {
 
         // SEMI with empty result -> FALSE
         SemiJoin semiJoin = makeSemiJoin(leftField, rightField, JoinTypes.SEMI);
-        var inlined = as(SemiJoin.inlineData(semiJoin, emptyResult), Filter.class);
+        var inlined = as(SemiJoin.inlineData(semiJoin, emptyResult, HASH_JOIN_THRESHOLD), Filter.class);
         assertThat(inlined.condition(), equalTo(Literal.FALSE));
 
         // ANTI with empty result -> TRUE
         SemiJoin antiJoin = makeSemiJoin(leftField, rightField, JoinTypes.ANTI);
-        inlined = as(SemiJoin.inlineData(antiJoin, emptyResult), Filter.class);
+        inlined = as(SemiJoin.inlineData(antiJoin, emptyResult, HASH_JOIN_THRESHOLD), Filter.class);
         assertThat(inlined.condition(), equalTo(Literal.TRUE));
+    }
+
+    // -- hash join threshold tests --
+
+    /**
+     * Verifies that a SEMI join with more than HASH_JOIN_THRESHOLD values produces a
+     * Project -> Filter(IS NOT NULL) -> Join(LEFT) instead of Filter(IN(...)).
+     */
+    public void testInlineDataSemiJoinAboveThresholdProducesHashJoin() {
+        FieldAttribute leftField = getFieldAttribute("emp_no", DataType.INTEGER);
+        FieldAttribute rightField = getFieldAttribute("emp_no", DataType.INTEGER);
+
+        SemiJoin semiJoin = makeSemiJoin(leftField, rightField, JoinTypes.SEMI);
+
+        int count = HASH_JOIN_THRESHOLD + 1;
+        Block[] blocks = new Block[] { BlockUtils.constantBlock(TestBlockFactory.getNonBreakingInstance(), 10, count) };
+        LocalRelation result = new LocalRelation(Source.EMPTY, List.of(rightField), LocalSupplier.of(new Page(blocks)));
+
+        LogicalPlan inlined = SemiJoin.inlineData(semiJoin, result, HASH_JOIN_THRESHOLD);
+
+        // Project -> Filter -> Join(LEFT)
+        var project = as(inlined, Project.class);
+        var filter = as(project.child(), Filter.class);
+        as(filter.condition(), IsNotNull.class);
+        var join = as(filter.child(), Join.class);
+        assertThat(join.config().type(), equalTo(JoinTypes.LEFT));
+    }
+
+    /**
+     * Verifies that an ANTI join with more than HASH_JOIN_THRESHOLD values produces a
+     * Project -> Filter(IS NULL) -> Join(LEFT).
+     */
+    public void testInlineDataAntiJoinAboveThresholdProducesHashJoin() {
+        FieldAttribute leftField = getFieldAttribute("emp_no", DataType.INTEGER);
+        FieldAttribute rightField = getFieldAttribute("emp_no", DataType.INTEGER);
+
+        SemiJoin antiJoin = makeSemiJoin(leftField, rightField, JoinTypes.ANTI);
+
+        int count = HASH_JOIN_THRESHOLD + 1;
+        Block[] blocks = new Block[] { BlockUtils.constantBlock(TestBlockFactory.getNonBreakingInstance(), 10, count) };
+        LocalRelation result = new LocalRelation(Source.EMPTY, List.of(rightField), LocalSupplier.of(new Page(blocks)));
+
+        LogicalPlan inlined = SemiJoin.inlineData(antiJoin, result, HASH_JOIN_THRESHOLD);
+
+        var project = as(inlined, Project.class);
+        var filter = as(project.child(), Filter.class);
+        as(filter.condition(), IsNull.class);
+        var join = as(filter.child(), Join.class);
+        assertThat(join.config().type(), equalTo(JoinTypes.LEFT));
+    }
+
+    /**
+     * Verifies that exactly at the threshold, Filter(IN(...)) is still used.
+     */
+    public void testInlineDataAtThresholdStillUsesFilter() {
+        FieldAttribute leftField = getFieldAttribute("emp_no", DataType.INTEGER);
+        FieldAttribute rightField = getFieldAttribute("emp_no", DataType.INTEGER);
+
+        SemiJoin semiJoin = makeSemiJoin(leftField, rightField, JoinTypes.SEMI);
+
+        int count = HASH_JOIN_THRESHOLD;
+        Block[] blocks = new Block[] { BlockUtils.constantBlock(TestBlockFactory.getNonBreakingInstance(), 10, count) };
+        LocalRelation result = new LocalRelation(Source.EMPTY, List.of(rightField), LocalSupplier.of(new Page(blocks)));
+
+        LogicalPlan inlined = SemiJoin.inlineData(semiJoin, result, HASH_JOIN_THRESHOLD);
+
+        var filter = as(inlined, Filter.class);
+        as(filter.condition(), In.class);
     }
 
     // -- subplan discovery tests --
@@ -741,7 +816,7 @@ public class AnalyzerInSubqueryTests extends ESTestCase {
         Block[] blocks = new Block[] { BlockUtils.constantBlock(TestBlockFactory.getNonBreakingInstance(), 42, 1) };
         LocalRelation result = new LocalRelation(Source.EMPTY, List.of(rightField), LocalSupplier.of(new Page(blocks)));
 
-        LogicalPlan newPlan = SemiJoin.newMainPlan(semiJoin, subPlan, result);
+        LogicalPlan newPlan = SemiJoin.newMainPlan(semiJoin, subPlan, result, HASH_JOIN_THRESHOLD);
         var filter = as(newPlan, Filter.class);
         assertThat(filter.condition(), instanceOf(In.class));
     }

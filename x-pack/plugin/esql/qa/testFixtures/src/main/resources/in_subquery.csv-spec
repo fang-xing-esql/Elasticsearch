@@ -1,0 +1,152 @@
+//
+// CSV spec for IN and NOT IN subqueries
+//
+
+basicInSubquery
+required_capability: in_subquery
+
+FROM employees
+| WHERE emp_no IN (FROM employees | SORT emp_no ASC | LIMIT 3 | KEEP emp_no)
+| SORT emp_no
+| KEEP emp_no, first_name
+;
+
+emp_no:integer | first_name:keyword
+10001          | Georgi
+10002          | Bezalel
+10003          | Parto
+;
+
+basicNotInSubquery
+required_capability: in_subquery
+
+FROM employees
+| WHERE emp_no NOT IN (FROM employees | SORT emp_no ASC | LIMIT 3 | KEEP emp_no)
+| SORT emp_no
+| KEEP emp_no, first_name
+| LIMIT 3
+;
+
+emp_no:integer | first_name:keyword
+10004          | Chirstian
+10005          | Kyoichi
+10006          | Anneke
+;
+
+inSubqueryWithFilterNoPipelineBreaker
+required_capability: in_subquery
+
+FROM employees
+| WHERE emp_no IN (FROM employees | WHERE salary > 70000 | KEEP emp_no)
+| SORT emp_no
+| KEEP emp_no
+;
+
+emp_no:integer
+10007
+10019
+10027
+10029
+10033
+10045
+10097
+10099
+;
+
+inSubqueryEmptyResults
+required_capability: in_subquery
+
+FROM employees
+| WHERE emp_no IN (FROM employees | WHERE salary > 100000 | KEEP emp_no)
+| SORT emp_no
+| KEEP emp_no
+;
+
+emp_no:integer
+;
+
+notInSubqueryEmptyResults
+required_capability: in_subquery
+
+FROM employees
+| WHERE emp_no NOT IN (FROM employees | WHERE salary < 10000 | KEEP emp_no)
+| SORT emp_no
+| KEEP emp_no
+| LIMIT 3
+;
+
+emp_no:integer
+10001
+10002
+10003
+;
+
+inSubqueryWithEval
+required_capability: in_subquery
+
+FROM employees
+| WHERE emp_no IN (FROM employees | WHERE salary > 70000 | EVAL x = emp_no | KEEP x)
+| SORT emp_no
+| KEEP emp_no, first_name
+;
+
+emp_no:integer | first_name:keyword
+10007          | Tzvetan
+10019          | Lillian
+10027          | Divier
+10029          | Otmar
+10033          | null
+10045          | Moss
+10097          | Remzi
+10099          | Valter
+;
+
+inSubqueryWithStats
+required_capability: in_subquery
+
+FROM employees
+| WHERE salary IN (FROM employees | STATS max_sal = MAX(salary) | KEEP max_sal)
+| KEEP emp_no, first_name, salary
+;
+
+emp_no:integer | first_name:keyword | salary:integer
+10029          | Otmar              | 74999
+;
+
+inSubqueryHashJoin
+required_capability: in_subquery
+
+FROM employees
+| WHERE emp_no IN (FROM
+                      (FROM employees | KEEP emp_no),
+                      (FROM employees_incompatible | EVAL emp_no = emp_no::int + 10000 | KEEP emp_no)
+                   | KEEP emp_no)
+| SORT emp_no
+| KEEP emp_no, first_name
+| LIMIT 3
+;
+
+emp_no:integer | first_name:keyword
+10001          | Georgi
+10002          | Bezalel
+10003          | Parto
+;
+
+notInSubqueryHashJoin
+required_capability: in_subquery
+
+FROM employees
+| WHERE emp_no NOT IN (FROM
+                          (FROM employees | EVAL emp_no = emp_no + 20000 | KEEP emp_no),
+                          (FROM employees_incompatible | EVAL emp_no = emp_no::int + 10000 | KEEP emp_no)
+                       | KEEP emp_no)
+| SORT emp_no
+| KEEP emp_no, first_name
+| LIMIT 3
+;
+
+emp_no:integer | first_name:keyword
+10001          | Georgi
+10002          | Bezalel
+10003          | Parto
+;

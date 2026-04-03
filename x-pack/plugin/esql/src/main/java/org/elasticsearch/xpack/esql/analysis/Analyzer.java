@@ -3572,7 +3572,9 @@ public class Analyzer extends ParameterizedRuleExecutor<LogicalPlan, AnalyzerCon
                 UnresolvedAttribute errorAttr = new UnresolvedAttribute(
                     join.source(),
                     "*",
-                    "IN subquery must return exactly one column, found [" + rightOutput.size() + "]"
+                    "IN subquery must return exactly one column, found ["
+                        + rightOutput.stream().map(Attribute::name).collect(Collectors.joining(", "))
+                        + "]"
                 );
                 JoinConfig errorConfig = new JoinConfig(type, join.config().leftFields(), singletonList(errorAttr), null);
                 return makeSemiOrAntiJoin(join, errorConfig);

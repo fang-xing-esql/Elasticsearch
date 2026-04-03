@@ -46,6 +46,7 @@ import org.elasticsearch.xpack.esql.plan.logical.UnionAll;
 import org.elasticsearch.xpack.esql.plan.logical.UnresolvedRelation;
 import org.elasticsearch.xpack.esql.plan.logical.inference.Completion;
 import org.elasticsearch.xpack.esql.plan.logical.join.LookupJoin;
+import org.elasticsearch.xpack.esql.expression.predicate.operator.comparison.InSubquery;
 import org.elasticsearch.xpack.esql.session.EsqlSession.PreAnalysisResult;
 
 import java.util.ArrayList;
@@ -65,6 +66,14 @@ public class FieldNameUtils {
     );
 
     public static PreAnalysisResult resolveFieldNames(LogicalPlan parsed, boolean hasEnriches, boolean includePrefixFields) {
+
+        // IN subquery plans are embedded inside expressions and not traversed by the standard plan tree walk,
+        // so we cannot reliably collect their field references. Fall back to requesting all fields.
+        Holder<Boolean> hasInSubquery = new Holder<>(false);
+        parsed.forEachDown(p -> p.forEachExpression(InSubquery.class, inSub -> hasInSubquery.set(true)));
+        if (hasInSubquery.get()) {
+            return new PreAnalysisResult(IndexResolver.ALL_FIELDS, Set.of());
+        }
 
         // get the field names from the parsed plan combined with the ENRICH match fields from the ENRICH policy
         List<LogicalPlan> inlinestats = parsed.collect(InlineStats.class::isInstance);

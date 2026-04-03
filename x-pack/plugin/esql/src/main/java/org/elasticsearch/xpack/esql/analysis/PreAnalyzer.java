@@ -11,6 +11,7 @@ import org.elasticsearch.index.IndexMode;
 import org.elasticsearch.xpack.esql.core.expression.Literal;
 import org.elasticsearch.xpack.esql.core.util.Holder;
 import org.elasticsearch.xpack.esql.expression.function.UnresolvedFunction;
+import org.elasticsearch.xpack.esql.expression.predicate.operator.comparison.InSubquery;
 import org.elasticsearch.xpack.esql.plan.IndexPattern;
 import org.elasticsearch.xpack.esql.plan.logical.Enrich;
 import org.elasticsearch.xpack.esql.plan.logical.LogicalPlan;
@@ -52,19 +53,15 @@ public class PreAnalyzer {
     protected PreAnalysis doPreAnalyze(LogicalPlan plan) {
         Map<IndexPattern, IndexMode> indexes = new HashMap<>();
         List<IndexPattern> lookupIndices = new ArrayList<>();
-        plan.forEachUp(UnresolvedRelation.class, p -> {
-            if (p.indexMode() == IndexMode.LOOKUP) {
-                lookupIndices.add(p.indexPattern());
-            } else if (indexes.containsKey(p.indexPattern()) == false || indexes.get(p.indexPattern()) == p.indexMode()) {
-                indexes.put(p.indexPattern(), p.indexMode());
-            } else {
-                IndexMode m1 = p.indexMode();
-                IndexMode m2 = indexes.get(p.indexPattern());
-                throw new IllegalStateException(
-                    "index pattern '" + p.indexPattern() + "' found with with different index mode: " + m2 + " != " + m1
-                );
-            }
-        });
+
+        // Collect indices from the main plan tree
+        plan.forEachUp(UnresolvedRelation.class, r -> collectIndex(r, indexes, lookupIndices));
+
+        // Collect indices from IN subquery plans, which are embedded inside expressions
+        // and not reachable by the standard plan tree traversal above.
+        plan.forEachDown(p -> p.forEachExpression(InSubquery.class, in ->
+            in.subquery().forEachUp(UnresolvedRelation.class, r -> collectIndex(r, indexes, lookupIndices))
+        ));
 
         List<Enrich> unresolvedEnriches = new ArrayList<>();
         plan.forEachUp(Enrich.class, unresolvedEnriches::add);
@@ -132,5 +129,19 @@ public class PreAnalyzer {
             hasTimeSeriesAggregation.get(),
             icebergPaths
         );
+    }
+
+    private static void collectIndex(UnresolvedRelation r, Map<IndexPattern, IndexMode> indexes, List<IndexPattern> lookupIndices) {
+        if (r.indexMode() == IndexMode.LOOKUP) {
+            lookupIndices.add(r.indexPattern());
+        } else if (indexes.containsKey(r.indexPattern()) == false || indexes.get(r.indexPattern()) == r.indexMode()) {
+            indexes.put(r.indexPattern(), r.indexMode());
+        } else {
+            IndexMode m1 = r.indexMode();
+            IndexMode m2 = indexes.get(r.indexPattern());
+            throw new IllegalStateException(
+                "index pattern '" + r.indexPattern() + "' found with with different index mode: " + m2 + " != " + m1
+            );
+        }
     }
 }

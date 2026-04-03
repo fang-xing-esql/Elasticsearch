@@ -119,7 +119,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.BiFunction;
 
 import static java.util.stream.Collectors.toSet;
 import static org.elasticsearch.xpack.esql.plan.QuerySettings.UNMAPPED_FIELDS;
@@ -545,29 +544,6 @@ public class EsqlSession {
         planRunner.run(resultPlan, configuration, foldContext, planTimeProfile, listener);
     }
 
-    /**
-     * Holds the information needed to execute a subplan and inline its result back into the main plan.
-     *
-     * @param planToExecute the logical subplan to execute
-     * @param resultInliner given the current optimized plan and the subplan result, produces a new main plan
-     */
-    record SubPlanExecution(LogicalPlan planToExecute, BiFunction<LogicalPlan, LocalRelation, LogicalPlan> resultInliner) {}
-
-    static SubPlanExecution findFirstSubPlan(LogicalPlan optimizedPlan, Set<LocalRelation> subPlansResults) {
-        var semiJoinTuple = SemiJoin.firstSubPlan(optimizedPlan, subPlansResults);
-        if (semiJoinTuple != null) {
-            return new SubPlanExecution(semiJoinTuple.subPlan(), (plan, result) -> SemiJoin.newMainPlan(plan, semiJoinTuple, result));
-        }
-        var inlineJoinTuple = InlineJoin.firstSubPlan(optimizedPlan, subPlansResults);
-        if (inlineJoinTuple != null) {
-            return new SubPlanExecution(
-                inlineJoinTuple.stubReplacedSubPlan(),
-                (plan, result) -> InlineJoin.newMainPlan(plan, inlineJoinTuple, result)
-            );
-        }
-        return null;
-    }
-
     private void executeSubPlans(
         LogicalPlan optimizedPlan,
         Configuration configuration,
@@ -618,15 +594,33 @@ public class EsqlSession {
     private record SubPlanAndCallback(
         LogicalPlan subPlan,
         java.util.function.Function<Result, LogicalPlan> newMainPlan,
-        Runnable cleanup
+        Runnable cleanup,
+        boolean isSemiJoinSubPlan
     ) {};
 
     private SubPlanAndCallback firstSubPlan(LogicalPlan optimizedPlan, Approximation approximation, Set<LocalRelation> subPlansResults) {
         if (approximation != null) {
             LogicalPlan subPlan = approximation.firstSubPlan();
             if (subPlan != null) {
-                return new SubPlanAndCallback(subPlan, approximation::newMainPlan, () -> {});
+                return new SubPlanAndCallback(subPlan, approximation::newMainPlan, () -> {}, false);
             }
+        }
+
+        // evaluate (NOT) IN non-correlated subqueries before the main query
+        SemiJoin.LogicalPlanTuple semiJoinTuple = SemiJoin.firstSubPlan(optimizedPlan, subPlansResults);
+        if (semiJoinTuple != null) {
+            AtomicReference<Page> localRelationPage = new AtomicReference<>();
+            return new SubPlanAndCallback(semiJoinTuple.subPlan(), result -> {
+                LocalRelation resultWrapper = resultToPlan(semiJoinTuple.subPlan().source(), result);
+                localRelationPage.set(resultWrapper.supplier().get());
+                subPlansResults.add(resultWrapper);
+                return SemiJoin.newMainPlan(
+                    optimizedPlan,
+                    semiJoinTuple,
+                    resultWrapper,
+                    plannerSettings.inSubqueryHashJoinThreshold()
+                );
+            }, () -> releaseLocalRelationBlocks(localRelationPage), true);
         }
 
         InlineJoin.LogicalPlanTuple subPlans = InlineJoin.firstSubPlan(optimizedPlan, subPlansResults);
@@ -635,12 +629,11 @@ public class EsqlSession {
         }
         AtomicReference<Page> localRelationPage = new AtomicReference<>();
         return new SubPlanAndCallback(subPlans.stubReplacedSubPlan(), result -> {
-            // Translate the subquery into a separate, coordinator based plan and the results 'broadcasted' as a local relation
             LocalRelation resultWrapper = resultToPlan(subPlans.stubReplacedSubPlan().source(), result);
             localRelationPage.set(resultWrapper.supplier().get());
             subPlansResults.add(resultWrapper);
             return InlineJoin.newMainPlan(optimizedPlan, subPlans, resultWrapper);
-        }, () -> releaseLocalRelationBlocks(localRelationPage));
+        }, () -> releaseLocalRelationBlocks(localRelationPage), false);
     }
 
     private void executeSubPlan(
@@ -661,6 +654,9 @@ public class EsqlSession {
         LOGGER.debug("Executing subplan:\n{}", subPlan.subPlan);
         // Create a physical plan out of the logical sub-plan
         var physicalSubPlan = logicalPlanToPhysicalPlan(subPlan.subPlan, request, physicalPlanOptimizer, planTimeProfile);
+        if (subPlan.isSemiJoinSubPlan()) {
+            physicalSubPlan = Mapper.ensureExchangeForSubPlan(physicalSubPlan);
+        }
 
         executionInfo.startSubPlans();
 
