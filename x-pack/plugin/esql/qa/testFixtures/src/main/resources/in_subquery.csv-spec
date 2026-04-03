@@ -287,3 +287,41 @@ emp_no:integer | first_name:keyword | salary:integer | languages:integer
 10019          | Lillian            | 73717          | 1
 10019          | Lillian            | 73717          | 1
 ;
+
+multipleInSubqueriesConjunctive
+required_capability: in_subquery
+
+FROM employees
+| WHERE emp_no NOT IN (FROM employees | WHERE languages IN (1, 2) | KEEP emp_no)
+    AND emp_no IN (FROM employees | WHERE salary > 70000 | KEEP emp_no)
+| SORT emp_no
+| KEEP emp_no, languages, salary
+| LIMIT 5
+;
+
+emp_no:integer | languages:integer | salary:integer
+10007          | 4                 | 74572
+10027          | null              | 73851
+10029          | null              | 74999
+10045          | 3                 | 74970
+10097          | 3                 | 71165
+;
+
+multipleInSubqueriesDisjunctive
+required_capability: in_subquery
+
+FROM employees
+| WHERE emp_no NOT IN (FROM employees | SORT emp_no | LIMIT 5 | KEEP emp_no)
+     OR emp_no IN (FROM employees | WHERE salary > 70000 | KEEP emp_no)
+| SORT emp_no
+| KEEP emp_no, languages, salary
+| LIMIT 5
+;
+
+emp_no:integer | languages:integer | salary:integer
+10006          | 3                 | 60335
+10007          | 4                 | 74572
+10008          | 2                 | 43906
+10009          | 1                 | 66174
+10010          | 4                 | 45797
+;

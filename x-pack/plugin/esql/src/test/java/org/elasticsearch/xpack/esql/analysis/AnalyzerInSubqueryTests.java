@@ -664,6 +664,94 @@ public class AnalyzerInSubqueryTests extends ESTestCase {
         as(filter.child(), EsRelation.class);
     }
 
+    // -- disjunctive IN/NOT IN subquery tests --
+
+    /**
+     * Verifies that an OR of two IN subqueries is rewritten to a UnionAll with exclusive branches.
+     * Each branch contains a SemiJoin for the IN subquery.
+     */
+    public void testDisjunctiveInSubqueries() {
+        var plan = analyzeInSubquery("""
+            FROM test
+            | WHERE emp_no IN (FROM employees | KEEP emp_no)
+               OR salary IN (FROM employees | KEEP salary)
+            """);
+
+        var limit = as(plan, Limit.class);
+        var unionAll = as(limit.child(), UnionAll.class);
+        assertEquals(2, unionAll.children().size());
+
+        // Branch 1: Project -> SemiJoin for emp_no IN (...)
+        var branch1Project = as(unionAll.children().get(0), Project.class);
+        var branch1 = as(branch1Project.child(), SemiJoin.class);
+        assertThat(branch1.config().type(), equalTo(JoinTypes.SEMI));
+        assertThat(branch1.config().leftFields().get(0).name(), equalTo("emp_no"));
+
+        // Branch 2: Project -> SemiJoin for salary IN (...), with AntiJoin exclusion below
+        var branch2Project = as(unionAll.children().get(1), Project.class);
+        var branch2Semi = as(branch2Project.child(), SemiJoin.class);
+        assertThat(branch2Semi.config().leftFields().get(0).name(), equalTo("salary"));
+        var branch2Anti = as(branch2Semi.left(), AntiJoin.class);
+        assertThat(branch2Anti.config().leftFields().get(0).name(), equalTo("emp_no"));
+    }
+
+    /**
+     * Verifies that an OR of IN and NOT IN subqueries is rewritten to a UnionAll.
+     */
+    public void testDisjunctiveInAndNotInSubqueries() {
+        var plan = analyzeInSubquery("""
+            FROM test
+            | WHERE emp_no NOT IN (FROM employees | KEEP emp_no)
+               OR emp_no IN (FROM employees | WHERE salary > 50000 | KEEP emp_no)
+            """);
+
+        var limit = as(plan, Limit.class);
+        var unionAll = as(limit.child(), UnionAll.class);
+        assertEquals(2, unionAll.children().size());
+
+        // Branch 1: Project -> AntiJoin for emp_no NOT IN (...)
+        var branch1Project = as(unionAll.children().get(0), Project.class);
+        var branch1 = as(branch1Project.child(), AntiJoin.class);
+        assertThat(branch1.config().type(), equalTo(JoinTypes.ANTI));
+        assertThat(branch1.config().leftFields().get(0).name(), equalTo("emp_no"));
+
+        // Branch 2: Project -> SemiJoin for emp_no IN (sub2), with SemiJoin exclusion below
+        // NOT(NOT IN sub1) simplifies to IN sub1, so the exclusion is a SemiJoin
+        var branch2Project = as(unionAll.children().get(1), Project.class);
+        var branch2Outer = as(branch2Project.child(), SemiJoin.class);
+        assertThat(branch2Outer.config().leftFields().get(0).name(), equalTo("emp_no"));
+        var branch2Inner = as(branch2Outer.left(), SemiJoin.class);
+        assertThat(branch2Inner.config().leftFields().get(0).name(), equalTo("emp_no"));
+    }
+
+    /**
+     * Verifies that an OR with one regular condition and one IN subquery is rewritten to a UnionAll.
+     * The regular condition branch stays as a plain Filter.
+     */
+    public void testDisjunctiveRegularAndInSubquery() {
+        var plan = analyzeInSubquery("""
+            FROM test
+            | WHERE salary > 50000
+               OR emp_no IN (FROM employees | KEEP emp_no)
+            """);
+
+        var limit = as(plan, Limit.class);
+        var unionAll = as(limit.child(), UnionAll.class);
+        assertEquals(2, unionAll.children().size());
+
+        // Branch 1: Project -> Filter for salary > 50000
+        var branch1Project = as(unionAll.children().get(0), Project.class);
+        var branch1 = as(branch1Project.child(), Filter.class);
+        as(branch1.child(), EsRelation.class);
+
+        // Branch 2: Project -> SemiJoin for emp_no IN (...) with NOT(salary > 50000) filter below
+        var branch2Project = as(unionAll.children().get(1), Project.class);
+        var branch2Semi = as(branch2Project.child(), SemiJoin.class);
+        assertThat(branch2Semi.config().leftFields().get(0).name(), equalTo("emp_no"));
+        var branch2Filter = as(branch2Semi.left(), Filter.class);
+        as(branch2Filter.child(), EsRelation.class);
+    }
+
     // -- negative analyzer/verifier tests --
 
     /**

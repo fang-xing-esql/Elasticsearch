@@ -146,6 +146,7 @@ import org.elasticsearch.xpack.esql.plan.logical.Rename;
 import org.elasticsearch.xpack.esql.plan.logical.Row;
 import org.elasticsearch.xpack.esql.plan.logical.TimeSeriesAggregate;
 import org.elasticsearch.xpack.esql.plan.logical.UnionAll;
+import org.elasticsearch.xpack.esql.plan.logical.UnionAllFromDisjunctiveInSubquery;
 import org.elasticsearch.xpack.esql.plan.logical.UnresolvedExternalRelation;
 import org.elasticsearch.xpack.esql.plan.logical.UnresolvedRelation;
 import org.elasticsearch.xpack.esql.plan.logical.fuse.Fuse;
@@ -3483,6 +3484,14 @@ public class Analyzer extends ParameterizedRuleExecutor<LogicalPlan, AnalyzerCon
         @Override
         protected LogicalPlan rule(Filter filter) {
             Expression condition = filter.condition();
+
+            // Handle OR disjuncts containing IN subqueries by rewriting to exclusive UnionAll branches.
+            // Each branch gets AND-conjunct conditions that the existing SemiJoin extraction can handle.
+            List<Expression> disjuncts = Predicates.splitOr(condition);
+            if (disjuncts.size() > 1 && disjuncts.stream().anyMatch(ResolveInSubqueryToJoin::containsInSubquery)) {
+                return rewriteDisjunctiveInSubquery(filter, disjuncts);
+            }
+
             List<Expression> conjuncts = Predicates.splitAnd(condition);
 
             List<Expression> remaining = new ArrayList<>();
@@ -3549,6 +3558,66 @@ public class Analyzer extends ParameterizedRuleExecutor<LogicalPlan, AnalyzerCon
          */
         private LogicalPlan resolveNestedInSubqueries(LogicalPlan subqueryPlan) {
             return subqueryPlan.transformUp(Filter.class, f -> f.analyzed() ? f : rule(f));
+        }
+
+        /**
+         * Rewrites a Filter with OR disjuncts containing InSubquery into an exclusive UnionAll.
+         * For {@code WHERE d1 OR d2 OR d3}, produces:
+         * <pre>
+         * UnionAll(
+         *   Filter(d1, child),
+         *   Filter(NOT(d1) AND d2, child),
+         *   Filter(NOT(d1) AND NOT(d2) AND d3, child)
+         * )
+         * </pre>
+         * Each branch has only AND-conjunct conditions, which the existing SemiJoin extraction handles.
+         * The exclusive partitioning ensures no duplicate rows across branches.
+         */
+        private LogicalPlan rewriteDisjunctiveInSubquery(Filter filter, List<Expression> disjuncts) {
+            LogicalPlan child = filter.child();
+            Source source = filter.source();
+            List<LogicalPlan> branches = new ArrayList<>();
+            List<Expression> exclusions = new ArrayList<>();
+
+            for (Expression disjunct : disjuncts) {
+                Expression branchCondition;
+                if (exclusions.isEmpty()) {
+                    branchCondition = disjunct;
+                } else {
+                    List<Expression> parts = new ArrayList<>();
+                    for (Expression ex : exclusions) {
+                        parts.add(negate(ex));
+                    }
+                    parts.add(disjunct);
+                    branchCondition = Predicates.combineAnd(parts);
+                }
+                // Each branch's Filter may contain InSubquery in AND position — resolve them now
+                LogicalPlan branch = rule(new Filter(source, child, branchCondition));
+                branches.add(branch);
+                exclusions.add(disjunct);
+            }
+
+            return new UnionAllFromDisjunctiveInSubquery(source, branches, List.of());
+        }
+
+        /**
+         * Negates an expression, simplifying double negation: NOT(NOT(x)) → x.
+         */
+        private static Expression negate(Expression expr) {
+            if (expr instanceof Not not) {
+                return not.field();
+            }
+            return new Not(expr.source(), expr);
+        }
+
+        private static boolean containsInSubquery(Expression expr) {
+            if (expr instanceof InSubquery) {
+                return true;
+            }
+            if (expr instanceof Not not) {
+                return containsInSubquery(not.field());
+            }
+            return expr.children().stream().anyMatch(ResolveInSubqueryToJoin::containsInSubquery);
         }
 
         @Override

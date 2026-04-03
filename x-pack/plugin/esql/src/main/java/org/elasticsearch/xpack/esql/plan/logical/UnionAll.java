@@ -121,14 +121,15 @@ public class UnionAll extends Fork implements PostOptimizationPlanVerificationAw
                 if (unionAll == otherForkOrUnionAll) {
                     return;
                 }
-                failures.add(
-                    Failure.fail(
-                        otherForkOrUnionAll,
-                        otherForkOrUnionAll instanceof UnionAll
-                            ? "Nested subqueries are not supported"
-                            : "FORK inside subquery is not supported"
-                    )
-                );
+                String message;
+                if (otherForkOrUnionAll instanceof UnionAllFromDisjunctiveInSubquery) {
+                    message = "Disjunctive (OR) IN/NOT IN subqueries are not supported inside FROM subqueries";
+                } else if (otherForkOrUnionAll instanceof UnionAll) {
+                    message = "Nested subqueries are not supported";
+                } else {
+                    message = "FORK inside subquery is not supported";
+                }
+                failures.add(Failure.fail(otherForkOrUnionAll, message));
             });
         }
     }
