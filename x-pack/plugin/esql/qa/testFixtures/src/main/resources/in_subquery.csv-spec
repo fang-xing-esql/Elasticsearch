@@ -113,7 +113,50 @@ emp_no:integer | first_name:keyword | salary:integer
 10029          | Otmar              | 74999
 ;
 
-inSubqueryHashJoin
+inSubqueryWithFromSubqueryInsideInSubquery
+required_capability: in_subquery
+
+FROM employees
+| WHERE emp_no IN (FROM
+                      (FROM employees | SORT emp_no | LIMIT 3 | KEEP emp_no),
+                      (FROM employees | SORT emp_no DESC | LIMIT 3 | KEEP emp_no)
+                  )
+| SORT emp_no
+| KEEP emp_no, first_name
+;
+
+emp_no:integer | first_name:keyword
+10001          | Georgi
+10002          | Bezalel
+10003          | Parto
+10098          | Sreekrishna
+10099          | Valter
+10100          | Hironobu
+;
+
+inSubqueryWithInSubqueryInsideFromSubqueryWithLookupJoin
+required_capability: in_subquery
+
+FROM 
+  (FROM employees
+   | WHERE languages IN (FROM languages | WHERE language_name IN ("English", "German") | KEEP language_code) 
+   | KEEP emp_no, languages),
+  (FROM employees 
+   | WHERE languages NOT IN (FROM languages | WHERE language_name IN ("French", "English") | KEEP language_code) 
+   | KEEP emp_no, languages)
+| LOOKUP JOIN languages_lookup ON languages == language_code
+| STATS cnt = COUNT(*) BY languages, language_name
+| SORT cnt DESC
+;
+
+cnt:long | languages:integer | language_name:keyword
+36       | 4                 | German
+21       | 5                 | null
+17       | 3                 | Spanish
+15       | 1                 | English
+;
+
+inSubqueryWithHashJoin
 required_capability: in_subquery
 
 FROM employees
@@ -149,4 +192,98 @@ emp_no:integer | first_name:keyword
 10001          | Georgi
 10002          | Bezalel
 10003          | Parto
+;
+
+nestedInSubqueryInsideInSubquery
+required_capability: in_subquery
+
+FROM employees
+| WHERE emp_no IN (
+    FROM employees
+    | WHERE salary IN (FROM employees | SORT salary DESC | LIMIT 3 | KEEP salary)
+    | KEEP emp_no
+  )
+| SORT emp_no
+| KEEP emp_no, first_name, salary
+;
+
+emp_no:integer | first_name:keyword | salary:integer
+10007          | Tzvetan            | 74572
+10029          | Otmar              | 74999
+10045          | Moss               | 74970
+;
+
+nestedNotInSubqueryInsideInSubquery
+required_capability: in_subquery
+
+FROM employees
+| WHERE emp_no IN (
+    FROM employees
+    | WHERE salary NOT IN (
+        FROM employees | SORT salary DESC | LIMIT 3 | KEEP salary
+      )
+    | KEEP emp_no
+  )
+| SORT emp_no
+| KEEP emp_no, first_name
+| LIMIT 3
+;
+
+emp_no:integer | first_name:keyword
+10001          | Georgi
+10002          | Bezalel
+10003          | Parto
+;
+
+fromSubqueryWithNestedInSubquery
+required_capability: in_subquery
+
+FROM
+  (FROM employees
+   | WHERE emp_no IN (
+       FROM employees
+       | WHERE salary IN (FROM employees | SORT salary DESC | LIMIT 3 | KEEP salary)
+       | KEEP emp_no)
+   | KEEP emp_no, first_name, salary, languages),
+  (FROM employees | WHERE languages == 1 | KEEP emp_no, first_name, salary, languages)
+| SORT emp_no
+| KEEP emp_no, first_name, salary, languages
+| LIMIT 6
+;
+
+emp_no:integer | first_name:keyword | salary:integer | languages:integer
+10005          | Kyoichi            | 63528          | 1
+10007          | Tzvetan            | 74572          | 4
+10009          | Sumant             | 66174          | 1
+10013          | Eberhardt          | 48735          | 1
+10019          | Lillian            | 73717          | 1
+10029          | Otmar              | 74999          | null
+;
+
+fromSubqueryWithNestedNotInSubquery
+required_capability: in_subquery
+
+FROM
+  (FROM employees | WHERE salary > 70000 | KEEP emp_no, first_name, salary, languages),
+  (FROM employees
+   | WHERE emp_no IN (
+       FROM employees
+       | WHERE salary NOT IN (
+           FROM employees | SORT salary DESC | LIMIT 3 | KEEP salary
+         )
+       | KEEP emp_no)
+   | WHERE languages == 1
+   | KEEP emp_no, first_name, salary, languages)
+| SORT emp_no
+| KEEP emp_no, first_name, salary, languages
+| LIMIT 6
+;
+
+emp_no:integer | first_name:keyword | salary:integer | languages:integer
+10005          | Kyoichi            | 63528          | 1
+10007          | Tzvetan            | 74572          | 4
+10009          | Sumant             | 66174          | 1
+10013          | Eberhardt          | 48735          | 1
+10019          | Lillian            | 73717          | 1
+10019          | Lillian            | 73717          | 1
 ;

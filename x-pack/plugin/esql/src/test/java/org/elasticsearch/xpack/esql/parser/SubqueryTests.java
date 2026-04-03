@@ -54,6 +54,7 @@ public class SubqueryTests extends AbstractStatementParserTests {
     public void checkSubqueryInFromCommandSupport() {
         assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
     }
+
     /**
      * UnionAll[[]]
      * |_UnresolvedRelation[]

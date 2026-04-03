@@ -3515,12 +3515,15 @@ public class Analyzer extends ParameterizedRuleExecutor<LogicalPlan, AnalyzerCon
                         continue;
                     }
 
+                    // Recursively resolve any nested IN subqueries within the subquery plan
+                    LogicalPlan subquery = resolveNestedInSubqueries(inSubquery.subquery());
+
                     if (negated) {
                         JoinConfig config = new JoinConfig(JoinTypes.ANTI, leftFields, emptyList(), null);
-                        subqueryJoins.add(new SubqueryJoin(inSubquery.source(), inSubquery.subquery(), config, true));
+                        subqueryJoins.add(new SubqueryJoin(inSubquery.source(), subquery, config, true));
                     } else {
                         JoinConfig config = new JoinConfig(JoinTypes.SEMI, leftFields, emptyList(), null);
-                        subqueryJoins.add(new SubqueryJoin(inSubquery.source(), inSubquery.subquery(), config, false));
+                        subqueryJoins.add(new SubqueryJoin(inSubquery.source(), subquery, config, false));
                     }
                 } else {
                     remaining.add(conjunct);
@@ -3543,6 +3546,15 @@ public class Analyzer extends ParameterizedRuleExecutor<LogicalPlan, AnalyzerCon
                     : new SemiJoin(sj.source, current, sj.subquery, sj.config);
             }
             return current;
+        }
+
+        /**
+         * Recursively transforms a subquery plan, converting any nested IN/NOT IN subquery expressions
+         * into SemiJoin/AntiJoin nodes. This is needed because nested subquery plans are embedded inside
+         * InSubquery expressions and not reachable by the top-level transformUp.
+         */
+        private LogicalPlan resolveNestedInSubqueries(LogicalPlan subqueryPlan) {
+            return subqueryPlan.transformUp(Filter.class, f -> f.analyzed() ? f : rule(f));
         }
 
         @Override

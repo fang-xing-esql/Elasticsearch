@@ -614,12 +614,7 @@ public class EsqlSession {
                 LocalRelation resultWrapper = resultToPlan(semiJoinTuple.subPlan().source(), result);
                 localRelationPage.set(resultWrapper.supplier().get());
                 subPlansResults.add(resultWrapper);
-                return SemiJoin.newMainPlan(
-                    optimizedPlan,
-                    semiJoinTuple,
-                    resultWrapper,
-                    plannerSettings.inSubqueryHashJoinThreshold()
-                );
+                return SemiJoin.newMainPlan(optimizedPlan, semiJoinTuple, resultWrapper, plannerSettings.inSubqueryHashJoinThreshold());
             }, () -> releaseLocalRelationBlocks(localRelationPage), true);
         }
 

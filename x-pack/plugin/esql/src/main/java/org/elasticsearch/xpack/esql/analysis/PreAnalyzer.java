@@ -55,13 +55,16 @@ public class PreAnalyzer {
         List<IndexPattern> lookupIndices = new ArrayList<>();
 
         // Collect indices from the main plan tree
-        plan.forEachUp(UnresolvedRelation.class, r -> collectIndex(r, indexes, lookupIndices));
+        plan.forEachUp(UnresolvedRelation.class, r -> collectIndices(r, indexes, lookupIndices));
 
-        // Collect indices from IN subquery plans, which are embedded inside expressions
+        // Collect indices from IN subquery plans, which are embedded inside the InSubquery expressions
         // and not reachable by the standard plan tree traversal above.
-        plan.forEachDown(p -> p.forEachExpression(InSubquery.class, in ->
-            in.subquery().forEachUp(UnresolvedRelation.class, r -> collectIndex(r, indexes, lookupIndices))
-        ));
+        plan.forEachDown(
+            p -> p.forEachExpression(
+                InSubquery.class,
+                in -> in.subquery().forEachUp(UnresolvedRelation.class, r -> collectIndices(r, indexes, lookupIndices))
+            )
+        );
 
         List<Enrich> unresolvedEnriches = new ArrayList<>();
         plan.forEachUp(Enrich.class, unresolvedEnriches::add);
@@ -131,7 +134,7 @@ public class PreAnalyzer {
         );
     }
 
-    private static void collectIndex(UnresolvedRelation r, Map<IndexPattern, IndexMode> indexes, List<IndexPattern> lookupIndices) {
+    private static void collectIndices(UnresolvedRelation r, Map<IndexPattern, IndexMode> indexes, List<IndexPattern> lookupIndices) {
         if (r.indexMode() == IndexMode.LOOKUP) {
             lookupIndices.add(r.indexPattern());
         } else if (indexes.containsKey(r.indexPattern()) == false || indexes.get(r.indexPattern()) == r.indexMode()) {

@@ -3386,6 +3386,92 @@ public class FieldNameUtilsTests extends ESTestCase {
             | keep ua.name""", Set.of("_index", "first_name", "first_name.*"));
     }
 
+    // IN subquery tests
+
+    public void testInSubquery() {
+        assumeTrue("IN_SUBQUERY required", EsqlCapabilities.Cap.IN_SUBQUERY.isEnabled());
+        assertFieldNames(
+            "FROM employees | WHERE emp_no IN (FROM employees | SORT emp_no | LIMIT 3 | KEEP emp_no) | KEEP emp_no, first_name",
+            Set.of("_index", "emp_no", "emp_no.*", "first_name", "first_name.*")
+        );
+    }
+
+    public void testInSubqueryDifferentIndex() {
+        assumeTrue("IN_SUBQUERY required", EsqlCapabilities.Cap.IN_SUBQUERY.isEnabled());
+        // The subquery references a different index; field names from both should be collected
+        assertFieldNames(
+            "FROM employees | WHERE emp_no IN (FROM languages | KEEP language_id) | KEEP emp_no, first_name",
+            Set.of("_index", "emp_no", "emp_no.*", "first_name", "first_name.*", "language_id", "language_id.*")
+        );
+    }
+
+    public void testInSubqueryWithMoreFields() {
+        assumeTrue("IN_SUBQUERY required", EsqlCapabilities.Cap.IN_SUBQUERY.isEnabled());
+        // The subquery references fields (salary) not used in the main query
+        assertFieldNames(
+            "FROM employees | WHERE emp_no IN (FROM employees | WHERE salary > 70000 | KEEP emp_no) | KEEP emp_no",
+            Set.of("_index", "emp_no", "emp_no.*", "salary", "salary.*")
+        );
+    }
+
+    public void testFromSubqueryInsideInSubquery() {
+        assumeTrue("IN_SUBQUERY required", EsqlCapabilities.Cap.IN_SUBQUERY.isEnabled());
+        assertFieldNames(
+            """
+                FROM employees
+                | WHERE emp_no IN (
+                    FROM (FROM employees | KEEP emp_no), (FROM languages | KEEP language_id)
+                    | KEEP emp_no
+                  )
+                | KEEP emp_no, first_name""",
+            Set.of("_index", "emp_no", "emp_no.*", "first_name", "first_name.*", "language_id", "language_id.*")
+        );
+    }
+
+    public void testInSubqueryInsideFromSubquery() {
+        assumeTrue("IN_SUBQUERY required", EsqlCapabilities.Cap.IN_SUBQUERY.isEnabled());
+        assertFieldNames("""
+            FROM
+                (FROM employees
+                 | SORT emp_no
+                 | LIMIT 3
+                 | KEEP emp_no ),
+                (FROM employees
+                 | WHERE languages IN (FROM languages | WHERE language_id < 5 | KEEP language_id)
+                 | SORT emp_no DESC | LIMIT 3 | KEEP emp_no)
+            """, Set.of("_index", "emp_no", "emp_no.*", "language_id", "language_id.*", "languages", "languages.*"));
+    }
+
+    public void testNestedInSubqueries() {
+        assumeTrue("IN_SUBQUERY required", EsqlCapabilities.Cap.IN_SUBQUERY.isEnabled());
+        // Nested IN subquery: the inner subquery references salary, the outer references emp_no and first_name
+        assertFieldNames(
+            """
+                FROM employees
+                | WHERE emp_no IN (
+                    FROM employees
+                    | WHERE salary IN (FROM employees | WHERE languages == 1 | STATS max_sal = MAX(salary) | KEEP max_sal)
+                    | KEEP emp_no
+                  )
+                | KEEP emp_no, first_name""",
+            Set.of("_index", "emp_no", "emp_no.*", "first_name", "first_name.*", "salary", "salary.*", "languages", "languages.*")
+        );
+    }
+
+    public void testNotInSubquery() {
+        assumeTrue("IN_SUBQUERY required", EsqlCapabilities.Cap.IN_SUBQUERY.isEnabled());
+        assertFieldNames(
+            "FROM employees | WHERE emp_no NOT IN (FROM employees | WHERE salary > 70000 | KEEP emp_no) | KEEP emp_no",
+            Set.of("_index", "emp_no", "emp_no.*", "salary", "salary.*")
+        );
+    }
+
+    public void testInSubqueryNoFieldReduction() {
+        assumeTrue("IN_SUBQUERY required", EsqlCapabilities.Cap.IN_SUBQUERY.isEnabled());
+        // Main query has no KEEP/PROJECT, so it returns ALL_FIELDS regardless of subquery
+        assertFieldNames("FROM employees | WHERE emp_no IN (FROM employees | SORT emp_no | LIMIT 3 | KEEP emp_no)", ALL_FIELDS);
+    }
+
     private void assertFieldNames(String query, Set<String> expected) {
         assertFieldNames(query, false, expected, Set.of());
     }

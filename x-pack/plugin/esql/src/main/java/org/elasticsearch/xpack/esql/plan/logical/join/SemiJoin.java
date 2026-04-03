@@ -18,9 +18,9 @@ import org.elasticsearch.xpack.esql.core.expression.Literal;
 import org.elasticsearch.xpack.esql.core.expression.NamedExpression;
 import org.elasticsearch.xpack.esql.core.expression.Nullability;
 import org.elasticsearch.xpack.esql.core.expression.ReferenceAttribute;
-import org.elasticsearch.xpack.esql.core.type.DataType;
 import org.elasticsearch.xpack.esql.core.tree.NodeInfo;
 import org.elasticsearch.xpack.esql.core.tree.Source;
+import org.elasticsearch.xpack.esql.core.type.DataType;
 import org.elasticsearch.xpack.esql.core.util.Holder;
 import org.elasticsearch.xpack.esql.expression.predicate.logical.Not;
 import org.elasticsearch.xpack.esql.expression.predicate.nulls.IsNotNull;
@@ -153,9 +153,7 @@ public class SemiJoin extends Join implements SortPreserving {
         Attribute leftField,
         Source source
     ) {
-        List<Expression> literals = rawValues.stream()
-            .map(v -> (Expression) new Literal(source, v, dataType))
-            .toList();
+        List<Expression> literals = rawValues.stream().map(v -> (Expression) new Literal(source, v, dataType)).toList();
         Expression condition = new In(source, leftField, literals);
         if (semiJoin.isAntiJoin()) {
             condition = new Not(source, condition);
@@ -190,9 +188,7 @@ public class SemiJoin extends Join implements SortPreserving {
         Join leftJoin = new Join(source, semiJoin.left(), deduplicatedData, leftJoinConfig);
 
         // Filter on sentinel: IS NOT NULL for SEMI (keep matches), IS NULL for ANTI (keep non-matches)
-        Expression filterCondition = semiJoin.isAntiJoin()
-            ? new IsNull(source, sentinelAttr)
-            : new IsNotNull(source, sentinelAttr);
+        Expression filterCondition = semiJoin.isAntiJoin() ? new IsNull(source, sentinelAttr) : new IsNotNull(source, sentinelAttr);
         Filter filter = new Filter(source, leftJoin, filterCondition);
 
         // Project: drop the right-side columns to preserve semi-join output semantics

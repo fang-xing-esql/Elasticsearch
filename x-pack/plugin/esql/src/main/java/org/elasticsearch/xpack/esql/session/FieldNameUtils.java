@@ -24,6 +24,7 @@ import org.elasticsearch.xpack.esql.expression.UnresolvedNamePattern;
 import org.elasticsearch.xpack.esql.expression.function.UnresolvedFunction;
 import org.elasticsearch.xpack.esql.expression.function.grouping.TBucket;
 import org.elasticsearch.xpack.esql.expression.function.scalar.date.TRange;
+import org.elasticsearch.xpack.esql.expression.predicate.operator.comparison.InSubquery;
 import org.elasticsearch.xpack.esql.plan.logical.Aggregate;
 import org.elasticsearch.xpack.esql.plan.logical.CompoundOutputEval;
 import org.elasticsearch.xpack.esql.plan.logical.Drop;
@@ -46,7 +47,6 @@ import org.elasticsearch.xpack.esql.plan.logical.UnionAll;
 import org.elasticsearch.xpack.esql.plan.logical.UnresolvedRelation;
 import org.elasticsearch.xpack.esql.plan.logical.inference.Completion;
 import org.elasticsearch.xpack.esql.plan.logical.join.LookupJoin;
-import org.elasticsearch.xpack.esql.expression.predicate.operator.comparison.InSubquery;
 import org.elasticsearch.xpack.esql.session.EsqlSession.PreAnalysisResult;
 
 import java.util.ArrayList;
@@ -67,13 +67,36 @@ public class FieldNameUtils {
 
     public static PreAnalysisResult resolveFieldNames(LogicalPlan parsed, boolean hasEnriches, boolean includePrefixFields) {
 
-        // IN subquery plans are embedded inside expressions and not traversed by the standard plan tree walk,
-        // so we cannot reliably collect their field references. Fall back to requesting all fields.
-        Holder<Boolean> hasInSubquery = new Holder<>(false);
-        parsed.forEachDown(p -> p.forEachExpression(InSubquery.class, inSub -> hasInSubquery.set(true)));
-        if (hasInSubquery.get()) {
-            return new PreAnalysisResult(IndexResolver.ALL_FIELDS, Set.of());
+        // Resolve field names for the main plan, then recursively for any IN subquery plans
+        // which are embedded inside expressions and not reachable by the standard plan tree walk.
+        PreAnalysisResult mainResult = resolveFieldNamesForPlan(parsed, hasEnriches, includePrefixFields);
+        if (mainResult.fieldNames().equals(IndexResolver.ALL_FIELDS)) {
+            return mainResult;
         }
+
+        List<PreAnalysisResult> subResults = new ArrayList<>();
+        parsed.forEachDown(p -> p.forEachExpression(InSubquery.class, inSub -> {
+            subResults.add(resolveFieldNames(inSub.subquery(), hasEnriches, includePrefixFields));
+        }));
+
+        if (subResults.isEmpty()) {
+            return mainResult;
+        }
+
+        // Merge field names from the main plan and all subquery plans
+        Set<String> mergedFields = new HashSet<>(mainResult.fieldNames());
+        Set<String> mergedWildcardJoinIndices = new HashSet<>(mainResult.wildcardJoinIndices());
+        for (PreAnalysisResult sub : subResults) {
+            if (sub.fieldNames().equals(IndexResolver.ALL_FIELDS)) {
+                return new PreAnalysisResult(IndexResolver.ALL_FIELDS, mergedWildcardJoinIndices);
+            }
+            mergedFields.addAll(sub.fieldNames());
+            mergedWildcardJoinIndices.addAll(sub.wildcardJoinIndices());
+        }
+        return new PreAnalysisResult(mergedFields, mergedWildcardJoinIndices);
+    }
+
+    private static PreAnalysisResult resolveFieldNamesForPlan(LogicalPlan parsed, boolean hasEnriches, boolean includePrefixFields) {
 
         // get the field names from the parsed plan combined with the ENRICH match fields from the ENRICH policy
         List<LogicalPlan> inlinestats = parsed.collect(InlineStats.class::isInstance);

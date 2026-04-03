@@ -7,6 +7,7 @@
 
 package org.elasticsearch.xpack.esql.analysis;
 
+import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.compute.data.Block;
 import org.elasticsearch.compute.data.BlockUtils;
 import org.elasticsearch.compute.data.Page;
@@ -39,7 +40,6 @@ import org.elasticsearch.xpack.esql.plan.logical.join.JoinTypes;
 import org.elasticsearch.xpack.esql.plan.logical.join.SemiJoin;
 import org.elasticsearch.xpack.esql.plan.logical.local.LocalRelation;
 import org.elasticsearch.xpack.esql.plan.logical.local.LocalSupplier;
-import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.xpack.esql.planner.PlannerSettings;
 import org.hamcrest.Matcher;
 import org.junit.Before;
@@ -526,6 +526,142 @@ public class AnalyzerInSubqueryTests extends ESTestCase {
         var antiJoin = as(subProject.child(), AntiJoin.class);
         assertThat(antiJoin.config().type(), equalTo(JoinTypes.ANTI));
         as(antiJoin.left(), EsRelation.class);
+    }
+
+    // -- nested IN/NOT IN subquery tests --
+
+    /**
+     * Verifies that a nested IN subquery (IN inside IN) produces a SemiJoin whose right side
+     * contains another SemiJoin.
+     */
+    public void testNestedInSubquery() {
+        var plan = analyzeInSubquery("""
+            FROM test
+            | WHERE emp_no IN (
+                FROM employees
+                | WHERE salary IN (FROM test | KEEP salary)
+                | KEEP emp_no
+              )
+            """);
+
+        var limit = as(plan, Limit.class);
+        var outerSemiJoin = as(limit.child(), SemiJoin.class);
+        assertThat(outerSemiJoin.config().type(), equalTo(JoinTypes.SEMI));
+        assertThat(outerSemiJoin.config().leftFields().get(0).name(), equalTo("emp_no"));
+        as(outerSemiJoin.left(), EsRelation.class);
+
+        // Right side: Project -> SemiJoin (the inner IN subquery)
+        var project = as(outerSemiJoin.right(), Project.class);
+        var innerSemiJoin = as(project.child(), SemiJoin.class);
+        assertThat(innerSemiJoin.config().type(), equalTo(JoinTypes.SEMI));
+        assertThat(innerSemiJoin.config().leftFields().get(0).name(), equalTo("salary"));
+        as(innerSemiJoin.left(), EsRelation.class);
+
+        var innerProject = as(innerSemiJoin.right(), Project.class);
+        as(innerProject.child(), EsRelation.class);
+    }
+
+    /**
+     * Verifies that a nested NOT IN inside IN produces a SemiJoin whose right side contains an AntiJoin.
+     */
+    public void testNestedNotInInsideInSubquery() {
+        var plan = analyzeInSubquery("""
+            FROM test
+            | WHERE emp_no IN (
+                FROM employees
+                | WHERE salary NOT IN (FROM test | KEEP salary)
+                | KEEP emp_no
+              )
+            """);
+
+        var limit = as(plan, Limit.class);
+        var outerSemiJoin = as(limit.child(), SemiJoin.class);
+        assertThat(outerSemiJoin.config().type(), equalTo(JoinTypes.SEMI));
+        as(outerSemiJoin.left(), EsRelation.class);
+
+        var project = as(outerSemiJoin.right(), Project.class);
+        var innerAntiJoin = as(project.child(), AntiJoin.class);
+        assertThat(innerAntiJoin.config().type(), equalTo(JoinTypes.ANTI));
+        assertThat(innerAntiJoin.config().leftFields().get(0).name(), equalTo("salary"));
+        as(innerAntiJoin.left(), EsRelation.class);
+    }
+
+    /**
+     * Verifies that a nested IN inside NOT IN produces an AntiJoin whose right side contains a SemiJoin.
+     */
+    public void testNestedInInsideNotInSubquery() {
+        var plan = analyzeInSubquery("""
+            FROM test
+            | WHERE emp_no NOT IN (
+                FROM employees
+                | WHERE salary IN (FROM test | KEEP salary)
+                | KEEP emp_no
+              )
+            """);
+
+        var limit = as(plan, Limit.class);
+        var outerAntiJoin = as(limit.child(), AntiJoin.class);
+        assertThat(outerAntiJoin.config().type(), equalTo(JoinTypes.ANTI));
+        as(outerAntiJoin.left(), EsRelation.class);
+
+        var project = as(outerAntiJoin.right(), Project.class);
+        var innerSemiJoin = as(project.child(), SemiJoin.class);
+        assertThat(innerSemiJoin.config().type(), equalTo(JoinTypes.SEMI));
+        assertThat(innerSemiJoin.config().leftFields().get(0).name(), equalTo("salary"));
+    }
+
+    /**
+     * Verifies that a 3 levels deep nested IN subquery is resolved correctly.
+     */
+    public void testThreeNestedInSubquery() {
+        var plan = analyzeInSubquery("""
+            FROM test
+            | WHERE emp_no IN (
+                FROM employees
+                | WHERE salary IN (
+                    FROM test
+                    | WHERE languages IN (FROM employees | KEEP languages)
+                    | KEEP salary
+                  )
+                | KEEP emp_no
+              )
+            """);
+
+        var limit = as(plan, Limit.class);
+        var outerSemiJoin = as(limit.child(), SemiJoin.class);
+        assertThat(outerSemiJoin.config().leftFields().get(0).name(), equalTo("emp_no"));
+
+        var project1 = as(outerSemiJoin.right(), Project.class);
+        var middleSemiJoin = as(project1.child(), SemiJoin.class);
+        assertThat(middleSemiJoin.config().leftFields().get(0).name(), equalTo("salary"));
+
+        var project2 = as(middleSemiJoin.right(), Project.class);
+        var innerSemiJoin = as(project2.child(), SemiJoin.class);
+        assertThat(innerSemiJoin.config().leftFields().get(0).name(), equalTo("languages"));
+    }
+
+    /**
+     * Verifies that a nested IN subquery with additional filter conditions resolves correctly.
+     */
+    public void testNestedInSubqueryWithFilter() {
+        var plan = analyzeInSubquery("""
+            FROM test
+            | WHERE emp_no IN (
+                FROM employees
+                | WHERE salary IN (FROM test | KEEP salary)
+                  AND languages > 2
+                | KEEP emp_no
+              )
+            """);
+
+        var limit = as(plan, Limit.class);
+        var outerSemiJoin = as(limit.child(), SemiJoin.class);
+
+        var project = as(outerSemiJoin.right(), Project.class);
+        var innerSemiJoin = as(project.child(), SemiJoin.class);
+        // The remaining filter (languages > 2) should be below the inner SemiJoin
+        var filter = as(innerSemiJoin.left(), Filter.class);
+        as(filter.child(), EsRelation.class);
     }
 
     // -- negative analyzer/verifier tests --
