@@ -59,7 +59,8 @@ Processing commands:
 - [`STATS`](/reference/query-languages/esql/commands/stats-by.md)
 - [`WHERE`](/reference/query-languages/esql/commands/where.md)
 
-The `METADATA` directive is also supported on either the subquery or the outer `FROM`.
+The [`METADATA` directive](/reference/query-languages/esql/esql-metadata-fields.md)
+is also supported on either the subquery or the outer `FROM`.
 
 ## Examples
 
@@ -76,7 +77,7 @@ FROM
     (FROM sample_data)
 | WHERE ( emp_no >= 10091 AND emp_no < 10094)  OR emp_no IS NULL
 | SORT emp_no, client_ip
-| KEEP  emp_no, languages, client_ip
+| KEEP emp_no, languages, client_ip
 ```
 
 | emp_no:integer | languages:integer | client_ip:ip |
@@ -103,7 +104,7 @@ You can use one or more subqueries without specifying a regular index pattern:
 FROM (FROM employees)
 | WHERE emp_no >= 10091 AND emp_no < 10094
 | SORT emp_no
-| KEEP  emp_no, languages
+| KEEP emp_no, languages
 ```
 
 | emp_no:integer | languages:integer |
@@ -199,9 +200,9 @@ FROM
 | sample_data_str | 4 | 172.21.3.15 |
 
 Two subqueries aggregate `sample_data` and `sample_data_str` separately, each
-counting rows by `client_ip`. The results are combined with `employees` and
-then filtered to only show rows where `client_ip` is `172.21.3.15`. The `_index`
-field confirms each row's source.
+counting rows by `client_ip`. The results are combined and then filtered to only
+show rows where `client_ip` is `172.21.3.15`. The `_index` field confirms each
+row's source.
 
 ### Use LOOKUP JOIN inside a subquery
 

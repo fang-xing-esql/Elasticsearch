@@ -1,5 +1,5 @@
 ---
-navigation_title: "Subquery"
+navigation_title: "Combine result sets with subqueries"
 ---
 
 # {{esql}} subquery [esql-subquery]
