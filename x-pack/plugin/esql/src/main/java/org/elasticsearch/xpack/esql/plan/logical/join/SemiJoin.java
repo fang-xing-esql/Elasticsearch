@@ -12,6 +12,7 @@ import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.compute.data.Block;
 import org.elasticsearch.compute.data.BlockUtils;
 import org.elasticsearch.compute.data.Page;
+import org.elasticsearch.xpack.esql.common.Failures;
 import org.elasticsearch.xpack.esql.core.expression.Attribute;
 import org.elasticsearch.xpack.esql.core.expression.Expression;
 import org.elasticsearch.xpack.esql.core.expression.Literal;
@@ -38,11 +39,13 @@ import org.elasticsearch.xpack.esql.planner.PlannerUtils;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
 import static org.elasticsearch.compute.data.BlockUtils.toJavaObject;
+import static org.elasticsearch.xpack.esql.common.Failure.fail;
 import static org.elasticsearch.xpack.esql.plan.logical.join.JoinTypes.LEFT;
 
 /**
@@ -106,6 +109,72 @@ public class SemiJoin extends Join implements SortPreserving {
 
     public boolean isAntiJoin() {
         return false;
+    }
+
+    @Override
+    public void postAnalysisVerification(Failures failures) {
+        for (int i = 0; i < config().leftFields().size(); i++) {
+            Attribute leftField = config().leftFields().get(i);
+            Attribute rightField = config().rightFields().get(i);
+            DataType leftType = leftField.dataType();
+            DataType rightType = rightField.dataType();
+
+            if (semiJoinCompatible(leftType, rightType) == false) {
+                failures.add(
+                    fail(
+                        leftField,
+                        "left field [{}] of type [{}] is incompatible with right field [{}] of type [{}]",
+                        leftField.name(),
+                        leftType,
+                        rightField.name(),
+                        rightType
+                    )
+                );
+            }
+            // Same unsupported types as Join, except TEXT and VERSION are allowed in SemiJoin
+            if (isSemiJoinUnsupported(rightType)) {
+                failures.add(
+                    fail(leftField, "IN/NOT IN subquery with right field [{}] of type [{}] is not supported", rightField.name(), rightType)
+                );
+            }
+        }
+    }
+
+    /**
+     * SemiJoin type compatibility: requires exact type match for numeric types (no implicit widening).
+     * KEYWORD and TEXT are compatible with each other and with IP or VERSION individually,
+     * but IP and VERSION are not compatible with each other.
+     */
+    private static boolean semiJoinCompatible(DataType leftType, DataType rightType) {
+        if (leftType == rightType) {
+            return true;
+        }
+        // KEYWORD/TEXT are compatible with each other
+        if (isKeywordOrText(leftType) && isKeywordOrText(rightType)) {
+            return true;
+        }
+        // KEYWORD/TEXT are compatible with IP
+        if ((isKeywordOrText(leftType) && rightType == DataType.IP) || (leftType == DataType.IP && isKeywordOrText(rightType))) {
+            return true;
+        }
+        // KEYWORD/TEXT are compatible with VERSION
+        if ((isKeywordOrText(leftType) && rightType == DataType.VERSION) || (leftType == DataType.VERSION && isKeywordOrText(rightType))) {
+            return true;
+        }
+        // IP and VERSION are NOT compatible with each other
+        return false;
+    }
+
+    private static boolean isKeywordOrText(DataType type) {
+        return type == DataType.KEYWORD || type == DataType.TEXT;
+    }
+
+    /**
+     * Same as {@link Join#UNSUPPORTED_TYPES} but TEXT and VERSION are allowed in SemiJoin
+     * because IN/NOT IN can compare these types via equality.
+     */
+    private static boolean isSemiJoinUnsupported(DataType type) {
+        return Arrays.stream(UNSUPPORTED_TYPES).anyMatch(t -> t.equals(type)) && type != DataType.TEXT && type != DataType.VERSION;
     }
 
     /**

@@ -3472,6 +3472,21 @@ public class FieldNameUtilsTests extends ESTestCase {
         assertFieldNames("FROM employees | WHERE emp_no IN (FROM employees | SORT emp_no | LIMIT 3 | KEEP emp_no)", ALL_FIELDS);
     }
 
+    public void testInSubqueryWithDateComparison() {
+        assumeTrue("IN_SUBQUERY required", EsqlCapabilities.Cap.IN_SUBQUERY.isEnabled());
+        assertFieldNames("""
+            FROM employees
+            | WHERE emp_no IN (
+                FROM employees
+                | WHERE hire_date >= "1989-01-01T00:00:00.000Z" AND hire_date < "1990-01-01T00:00:00.000Z"
+                | KEEP emp_no
+              )
+            | SORT emp_no
+            | KEEP emp_no, first_name
+            | LIMIT 5
+            """, Set.of("_index", "emp_no", "emp_no.*", "first_name", "first_name.*", "hire_date", "hire_date.*"));
+    }
+
     private void assertFieldNames(String query, Set<String> expected) {
         assertFieldNames(query, false, expected, Set.of());
     }

@@ -61,6 +61,7 @@ import org.elasticsearch.xpack.esql.core.expression.FoldContext;
 import org.elasticsearch.xpack.esql.core.expression.function.Function;
 import org.elasticsearch.xpack.esql.core.querydsl.QueryDslTimestampBoundsExtractor;
 import org.elasticsearch.xpack.esql.core.tree.Source;
+import org.elasticsearch.xpack.esql.core.util.Holder;
 import org.elasticsearch.xpack.esql.datasources.ExternalSourceResolution;
 import org.elasticsearch.xpack.esql.datasources.ExternalSourceResolver;
 import org.elasticsearch.xpack.esql.datasources.PartitionFilterHintExtractor;
@@ -86,7 +87,6 @@ import org.elasticsearch.xpack.esql.plan.SettingsValidationContext;
 import org.elasticsearch.xpack.esql.plan.logical.Explain;
 import org.elasticsearch.xpack.esql.plan.logical.InlineStats;
 import org.elasticsearch.xpack.esql.plan.logical.LogicalPlan;
-import org.elasticsearch.xpack.esql.core.util.Holder;
 import org.elasticsearch.xpack.esql.plan.logical.join.InlineJoin;
 import org.elasticsearch.xpack.esql.plan.logical.join.SemiJoin;
 import org.elasticsearch.xpack.esql.plan.logical.join.StubRelation;
@@ -621,12 +621,7 @@ public class EsqlSession {
                     LocalRelation resultWrapper = resultToPlan(semiJoinTuple.subPlan().source(), result);
                     localRelationPage.set(resultWrapper.supplier().get());
                     subPlansResults.add(resultWrapper);
-                    return SemiJoin.newMainPlan(
-                        optimizedPlan,
-                        semiJoinTuple,
-                        resultWrapper,
-                        plannerSettings.inSubqueryHashJoinThreshold()
-                    );
+                    return SemiJoin.newMainPlan(optimizedPlan, semiJoinTuple, resultWrapper, plannerSettings.inSubqueryHashJoinThreshold());
                 }, () -> releaseLocalRelationBlocks(localRelationPage), true);
             }
         }
@@ -665,13 +660,11 @@ public class EsqlSession {
             } else if (p instanceof InlineJoin ij) {
                 if (ij.right().anyMatch(r -> r instanceof StubRelation)) {
                     result.set(ij);
-                } else if (ij.right() instanceof LocalRelation lr
-                    && (subPlansResults.isEmpty() || subPlansResults.contains(lr) == false)) {
-                        result.set(ij);
-                    } else if (ij.right() instanceof LocalRelation == false
-                        && ij.right().anyMatch(r -> r instanceof LocalRelation)) {
-                            result.set(ij);
-                        }
+                } else if (ij.right() instanceof LocalRelation lr && (subPlansResults.isEmpty() || subPlansResults.contains(lr) == false)) {
+                    result.set(ij);
+                } else if (ij.right() instanceof LocalRelation == false && ij.right().anyMatch(r -> r instanceof LocalRelation)) {
+                    result.set(ij);
+                }
             }
         });
         return result.get();

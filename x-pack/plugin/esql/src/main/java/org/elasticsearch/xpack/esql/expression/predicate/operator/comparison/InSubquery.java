@@ -19,8 +19,9 @@ import java.util.Objects;
 
 /**
  * Unresolved expression for {@code field IN (subquery)} where the subquery is a full ES|QL query.
- * This node will be resolved during analysis into a concrete execution plan. InSubquery serves
- * as the clean boundary between parsing and analysis.
+ * This node will be resolved during analysis into a concrete logical plan. InSubquery serves
+ * as the clean boundary between parsing and analysis, LogicalPlanBuilder creates an expression,
+ * Analyzer transform it into a logical plan.
  */
 public class InSubquery extends Expression {
 

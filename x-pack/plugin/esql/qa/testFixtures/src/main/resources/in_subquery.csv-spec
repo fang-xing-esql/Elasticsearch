@@ -537,3 +537,927 @@ emp_no:integer | languages:integer | salary:integer
 10023          | null              | 47896
 10024          | null              | 64675
 ;
+
+lookupJoinInsideInSubquery
+required_capability: in_subquery
+required_capability: join_lookup_v12
+
+FROM employees
+| WHERE emp_no IN (
+    FROM employees
+    | EVAL language_code = languages
+    | LOOKUP JOIN languages_lookup ON language_code
+    | WHERE language_name == "German"
+    | KEEP emp_no
+  )
+| SORT emp_no
+| KEEP emp_no, first_name
+| LIMIT 5
+;
+
+emp_no:integer | first_name:keyword
+10003          | Parto
+10007          | Tzvetan
+10010          | Duangkaew
+10031          | null
+10036          | null
+;
+
+lookupJoinBeforeInSubquery
+required_capability: in_subquery
+required_capability: join_lookup_v12
+
+FROM employees
+| EVAL language_code = languages
+| LOOKUP JOIN languages_lookup ON language_code
+| WHERE language_name IN (FROM languages | WHERE language_code < 3 | KEEP language_name)
+| SORT emp_no
+| KEEP emp_no, first_name, language_name
+| LIMIT 5
+;
+
+emp_no:integer | first_name:keyword | language_name:keyword
+10001          | Georgi             | French
+10005          | Kyoichi            | English
+10008          | Saniya             | French
+10009          | Sumant             | English
+10013          | Eberhardt          | English
+;
+
+lookupJoinAfterNotInSubquery
+required_capability: in_subquery
+required_capability: join_lookup_v12
+
+FROM employees
+| WHERE emp_no NOT IN (FROM employees | WHERE salary > 70000 | KEEP emp_no)
+| EVAL language_code = languages
+| LOOKUP JOIN languages_lookup ON language_code
+| WHERE language_name IS NOT NULL
+| SORT emp_no
+| KEEP emp_no, first_name, language_name
+| LIMIT 5
+;
+
+emp_no:integer | first_name:keyword | language_name:keyword
+10001          | Georgi             | French
+10003          | Parto              | German
+10005          | Kyoichi            | English
+10006          | Anneke             | Spanish
+10008          | Saniya             | French
+;
+
+enrichBeforeInSubquery
+required_capability: in_subquery
+
+FROM employees
+| ENRICH languages_policy ON languages WITH language_name
+| WHERE language_name IN (FROM languages | KEEP language_name)
+| SORT emp_no
+| KEEP emp_no, language_name
+| LIMIT 5
+;
+
+emp_no:integer | language_name:keyword
+10001          | French
+10003          | German
+10005          | English
+10006          | Spanish
+10007          | German
+;
+
+enrichInsideInSubquery
+required_capability: in_subquery
+
+FROM employees
+| WHERE languages IN (
+    FROM employees
+    | ENRICH languages_policy ON languages WITH language_name
+    | WHERE language_name == "German"
+    | KEEP languages
+  )
+| SORT emp_no
+| KEEP emp_no, first_name, languages
+| LIMIT 5
+;
+
+emp_no:integer | first_name:keyword | languages:integer
+10003          | Parto              | 4
+10007          | Tzvetan            | 4
+10010          | Duangkaew          | 4
+10031          | null               | 4
+10036          | null               | 4
+;
+
+enrichInsideNotInSubquery
+required_capability: in_subquery
+
+FROM employees
+| WHERE languages NOT IN (
+    FROM employees
+    | ENRICH languages_policy ON languages WITH language_name
+    | WHERE language_name IN ("French", "German")
+    | KEEP languages
+  )
+| SORT emp_no
+| KEEP emp_no, first_name, languages
+| LIMIT 5
+;
+
+emp_no:integer | first_name:keyword | languages:integer
+10002          | Bezalel            | 5
+10004          | Chirstian          | 5
+10005          | Kyoichi            | 1
+10006          | Anneke             | 3
+10009          | Sumant             | 1
+;
+
+enrichAfterNotInSubquery
+required_capability: in_subquery
+
+FROM employees
+| WHERE emp_no NOT IN (FROM employees | WHERE salary > 70000 | KEEP emp_no)
+| ENRICH languages_policy ON languages WITH language_name
+| WHERE language_name IS NOT NULL
+| SORT emp_no
+| KEEP emp_no, first_name, language_name
+| LIMIT 5
+;
+
+emp_no:integer | first_name:keyword | language_name:keyword
+10001          | Georgi             | French
+10003          | Parto              | German
+10005          | Kyoichi            | English
+10006          | Anneke             | Spanish
+10008          | Saniya             | French
+;
+
+grokBeforeInSubquery
+required_capability: in_subquery
+
+FROM employees
+| GROK CONCAT(first_name, " ", last_name) "%{WORD:a} %{WORD:b}"
+| WHERE a IN (FROM employees | WHERE salary > 70000 | KEEP first_name)
+| SORT emp_no
+| KEEP emp_no, a, b
+| LIMIT 5
+;
+
+emp_no:integer | a:keyword | b:keyword
+10007          | Tzvetan   | Zielinski
+10019          | Lillian   | Haddadi
+10027          | Divier    | Reistad
+10029          | Otmar     | Herbst
+10045          | Moss      | Shanbhogue
+;
+
+grokInsideInSubquery
+required_capability: in_subquery
+
+FROM employees
+| WHERE first_name IN (
+    FROM employees
+    | GROK CONCAT(first_name, " ", last_name) "%{WORD:a} %{WORD:b}"
+    | WHERE b LIKE "S*"
+    | KEEP a
+  )
+| SORT emp_no
+| KEEP emp_no, first_name
+| LIMIT 5
+;
+
+emp_no:integer | first_name:keyword
+10002          | Bezalel
+10011          | Mary
+10042          | Magy
+10045          | Moss
+10048          | Florian
+;
+
+grokAfterNotInSubquery
+required_capability: in_subquery
+
+FROM employees
+| WHERE emp_no NOT IN (FROM employees | SORT emp_no | LIMIT 5 | KEEP emp_no)
+| GROK CONCAT(first_name, " ", last_name) "%{WORD:a} %{WORD:b}"
+| WHERE a IS NOT NULL
+| SORT emp_no
+| KEEP emp_no, a, b
+| LIMIT 5
+;
+
+emp_no:integer | a:keyword | b:keyword
+10006          | Anneke    | Preusig
+10007          | Tzvetan   | Zielinski
+10008          | Saniya    | Kalloufi
+10009          | Sumant    | Peac
+10010          | Duangkaew | Piveteau
+;
+
+dissectBeforeInSubquery
+required_capability: in_subquery
+
+FROM employees
+| EVAL name = CONCAT(first_name, " ", last_name)
+| DISSECT name "%{a} %{b}"
+| WHERE a IN (FROM employees | WHERE salary > 70000 | KEEP first_name)
+| SORT emp_no
+| KEEP emp_no, a, b
+| LIMIT 5
+;
+
+emp_no:integer | a:keyword | b:keyword
+10007          | Tzvetan   | Zielinski
+10019          | Lillian   | Haddadi
+10027          | Divier    | Reistad
+10029          | Otmar     | Herbst
+10045          | Moss      | Shanbhogue
+;
+
+dissectInsideInSubquery
+required_capability: in_subquery
+
+FROM employees
+| WHERE first_name IN (
+    FROM employees
+    | EVAL name = CONCAT(first_name, " ", last_name)
+    | DISSECT name "%{a} %{b}"
+    | WHERE b LIKE "S*"
+    | KEEP a
+  )
+| SORT emp_no
+| KEEP emp_no, first_name
+| LIMIT 5
+;
+
+emp_no:integer | first_name:keyword
+10002          | Bezalel
+10011          | Mary
+10042          | Magy
+10045          | Moss
+10048          | Florian
+;
+
+dissectAfterNotInSubquery
+required_capability: in_subquery
+
+FROM employees
+| WHERE emp_no NOT IN (FROM employees | SORT emp_no | LIMIT 5 | KEEP emp_no)
+| EVAL name = CONCAT(first_name, " ", last_name)
+| DISSECT name "%{a} %{b}"
+| WHERE a IS NOT NULL
+| SORT emp_no
+| KEEP emp_no, a, b
+| LIMIT 5
+;
+
+emp_no:integer | a:keyword | b:keyword
+10006          | Anneke    | Preusig
+10007          | Tzvetan   | Zielinski
+10008          | Saniya    | Kalloufi
+10009          | Sumant    | Peac
+10010          | Duangkaew | Piveteau
+;
+
+renameBeforeInSubquery
+required_capability: in_subquery
+
+FROM employees
+| RENAME emp_no AS id
+| WHERE id IN (FROM employees | WHERE salary > 70000 | KEEP emp_no)
+| SORT id
+| KEEP id, first_name
+| LIMIT 5
+;
+
+id:integer | first_name:keyword
+10007      | Tzvetan
+10019      | Lillian
+10027      | Divier
+10029      | Otmar
+10033      | null
+;
+
+renameInsideInSubquery
+required_capability: in_subquery
+
+FROM employees
+| WHERE emp_no IN (
+    FROM employees
+    | RENAME emp_no AS id
+    | WHERE id > 10095
+    | KEEP id
+  )
+| SORT emp_no
+| KEEP emp_no, first_name
+;
+
+emp_no:integer | first_name:keyword
+10096          | Jayson
+10097          | Remzi
+10098          | Sreekrishna
+10099          | Valter
+10100          | Hironobu
+;
+
+renameAfterNotInSubquery
+required_capability: in_subquery
+
+FROM employees
+| WHERE emp_no NOT IN (FROM employees | SORT emp_no | LIMIT 5 | KEEP emp_no)
+| RENAME first_name AS a, last_name AS b
+| SORT emp_no
+| KEEP emp_no, a, b
+| LIMIT 5
+;
+
+emp_no:integer | a:keyword     | b:keyword
+10006          | Anneke        | Preusig
+10007          | Tzvetan       | Zielinski
+10008          | Saniya        | Kalloufi
+10009          | Sumant        | Peac
+10010          | Duangkaew     | Piveteau
+;
+
+mvExpandBeforeInSubquery
+required_capability: in_subquery
+
+FROM employees
+| MV_EXPAND job_positions
+| WHERE job_positions IN (FROM employees | EVAL jp = "Accountant" | KEEP jp)
+| SORT emp_no
+| KEEP emp_no, first_name, job_positions
+| LIMIT 5
+;
+
+emp_no:integer | first_name:keyword | job_positions:keyword
+10001          | Georgi             | Accountant
+10012          | Patricio           | Accountant
+10016          | Kazuhito           | Accountant
+10023          | Bojan              | Accountant
+10025          | Prasadram          | Accountant
+;
+
+mvExpandInsideInSubquery
+required_capability: in_subquery
+
+FROM employees
+| WHERE emp_no IN (
+    FROM employees
+    | MV_EXPAND job_positions
+    | WHERE job_positions == "Accountant"
+    | KEEP emp_no
+  )
+| SORT emp_no
+| KEEP emp_no, first_name
+| LIMIT 5
+;
+
+emp_no:integer | first_name:keyword
+10001          | Georgi
+10012          | Patricio
+10016          | Kazuhito
+10023          | Bojan
+10025          | Prasadram
+;
+
+mvExpandAfterNotInSubquery
+required_capability: in_subquery
+
+FROM employees
+| WHERE emp_no NOT IN (FROM employees | WHERE salary > 70000 | KEEP emp_no)
+| MV_EXPAND job_positions
+| WHERE job_positions IS NOT NULL
+| SORT emp_no, job_positions
+| KEEP emp_no, first_name, job_positions
+| LIMIT 5
+;
+
+emp_no:integer | first_name:keyword | job_positions:keyword
+10001          | Georgi             | Accountant
+10001          | Georgi             | Senior Python Developer
+10002          | Bezalel            | Senior Team Lead
+10004          | Chirstian          | Head Human Resources
+10004          | Chirstian          | Reporting Analyst
+;
+
+sampleBeforeInSubquery
+required_capability: in_subquery
+required_capability: sample_v3
+
+FROM employees
+| SAMPLE .999999999
+| WHERE emp_no IN (FROM employees | WHERE salary > 70000 | KEEP emp_no)
+| SORT emp_no
+| KEEP emp_no, first_name
+| LIMIT 3
+;
+
+emp_no:integer | first_name:keyword
+10007          | Tzvetan
+10019          | Lillian
+10027          | Divier
+;
+
+sampleInsideInSubquery
+required_capability: in_subquery
+required_capability: sample_v3
+
+FROM employees
+| WHERE emp_no IN (
+    FROM employees
+    | SAMPLE .999999999
+    | WHERE salary > 70000
+    | KEEP emp_no
+  )
+| SORT emp_no
+| KEEP emp_no, first_name
+| LIMIT 3
+;
+
+emp_no:integer | first_name:keyword
+10007          | Tzvetan
+10019          | Lillian
+10027          | Divier
+;
+
+sampleAfterNotInSubquery
+required_capability: in_subquery
+required_capability: sample_v3
+
+FROM employees
+| WHERE emp_no NOT IN (FROM employees | SORT emp_no | LIMIT 5 | KEEP emp_no)
+| SAMPLE .999999999
+| SORT emp_no
+| KEEP emp_no, first_name
+| LIMIT 3
+;
+
+emp_no:integer | first_name:keyword
+10006          | Anneke
+10007          | Tzvetan
+10008          | Saniya
+;
+
+changePointBeforeInSubquery
+required_capability: in_subquery
+required_capability: change_point
+
+FROM employees
+| EVAL salary = CASE(emp_no == 10022, 100000, emp_no == 10023, 1000000, salary)
+| CHANGE_POINT salary ON emp_no AS type, pvalue
+| WHERE type IN (FROM employees | EVAL t = "spike" | KEEP t)
+| SORT emp_no
+| KEEP emp_no, salary, type, pvalue
+;
+
+emp_no:integer | salary:integer | type:keyword | pvalue:double
+10023          | 1000000        | spike        | 0.0
+;
+
+changePointInsideInSubquery
+required_capability: in_subquery
+required_capability: change_point
+
+FROM employees
+| WHERE emp_no IN (
+    FROM employees
+    | EVAL salary = CASE(emp_no == 10022, 100000, emp_no == 10023, 1000000, salary)
+    | CHANGE_POINT salary ON emp_no AS type, pvalue
+    | WHERE pvalue IS NOT NULL AND type IS NOT NULL
+    | KEEP emp_no
+  )
+| SORT emp_no
+| KEEP emp_no, first_name, salary
+;
+
+emp_no:integer | first_name:keyword | salary:integer
+10023          | Bojan              | 47896
+;
+
+changePointAfterNotInSubquery
+required_capability: in_subquery
+required_capability: change_point
+
+FROM employees
+| WHERE emp_no NOT IN (FROM employees | WHERE emp_no > 10050 | KEEP emp_no)
+| EVAL salary = CASE(emp_no == 10022, 100000, emp_no == 10023, 1000000, salary)
+| CHANGE_POINT salary ON emp_no AS type, pvalue
+| WHERE pvalue IS NOT NULL AND type IS NOT NULL
+| SORT emp_no
+| KEEP emp_no, salary, type, pvalue
+;
+
+emp_no:integer | salary:integer | type:keyword | pvalue:double
+10023          | 1000000        | spike        | 0.0
+;
+
+rerankBeforeInSubquery
+required_capability: in_subquery
+required_capability: rerank
+required_capability: match_operator_colon
+required_capability: routing_function_update
+
+FROM books METADATA _score
+| WHERE title:"war and peace" AND author:"Tolstoy"
+| SORT _score DESC, book_no ASC
+| LIMIT 5
+| RERANK "war and peace" ON title WITH { "inference_id" : "test_reranker" }
+| WHERE book_no IN (FROM books | EVAL bn = "5327" | KEEP bn)
+| EVAL _score = ROUND(_score, 2)
+| KEEP book_no, title, _score
+;
+
+book_no:keyword | title:text    | _score:double
+5327            | War and Peace | 0.08
+;
+
+rerankInsideInSubquery
+required_capability: in_subquery
+required_capability: rerank
+required_capability: match_operator_colon
+required_capability: routing_function_update
+
+FROM books
+| WHERE book_no IN (
+    FROM books METADATA _score
+    | WHERE title:"war and peace" AND author:"Tolstoy"
+    | SORT _score DESC, book_no ASC
+    | LIMIT 5
+    | RERANK "war and peace" ON title WITH { "inference_id" : "test_reranker" }
+    | EVAL _score = ROUND(_score, 2)
+    | WHERE _score > 0.05
+    | KEEP book_no
+  )
+| KEEP book_no, title
+;
+
+book_no:keyword | title:text
+5327            | War and Peace
+;
+
+rerankAfterNotInSubquery
+required_capability: in_subquery
+required_capability: rerank
+required_capability: match_operator_colon
+required_capability: routing_function_update
+
+FROM books METADATA _score
+| WHERE title:"war and peace" AND author:"Tolstoy"
+| WHERE book_no NOT IN (FROM books | WHERE book_no != "5327" | KEEP book_no)
+| SORT _score DESC, book_no ASC
+| LIMIT 5
+| RERANK "war and peace" ON title WITH { "inference_id" : "test_reranker" }
+| EVAL _score = ROUND(_score, 2)
+| KEEP book_no, title, _score
+;
+
+book_no:keyword | title:text    | _score:double
+5327            | War and Peace | 0.08
+;
+
+matchBeforeInSubquery
+required_capability: in_subquery
+required_capability: match_function
+
+FROM books
+| WHERE MATCH(author, "Faulkner")
+| WHERE book_no IN (FROM books | WHERE book_no >= "4000" | KEEP book_no)
+| SORT book_no
+| KEEP book_no, author
+| LIMIT 3
+;
+
+book_no:keyword | author:text
+4502            | Colleen Faulkner
+4724            | William Faulkner
+4977            | William Faulkner
+;
+
+matchInsideInSubquery
+required_capability: in_subquery
+required_capability: match_function
+
+FROM books
+| WHERE book_no IN (
+    FROM books
+    | WHERE MATCH(author, "Tolkien")
+    | SORT book_no
+    | LIMIT 3
+    | KEEP book_no
+  )
+| SORT book_no
+| KEEP book_no, title
+;
+
+book_no:keyword | title:text
+1463            | Realms of Tolkien: Images of Middle-earth
+2130            | The J. R. R. Tolkien Audio Collection
+2301            | Smith of Wootton Major & Farmer Giles of Ham
+;
+
+matchAfterNotInSubquery
+required_capability: in_subquery
+required_capability: match_function
+
+FROM books
+| WHERE book_no NOT IN (FROM books | WHERE book_no < "4000" | KEEP book_no)
+| WHERE MATCH(author, "Faulkner")
+| SORT book_no
+| KEEP book_no, author
+| LIMIT 3
+;
+
+book_no:keyword | author:text
+4502            | Colleen Faulkner
+4724            | William Faulkner
+4977            | William Faulkner
+;
+
+forkAfterInSubquery
+required_capability: in_subquery
+required_capability: fork_v9
+
+FROM employees
+| WHERE emp_no IN (FROM employees | WHERE salary > 70000 | KEEP emp_no)
+| FORK (WHERE salary > 74000 | KEEP emp_no, salary)
+       (WHERE salary < 72000 | KEEP emp_no, salary)
+| SORT emp_no, _fork
+| KEEP emp_no, salary, _fork
+;
+
+emp_no:integer | salary:integer | _fork:keyword
+10007          | 74572          | fork1
+10029          | 74999          | fork1
+10033          | 70011          | fork2
+10045          | 74970          | fork1
+10097          | 71165          | fork2
+;
+
+forkWithInSubqueryInsideBranch
+required_capability: in_subquery
+required_capability: fork_v9
+
+FROM employees
+| FORK (WHERE emp_no IN (FROM employees | WHERE salary > 74000 | KEEP emp_no) | KEEP emp_no, salary)
+       (WHERE emp_no IN (FROM employees | WHERE salary < 30000 | KEEP emp_no) | KEEP emp_no, salary)
+| SORT emp_no, _fork
+| KEEP emp_no, salary, _fork
+| LIMIT 5
+;
+
+emp_no:integer | salary:integer | _fork:keyword
+10007          | 74572          | fork1
+10015          | 25324          | fork2
+10026          | 28336          | fork2
+10029          | 74999          | fork1
+10035          | 25945          | fork2
+;
+
+forkAfterNotInSubquery
+required_capability: in_subquery
+required_capability: fork_v9
+
+FROM employees
+| WHERE emp_no NOT IN (FROM employees | SORT emp_no | LIMIT 5 | KEEP emp_no)
+| FORK (WHERE salary > 70000 | KEEP emp_no, salary)
+       (WHERE salary < 30000 | KEEP emp_no, salary)
+| SORT emp_no, _fork
+| KEEP emp_no, salary, _fork
+| LIMIT 5
+;
+
+emp_no:integer | salary:integer | _fork:keyword
+10007          | 74572          | fork1
+10015          | 25324          | fork2
+10019          | 73717          | fork1
+10026          | 28336          | fork2
+10027          | 73851          | fork1
+;
+
+statsDateTruncBeforeInSubquery
+required_capability: in_subquery
+
+FROM employees
+| STATS cnt = COUNT(*) BY yr = DATE_TRUNC(1 year, hire_date)
+| WHERE cnt IN (FROM employees | STATS c = COUNT(*) BY y = DATE_TRUNC(1 year, hire_date) | WHERE c > 12 | KEEP c)
+| SORT yr
+| KEEP cnt, yr
+;
+
+cnt:long | yr:datetime
+15       | 1987-01-01T00:00:00.000Z
+13       | 1989-01-01T00:00:00.000Z
+;
+
+statsDateTruncInsideInSubquery
+required_capability: in_subquery
+
+FROM employees
+| WHERE emp_no IN (FROM employees | WHERE salary > 70000 | KEEP emp_no)
+| STATS cnt = COUNT(*) BY yr = DATE_TRUNC(1 year, hire_date)
+| SORT yr
+| KEEP cnt, yr
+;
+
+cnt:long | yr:datetime
+1        | 1985-01-01T00:00:00.000Z
+1        | 1987-01-01T00:00:00.000Z
+1        | 1988-01-01T00:00:00.000Z
+3        | 1989-01-01T00:00:00.000Z
+1        | 1990-01-01T00:00:00.000Z
+1        | 1999-01-01T00:00:00.000Z
+;
+
+statsDateTruncAfterNotInSubquery
+required_capability: in_subquery
+
+FROM employees
+| WHERE emp_no NOT IN (FROM employees | SORT emp_no | LIMIT 50 | KEEP emp_no)
+| STATS cnt = COUNT(*) BY yr = DATE_TRUNC(1 year, hire_date)
+| SORT yr
+| KEEP cnt, yr
+;
+
+cnt:long | yr:datetime
+6        | 1985-01-01T00:00:00.000Z
+8        | 1986-01-01T00:00:00.000Z
+10       | 1987-01-01T00:00:00.000Z
+5        | 1988-01-01T00:00:00.000Z
+3        | 1989-01-01T00:00:00.000Z
+7        | 1990-01-01T00:00:00.000Z
+3        | 1991-01-01T00:00:00.000Z
+4        | 1992-01-01T00:00:00.000Z
+1        | 1994-01-01T00:00:00.000Z
+2        | 1995-01-01T00:00:00.000Z
+1        | 1996-01-01T00:00:00.000Z
+;
+
+longSemiJoinLong
+required_capability: in_subquery
+
+FROM employees
+| WHERE avg_worked_seconds IN (FROM employees | SORT avg_worked_seconds DESC | LIMIT 3 | KEEP avg_worked_seconds)
+| SORT emp_no
+| KEEP emp_no, avg_worked_seconds
+;
+
+emp_no:integer | avg_worked_seconds:long
+10007          | 393084805
+10015          | 390266432
+10030          | 394597613
+;
+
+doubleSemiJoinDouble
+required_capability: in_subquery
+
+FROM employees
+| WHERE height IN (FROM employees | SORT height ASC | LIMIT 1 | KEEP height)
+| SORT emp_no
+| KEEP emp_no, height
+;
+
+emp_no:integer | height:double
+10020          | 1.41
+;
+
+ipSemiJoinIp
+required_capability: in_subquery
+
+FROM sample_data
+| WHERE client_ip IN (FROM sample_data | WHERE message == "Disconnected" | KEEP client_ip)
+| SORT @timestamp
+| KEEP @timestamp, client_ip, message
+;
+
+@timestamp:datetime             | client_ip:ip  | message:keyword
+2023-10-23T13:33:34.937Z        | 172.21.0.5    | Disconnected
+;
+
+keywordSemiJoinKeyword
+required_capability: in_subquery
+
+FROM employees
+| WHERE first_name IN (FROM employees | WHERE salary > 70000 | KEEP first_name)
+| WHERE first_name IS NOT NULL
+| SORT emp_no
+| KEEP emp_no, first_name
+| LIMIT 5
+;
+
+emp_no:integer | first_name:keyword
+10007          | Tzvetan
+10019          | Lillian
+10027          | Divier
+10029          | Otmar
+10045          | Moss
+;
+
+versionSemiJoinVersion
+required_capability: in_subquery
+
+FROM apps
+| WHERE version IN (FROM apps | WHERE name == "fffff" | KEEP version)
+| SORT id
+| KEEP id, name, version
+;
+
+id:integer | name:keyword | version:version
+6          | fffff        | 5.2.9
+10         | jjjjj        | 5.2.9
+14         | mmmmm        | 5.2.9
+;
+
+ipSemiJoinKeyword
+required_capability: in_subquery
+
+FROM sample_data
+| WHERE client_ip IN (FROM sample_data | EVAL k = client_ip::keyword | WHERE k LIKE "172.21.0*" | KEEP k)
+| SORT @timestamp
+| KEEP @timestamp, client_ip, message
+;
+
+@timestamp:datetime             | client_ip:ip  | message:keyword
+2023-10-23T13:33:34.937Z        | 172.21.0.5    | Disconnected
+;
+
+versionSemiJoinKeyword
+required_capability: in_subquery
+
+FROM apps
+| WHERE version IN (FROM apps | EVAL k = "5.2.9" | KEEP k)
+| SORT id
+| KEEP id, name, version
+;
+
+id:integer | name:keyword | version:version
+6          | fffff        | 5.2.9
+10         | jjjjj        | 5.2.9
+14         | mmmmm        | 5.2.9
+;
+
+keywordSemiJoinText
+required_capability: in_subquery
+
+FROM employees
+| EVAL g = gender::keyword
+| WHERE g IN (FROM employees | WHERE gender IS NOT NULL | KEEP gender)
+| SORT emp_no
+| KEEP emp_no, g
+| LIMIT 3
+;
+
+emp_no:integer | g:keyword
+10001          | M
+10002          | F
+10003          | M
+;
+
+textSemiJoinKeyword
+required_capability: in_subquery
+
+FROM employees
+| WHERE gender IN (FROM employees | EVAL g = "F" | KEEP g)
+| SORT emp_no
+| KEEP emp_no, first_name, gender
+| LIMIT 3
+;
+
+emp_no:integer | first_name:keyword | gender:text
+10002          | Bezalel            | F
+10006          | Anneke             | F
+10007          | Tzvetan            | F
+;
+
+textAntiJoinKeyword
+required_capability: in_subquery
+
+FROM employees
+| WHERE gender NOT IN (FROM employees | EVAL g = "M" | KEEP g)
+| SORT emp_no
+| KEEP emp_no, first_name, gender
+| LIMIT 3
+;
+
+emp_no:integer | first_name:keyword | gender:text
+10002          | Bezalel            | F
+10006          | Anneke             | F
+10007          | Tzvetan            | F
+;
+
+keywordAntiJoinText
+required_capability: in_subquery
+
+FROM employees
+| EVAL g = gender::keyword
+| WHERE g NOT IN (FROM employees | WHERE gender == "M" | KEEP gender)
+| WHERE g IS NOT NULL
+| SORT emp_no
+| KEEP emp_no, first_name, g
+| LIMIT 3
+;
+
+emp_no:integer | first_name:keyword | g:keyword
+10002          | Bezalel            | F
+10006          | Anneke             | F
+10007          | Tzvetan            | F
+;

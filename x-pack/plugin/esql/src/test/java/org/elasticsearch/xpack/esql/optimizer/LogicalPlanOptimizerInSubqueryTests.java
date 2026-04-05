@@ -93,6 +93,49 @@ public class LogicalPlanOptimizerInSubqueryTests extends AbstractLogicalPlanOpti
         assertNotNull(plan);
     }
 
+    // -- SORT inside IN subquery tests --
+
+    /**
+     * Verifies that SORT without LIMIT inside an IN subquery is rejected.
+     */
+    public void testRejectsSortWithoutLimitInInSubquery() {
+        var e = expectThrows(VerificationException.class, () -> planInSubquery("""
+            FROM test
+            | WHERE emp_no IN (FROM test | SORT emp_no | KEEP emp_no)
+            """));
+        assertThat(
+            e.getMessage(),
+            containsString("IN/NOT IN subquery [emp_no IN (FROM test | SORT emp_no | KEEP emp_no)] cannot yet have an unbounded SORT")
+        );
+    }
+
+    /**
+     * Verifies that SORT without LIMIT inside a NOT IN subquery is rejected.
+     */
+    public void testRejectsSortWithoutLimitInNotInSubquery() {
+        var e = expectThrows(VerificationException.class, () -> planInSubquery("""
+            FROM test
+            | WHERE emp_no NOT IN (FROM test | SORT emp_no DESC | KEEP emp_no)
+            """));
+        assertThat(
+            e.getMessage(),
+            containsString(
+                "IN/NOT IN subquery [emp_no NOT IN (FROM test | SORT emp_no DESC | KEEP emp_no)] cannot yet have an unbounded SORT"
+            )
+        );
+    }
+
+    /**
+     * Verifies that SORT with LIMIT inside an IN subquery is allowed.
+     */
+    public void testSortWithLimitInSubqueryIsAllowed() {
+        var plan = planInSubquery("""
+            FROM test
+            | WHERE emp_no IN (FROM test | SORT emp_no | LIMIT 5 | KEEP emp_no)
+            """);
+        assertNotNull(plan);
+    }
+
     private LogicalPlan planInSubquery(String query) {
         TestAnalyzer inSubqueryAnalyzer = analyzer().addEmployees("test");
         return optimize(inSubqueryAnalyzer.query(query));

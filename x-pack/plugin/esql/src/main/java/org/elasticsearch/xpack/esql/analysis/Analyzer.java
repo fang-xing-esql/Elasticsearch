@@ -3636,6 +3636,21 @@ public class Analyzer extends ParameterizedRuleExecutor<LogicalPlan, AnalyzerCon
         @Override
         protected LogicalPlan rule(SemiJoin join) {
             if (join.config().rightFields().isEmpty() == false) {
+                // Re-resolve rightFields if they became stale (e.g. after ImplicitCasting recreated the right subtree)
+                List<Attribute> rightFields = join.config().rightFields();
+                if (rightFields.stream().anyMatch(a -> a.resolved() == false)) {
+                    List<Attribute> rightOutput = join.right().output();
+                    if (rightOutput.size() == 1) {
+                        Attribute rightField = rightOutput.get(0);
+                        JoinConfig resolvedConfig = new JoinConfig(
+                            join.config().type(),
+                            join.config().leftFields(),
+                            singletonList(rightField),
+                            join.config().joinOnConditions()
+                        );
+                        return makeSemiOrAntiJoin(join, resolvedConfig);
+                    }
+                }
                 return join;
             }
             List<Attribute> rightOutput = join.right().output();

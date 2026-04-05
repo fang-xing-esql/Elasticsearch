@@ -68,6 +68,8 @@ public class PreAnalyzer {
 
         List<Enrich> unresolvedEnriches = new ArrayList<>();
         plan.forEachUp(Enrich.class, unresolvedEnriches::add);
+        // Collect Enrich nodes from IN subquery plans
+        plan.forEachDown(p -> p.forEachExpression(InSubquery.class, in -> in.subquery().forEachUp(Enrich.class, unresolvedEnriches::add)));
 
         // Collect external source paths from UnresolvedExternalRelation nodes
         List<String> icebergPaths = new ArrayList<>();

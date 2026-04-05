@@ -752,6 +752,53 @@ public class AnalyzerInSubqueryTests extends ESTestCase {
         as(branch2Filter.child(), EsRelation.class);
     }
 
+    // -- date comparison inside IN subquery --
+
+    public void testInSubqueryWithImplicitDateCast() {
+        var plan = analyzeInSubquery("""
+            FROM test
+            | WHERE emp_no IN (
+                FROM employees
+                | WHERE hire_date >= "1989-01-01T00:00:00.000Z"
+                | KEEP emp_no
+              )
+            | KEEP emp_no
+            """);
+        assertNotNull(plan);
+    }
+
+    // -- negative: IN subquery in STATS WHERE filter --
+
+    /**
+     * Verifies that an IN subquery in STATS WHERE filter is rejected.
+     */
+    public void testRejectsInSubqueryInStatsWhereFilter() {
+        errorInSubquery("""
+            FROM test
+            | STATS cnt = COUNT(*) WHERE emp_no IN (FROM employees | KEEP emp_no)
+            """, containsString("IN/NOT IN subquery is not supported in STATS WHERE filter"));
+    }
+
+    /**
+     * Verifies that a NOT IN subquery in STATS WHERE filter is rejected.
+     */
+    public void testRejectsNotInSubqueryInStatsWhereFilter() {
+        errorInSubquery("""
+            FROM test
+            | STATS cnt = COUNT(*) WHERE emp_no NOT IN (FROM employees | KEEP emp_no)
+            """, containsString("IN/NOT IN subquery is not supported in STATS WHERE filter"));
+    }
+
+    /**
+     * Verifies that IN subquery in STATS WHERE with BY grouping is rejected.
+     */
+    public void testRejectsInSubqueryInStatsWhereFilterWithGrouping() {
+        errorInSubquery("""
+            FROM test
+            | STATS cnt = COUNT(*) WHERE emp_no IN (FROM employees | KEEP emp_no) BY languages
+            """, containsString("IN/NOT IN subquery is not supported in STATS WHERE filter"));
+    }
+
     // -- negative analyzer/verifier tests --
 
     /**
@@ -822,6 +869,140 @@ public class AnalyzerInSubqueryTests extends ESTestCase {
             FROM test
             | WHERE emp_no IN (FROM employees | STATS max(emp_no) BY languages)
             """, containsString("IN subquery must return exactly one column, found [max(emp_no), languages]"));
+    }
+
+    // -- non-comparable types in IN subquery --
+
+    /**
+     * Verifies that counter types (COUNTER_LONG) are rejected as IN subquery join keys.
+     */
+    public void testRejectsCounterLongInSubquery() {
+        errorWithK8s("""
+            FROM k8s
+            | WHERE network.total_bytes_in IN (FROM k8s | KEEP network.total_bytes_in)
+            """, containsString("IN/NOT IN subquery with right field [network.total_bytes_in] of type [COUNTER_LONG] is not supported"));
+    }
+
+    /**
+     * Verifies that counter types (COUNTER_DOUBLE) are rejected as IN subquery join keys.
+     */
+    public void testRejectsCounterDoubleInSubquery() {
+        errorWithK8s("""
+            FROM k8s
+            | WHERE network.total_cost IN (FROM k8s | KEEP network.total_cost)
+            """, containsString("IN/NOT IN subquery with right field [network.total_cost] of type [COUNTER_DOUBLE] is not supported"));
+    }
+
+    /**
+     * Verifies that aggregate_metric_double is rejected as IN subquery join key.
+     */
+    public void testRejectsAggregateMetricDoubleInSubquery() {
+        errorWithK8sDownsampled(
+            """
+                FROM k8s
+                | WHERE network.eth0.tx IN (FROM k8s | KEEP network.eth0.tx)
+                """,
+            containsString("IN/NOT IN subquery with right field [network.eth0.tx] of type [AGGREGATE_METRIC_DOUBLE] is not supported")
+        );
+    }
+
+    /**
+     * Verifies that numeric type mismatch (INTEGER vs LONG) is rejected — SemiJoin requires exact type match.
+     */
+    public void testRejectsNumericTypeMismatchIntegerVsLong() {
+        errorInSubquery("""
+            FROM test
+            | WHERE emp_no IN (FROM employees | EVAL x = languages::long | KEEP x)
+            """, containsString("left field [emp_no] of type [INTEGER] is incompatible with right field [x] of type [LONG]"));
+    }
+
+    // -- compatible string-like types in IN subquery: KEYWORD, TEXT, IP, VERSION --
+
+    /**
+     * Verifies that KEYWORD left vs TEXT right is compatible in IN subquery.
+     */
+    public void testKeywordVsTextInSubquery() {
+        var plan = analyzeWithAllTypes("""
+            FROM all_types
+            | WHERE keyword IN (FROM all_types | KEEP text)
+            """);
+        assertNotNull(plan);
+    }
+
+    /**
+     * Verifies that TEXT left vs KEYWORD right is compatible in IN subquery.
+     */
+    public void testTextVsKeywordInSubquery() {
+        var plan = analyzeWithAllTypes("""
+            FROM all_types
+            | WHERE text IN (FROM all_types | KEEP keyword)
+            """);
+        assertNotNull(plan);
+    }
+
+    /**
+     * Verifies that IP left vs IP right is compatible in IN subquery.
+     */
+    public void testIpVsIpInSubquery() {
+        var plan = analyzeWithAllTypes("""
+            FROM all_types
+            | WHERE ip IN (FROM all_types | KEEP ip)
+            """);
+        assertNotNull(plan);
+    }
+
+    /**
+     * Verifies that VERSION left vs VERSION right is compatible in IN subquery.
+     */
+    public void testVersionVsVersionInSubquery() {
+        var plan = analyzeWithAllTypes("""
+            FROM all_types
+            | WHERE version IN (FROM all_types | KEEP version)
+            """);
+        assertNotNull(plan);
+    }
+
+    /**
+     * Verifies that KEYWORD left vs IP right is compatible in IN subquery.
+     */
+    public void testKeywordVsIpInSubquery() {
+        var plan = analyzeWithAllTypes("""
+            FROM all_types
+            | WHERE keyword IN (FROM all_types | KEEP ip)
+            """);
+        assertNotNull(plan);
+    }
+
+    /**
+     * Verifies that IP left vs VERSION right is incompatible in IN subquery.
+     */
+    public void testRejectsIpVsVersionInSubquery() {
+        errorWithAllTypes("""
+            FROM all_types
+            | WHERE ip IN (FROM all_types | KEEP version)
+            """, containsString("left field [ip] of type [IP] is incompatible with right field [version] of type [VERSION]"));
+    }
+
+    /**
+     * Verifies that VERSION left vs TEXT right is compatible in IN subquery.
+     */
+    public void testVersionVsTextInSubquery() {
+        var plan = analyzeWithAllTypes("""
+            FROM all_types
+            | WHERE version IN (FROM all_types | KEEP text)
+            """);
+        assertNotNull(plan);
+    }
+
+    /**
+     * Verifies that IP left vs KEYWORD right is compatible in IN subquery.
+     */
+    public void testIpVsKeywordInSubquery() {
+        var plan = analyzeWithAllTypes("""
+            FROM all_types
+            | WHERE ip IN (FROM all_types | KEEP keyword)
+            """);
+        assertNotNull(plan);
     }
 
     // -- inlineData tests --
@@ -1058,6 +1239,22 @@ public class AnalyzerInSubqueryTests extends ESTestCase {
 
     private static void errorInSubquery(String query, Matcher<String> messageMatcher) {
         analyzer().addIndex("test", "mapping-basic.json").addIndex("employees", "mapping-basic.json").error(query, messageMatcher);
+    }
+
+    private static void errorWithK8s(String query, Matcher<String> messageMatcher) {
+        analyzer().addK8s().error(query, messageMatcher);
+    }
+
+    private static void errorWithK8sDownsampled(String query, Matcher<String> messageMatcher) {
+        analyzer().addK8sDownsampled().error(query, messageMatcher);
+    }
+
+    private static LogicalPlan analyzeWithAllTypes(String query) {
+        return analyzer().addIndex("all_types", "mapping-all-types.json").query(query);
+    }
+
+    private static void errorWithAllTypes(String query, Matcher<String> messageMatcher) {
+        analyzer().addIndex("all_types", "mapping-all-types.json").error(query, messageMatcher);
     }
 
     private static LocalRelation emptyLocalRelation(List<Attribute> output) {
