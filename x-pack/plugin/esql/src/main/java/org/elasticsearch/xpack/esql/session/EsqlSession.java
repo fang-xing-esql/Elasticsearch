@@ -86,8 +86,10 @@ import org.elasticsearch.xpack.esql.plan.SettingsValidationContext;
 import org.elasticsearch.xpack.esql.plan.logical.Explain;
 import org.elasticsearch.xpack.esql.plan.logical.InlineStats;
 import org.elasticsearch.xpack.esql.plan.logical.LogicalPlan;
+import org.elasticsearch.xpack.esql.core.util.Holder;
 import org.elasticsearch.xpack.esql.plan.logical.join.InlineJoin;
 import org.elasticsearch.xpack.esql.plan.logical.join.SemiJoin;
+import org.elasticsearch.xpack.esql.plan.logical.join.StubRelation;
 import org.elasticsearch.xpack.esql.plan.logical.local.LocalRelation;
 import org.elasticsearch.xpack.esql.plan.logical.local.LocalSupplier;
 import org.elasticsearch.xpack.esql.plan.physical.EstimatesRowSize;
@@ -606,29 +608,73 @@ public class EsqlSession {
             }
         }
 
-        // evaluate (NOT) IN non-correlated subqueries before the main query
-        SemiJoin.LogicalPlanTuple semiJoinTuple = SemiJoin.firstSubPlan(optimizedPlan, subPlansResults);
-        if (semiJoinTuple != null) {
-            AtomicReference<Page> localRelationPage = new AtomicReference<>();
-            return new SubPlanAndCallback(semiJoinTuple.subPlan(), result -> {
-                LocalRelation resultWrapper = resultToPlan(semiJoinTuple.subPlan().source(), result);
-                localRelationPage.set(resultWrapper.supplier().get());
-                subPlansResults.add(resultWrapper);
-                return SemiJoin.newMainPlan(optimizedPlan, semiJoinTuple, resultWrapper, plannerSettings.inSubqueryHashJoinThreshold());
-            }, () -> releaseLocalRelationBlocks(localRelationPage), true);
+        // Find the first (bottom-up) SemiJoin or InlineJoin that needs subplan execution.
+        // Processing bottom-up ensures inner subplans (e.g. INLINE STATS inside IN subquery)
+        // are resolved before outer ones that depend on them.
+        LogicalPlan firstJoin = findFirstSubPlanJoin(optimizedPlan, subPlansResults);
+
+        if (firstJoin instanceof SemiJoin) {
+            SemiJoin.LogicalPlanTuple semiJoinTuple = SemiJoin.firstSubPlan(optimizedPlan, subPlansResults);
+            if (semiJoinTuple != null) {
+                AtomicReference<Page> localRelationPage = new AtomicReference<>();
+                return new SubPlanAndCallback(semiJoinTuple.subPlan(), result -> {
+                    LocalRelation resultWrapper = resultToPlan(semiJoinTuple.subPlan().source(), result);
+                    localRelationPage.set(resultWrapper.supplier().get());
+                    subPlansResults.add(resultWrapper);
+                    return SemiJoin.newMainPlan(
+                        optimizedPlan,
+                        semiJoinTuple,
+                        resultWrapper,
+                        plannerSettings.inSubqueryHashJoinThreshold()
+                    );
+                }, () -> releaseLocalRelationBlocks(localRelationPage), true);
+            }
         }
 
-        InlineJoin.LogicalPlanTuple subPlans = InlineJoin.firstSubPlan(optimizedPlan, subPlansResults);
-        if (subPlans == null) {
-            return null;
+        if (firstJoin instanceof InlineJoin) {
+            InlineJoin.LogicalPlanTuple subPlans = InlineJoin.firstSubPlan(optimizedPlan, subPlansResults);
+            if (subPlans != null) {
+                AtomicReference<Page> localRelationPage = new AtomicReference<>();
+                return new SubPlanAndCallback(subPlans.stubReplacedSubPlan(), result -> {
+                    LocalRelation resultWrapper = resultToPlan(subPlans.stubReplacedSubPlan().source(), result);
+                    localRelationPage.set(resultWrapper.supplier().get());
+                    subPlansResults.add(resultWrapper);
+                    return InlineJoin.newMainPlan(optimizedPlan, subPlans, resultWrapper);
+                }, () -> releaseLocalRelationBlocks(localRelationPage), false);
+            }
         }
-        AtomicReference<Page> localRelationPage = new AtomicReference<>();
-        return new SubPlanAndCallback(subPlans.stubReplacedSubPlan(), result -> {
-            LocalRelation resultWrapper = resultToPlan(subPlans.stubReplacedSubPlan().source(), result);
-            localRelationPage.set(resultWrapper.supplier().get());
-            subPlansResults.add(resultWrapper);
-            return InlineJoin.newMainPlan(optimizedPlan, subPlans, resultWrapper);
-        }, () -> releaseLocalRelationBlocks(localRelationPage), false);
+
+        return null;
+    }
+
+    /**
+     * Finds the first (bottom-up) SemiJoin or InlineJoin in the plan that has an unresolved subplan.
+     * Returns the join node itself, or null if none found.
+     */
+    private static LogicalPlan findFirstSubPlanJoin(LogicalPlan plan, Set<LocalRelation> subPlansResults) {
+        Holder<LogicalPlan> result = new Holder<>();
+        plan.forEachUp(p -> {
+            if (result.get() != null) {
+                return;
+            }
+            if (p instanceof SemiJoin sj) {
+                if (sj.right() instanceof LocalRelation lr && subPlansResults.contains(lr)) {
+                    return; // already processed
+                }
+                result.set(sj);
+            } else if (p instanceof InlineJoin ij) {
+                if (ij.right().anyMatch(r -> r instanceof StubRelation)) {
+                    result.set(ij);
+                } else if (ij.right() instanceof LocalRelation lr
+                    && (subPlansResults.isEmpty() || subPlansResults.contains(lr) == false)) {
+                        result.set(ij);
+                    } else if (ij.right() instanceof LocalRelation == false
+                        && ij.right().anyMatch(r -> r instanceof LocalRelation)) {
+                            result.set(ij);
+                        }
+            }
+        });
+        return result.get();
     }
 
     private void executeSubPlan(
@@ -660,9 +706,11 @@ public class EsqlSession {
             try {
                 var releasingNext = ActionListener.runAfter(next, subPlan.cleanup);
                 LogicalPlan newMainPlan = subPlan.newMainPlan.apply(result);
+                LOGGER.debug("New main plan after subplan execution:\n{}", newMainPlan);
 
                 // look for the next inlinejoin plan
                 var newSubPlan = firstSubPlan(newMainPlan, approximation, subPlansResults);
+                LOGGER.debug("Next subplan: {}", newSubPlan != null ? newSubPlan.subPlan : "null");
 
                 if (newSubPlan == null) {
                     executionInfo.finishSubPlans();
