@@ -1292,87 +1292,222 @@ cnt:long | yr:datetime
 1        | 1996-01-01T00:00:00.000Z
 ;
 
-longSemiJoinLong
+longInLong
 required_capability: in_subquery
 
 FROM employees
-| WHERE avg_worked_seconds IN (FROM employees | SORT avg_worked_seconds DESC | LIMIT 3 | KEEP avg_worked_seconds)
+| WHERE avg_worked_seconds IN (FROM employees
+                               | STATS avg_worked_seconds = MAX(avg_worked_seconds) BY gender
+                               | KEEP avg_worked_seconds)
 | SORT emp_no
-| KEEP emp_no, avg_worked_seconds
+| KEEP emp_no, gender, avg_worked_seconds
 ;
 
-emp_no:integer | avg_worked_seconds:long
-10007          | 393084805
-10015          | 390266432
-10030          | 394597613
+emp_no:integer | gender:keyword | avg_worked_seconds:long
+10007          | F              | 393084805
+10015          | null           | 390266432
+10030          | M              | 394597613
 ;
 
-doubleSemiJoinDouble
+doubleInDouble
 required_capability: in_subquery
 
 FROM employees
-| WHERE height IN (FROM employees | SORT height ASC | LIMIT 1 | KEEP height)
+| WHERE height IN (FROM employees
+                   | STATS height = min(height) BY gender
+                   | KEEP height)
 | SORT emp_no
-| KEEP emp_no, height
+| KEEP emp_no, gender, height
 ;
 
-emp_no:integer | height:double
-10020          | 1.41
+emp_no:integer | gender:keyword | height:double
+10011          | null           | 1.5
+10020          | M              | 1.41
+10042          | F              | 1.44
+10081          | M              | 1.44
 ;
 
-ipSemiJoinIp
+ipNotInIp
 required_capability: in_subquery
 
 FROM sample_data
-| WHERE client_ip IN (FROM sample_data | WHERE message == "Disconnected" | KEEP client_ip)
+| WHERE client_ip NOT IN (FROM sample_data
+                          | STATS count = count(*) BY client_ip
+                          | SORT count DESC
+                          | LIMIT 2
+                          | KEEP client_ip)
 | SORT @timestamp
 | KEEP @timestamp, client_ip, message
 ;
 
-@timestamp:datetime             | client_ip:ip  | message:keyword
-2023-10-23T13:33:34.937Z        | 172.21.0.5    | Disconnected
+@timestamp:datetime      | client_ip:ip | message:keyword
+2023-10-23T12:15:03.360Z | 172.21.2.162 | Connected to 10.1.0.3
+2023-10-23T12:27:28.948Z | 172.21.2.113 | Connected to 10.1.0.2
 ;
 
-keywordSemiJoinKeyword
+keywordInKeyword
 required_capability: in_subquery
 
 FROM employees
-| WHERE first_name IN (FROM employees | WHERE salary > 70000 | KEEP first_name)
-| WHERE first_name IS NOT NULL
+| MV_EXPAND job_positions
+| WHERE job_positions IN (FROM employees
+                          | MV_EXPAND job_positions
+                          | STATS count = count(*) BY job_positions
+                          | SORT count DESC
+                          | LIMIT 2
+                          | KEEP job_positions)
+| SORT emp_no
+| KEEP emp_no, job_positions
+| LIMIT 5
+;
+
+emp_no:integer | job_positions:keyword
+10001          | Senior Python Developer
+10006          | Principal Support Engineer
+10008          | Senior Python Developer
+10009          | Senior Python Developer
+10015          | Principal Support Engineer
+;
+
+versionInVersion
+required_capability: in_subquery
+
+FROM apps
+| WHERE version IN (FROM apps
+                    | STATS count = COUNT(*) BY version
+                    | SORT count DESC
+                    | LIMIT 2
+                    | KEEP version)
+| SORT id
+| KEEP id, name, version
+;
+
+id:integer | name:keyword | version:version
+6          | fffff        | 5.2.9
+10         | jjjjj        | 5.2.9
+14         | mmmmm        | 5.2.9
+;
+
+
+keywordInText
+required_capability: in_subquery
+
+FROM employees
+| WHERE gender IN (FROM employees_incompatible | KEEP gender)
+| SORT emp_no
+| KEEP emp_no, gender
+| LIMIT 3
+;
+
+emp_no:integer | gender:keyword
+10001          | M
+10002          | F
+10003          | M
+;
+
+textInKeyword
+required_capability: in_subquery
+
+FROM employees_incompatible
+| WHERE gender IN (FROM employees | EVAL gender = "F" | KEEP gender)
+| SORT emp_no
+| KEEP emp_no, first_name, gender
+| LIMIT 3
+;
+
+emp_no:integer | first_name:keyword | gender:text
+10002          | Bezalel            | F
+10006          | Anneke             | F
+10007          | Tzvetan            | F
+;
+
+textNotInKeyword
+required_capability: in_subquery
+
+FROM employees_incompatible
+| WHERE gender NOT IN (FROM employees | EVAL gender = "M" | KEEP gender)
+| SORT emp_no
+| KEEP emp_no, first_name, gender
+| LIMIT 3
+;
+
+emp_no:integer | first_name:keyword | gender:text
+10002          | Bezalel            | F
+10006          | Anneke             | F
+10007          | Tzvetan            | F
+;
+
+keywordNotInText
+required_capability: in_subquery
+
+FROM employees
+| WHERE gender NOT IN (FROM employees | WHERE gender == "M" | KEEP gender)
+| SORT emp_no
+| KEEP emp_no, first_name, gender
+| LIMIT 3
+;
+
+emp_no:integer | first_name:keyword | gender:keyword
+10002          | Bezalel            | F
+10006          | Anneke             | F
+10007          | Tzvetan            | F
+;
+
+integerCastToLongInLong
+required_capability: in_subquery
+
+FROM employees
+| EVAL id = emp_no::long
+| WHERE id IN (FROM employees_incompatible | WHERE salary > 70000 | KEEP emp_no)
 | SORT emp_no
 | KEEP emp_no, first_name
-| LIMIT 5
+| LIMIT 3
 ;
 
 emp_no:integer | first_name:keyword
 10007          | Tzvetan
 10019          | Lillian
 10027          | Divier
-10029          | Otmar
-10045          | Moss
 ;
 
-versionSemiJoinVersion
+integerCastToLongNotLong
 required_capability: in_subquery
 
-FROM apps
-| WHERE version IN (FROM apps | WHERE name == "fffff" | KEEP version)
-| SORT id
-| KEEP id, name, version
+FROM employees
+| EVAL id = emp_no::long
+| WHERE id NOT IN (FROM employees_incompatible | WHERE salary > 70000 | KEEP emp_no)
+| SORT emp_no
+| KEEP emp_no, first_name
+| LIMIT 3
 ;
 
-id:integer | name:keyword | version:version
-6          | fffff        | 5.2.9
-10         | jjjjj        | 5.2.9
-14         | mmmmm        | 5.2.9
+emp_no:integer | first_name:keyword
+10001          | Georgi
+10002          | Bezalel
+10003          | Parto
 ;
 
-ipSemiJoinKeyword
+longInIntegerCastToLong
+required_capability: in_subquery
+
+FROM employees_incompatible
+| WHERE emp_no IN (FROM employees | WHERE salary > 70000 | EVAL emp_no = emp_no::long | KEEP emp_no)
+| SORT emp_no
+| KEEP emp_no, first_name
+| LIMIT 3
+;
+
+emp_no:long | first_name:text
+10007       | Tzvetan
+10019       | Lillian
+10027       | Divier
+;
+
+dateInDate
 required_capability: in_subquery
 
 FROM sample_data
-| WHERE client_ip IN (FROM sample_data | EVAL k = client_ip::keyword | WHERE k LIKE "172.21.0*" | KEEP k)
-| SORT @timestamp
+| WHERE @timestamp IN (FROM sample_data | WHERE message == "Disconnected" | KEEP @timestamp)
 | KEEP @timestamp, client_ip, message
 ;
 
@@ -1380,84 +1515,242 @@ FROM sample_data
 2023-10-23T13:33:34.937Z        | 172.21.0.5    | Disconnected
 ;
 
-versionSemiJoinKeyword
+dateNotInDate
 required_capability: in_subquery
 
-FROM apps
-| WHERE version IN (FROM apps | EVAL k = "5.2.9" | KEEP k)
+FROM sample_data
+| WHERE @timestamp NOT IN (FROM sample_data | WHERE message LIKE "Connection*" | KEEP @timestamp)
+| SORT @timestamp
+| KEEP @timestamp, client_ip, message
+;
+
+@timestamp:datetime             | client_ip:ip   | message:keyword
+2023-10-23T12:15:03.360Z        | 172.21.2.162   | Connected to 10.1.0.3
+2023-10-23T12:27:28.948Z        | 172.21.2.113   | Connected to 10.1.0.2
+2023-10-23T13:33:34.937Z        | 172.21.0.5     | Disconnected
+2023-10-23T13:55:01.543Z        | 172.21.3.15    | Connected to 10.1.0.1
+;
+
+dateNanosInDateNanos
+required_capability: in_subquery
+
+FROM sample_data_ts_nanos
+| WHERE @timestamp IN (FROM sample_data_ts_nanos | WHERE message == "Disconnected" | KEEP @timestamp)
+| KEEP @timestamp, client_ip, message
+;
+
+@timestamp:date_nanos                   | client_ip:ip  | message:keyword
+2023-10-23T13:33:34.937123456Z          | 172.21.0.5    | Disconnected
+;
+
+dateNanosNotInDateNanos
+required_capability: in_subquery
+
+FROM sample_data_ts_nanos
+| WHERE @timestamp NOT IN (FROM sample_data_ts_nanos | WHERE message LIKE "Connection*" | KEEP @timestamp)
+| SORT @timestamp
+| KEEP @timestamp, client_ip, message
+;
+
+@timestamp:date_nanos                   | client_ip:ip   | message:keyword
+2023-10-23T12:15:03.360123456Z          | 172.21.2.162   | Connected to 10.1.0.3
+2023-10-23T12:27:28.948123456Z          | 172.21.2.113   | Connected to 10.1.0.2
+2023-10-23T13:33:34.937123456Z          | 172.21.0.5     | Disconnected
+2023-10-23T13:55:01.543123456Z          | 172.21.3.15    | Connected to 10.1.0.1
+;
+
+unionTypeCastToLongOutsideInSubquery
+required_capability: in_subquery
+
+FROM employees, employees_incompatible
+| EVAL id = emp_no::long
+| WHERE id IN (FROM employees_incompatible | WHERE salary > 70000 | KEEP emp_no)
+| STATS cnt = COUNT(*) BY id
 | SORT id
-| KEEP id, name, version
-;
-
-id:integer | name:keyword | version:version
-6          | fffff        | 5.2.9
-10         | jjjjj        | 5.2.9
-14         | mmmmm        | 5.2.9
-;
-
-keywordSemiJoinText
-required_capability: in_subquery
-
-FROM employees
-| EVAL g = gender::keyword
-| WHERE g IN (FROM employees | WHERE gender IS NOT NULL | KEEP gender)
-| SORT emp_no
-| KEEP emp_no, g
+| KEEP id, cnt
 | LIMIT 3
 ;
 
-emp_no:integer | g:keyword
-10001          | M
-10002          | F
-10003          | M
+id:long | cnt:long
+10007   | 2
+10019   | 2
+10027   | 2
 ;
 
-textSemiJoinKeyword
+unionTypeCastToLongOutsideNotInSubquery
 required_capability: in_subquery
 
-FROM employees
-| WHERE gender IN (FROM employees | EVAL g = "F" | KEEP g)
-| SORT emp_no
-| KEEP emp_no, first_name, gender
+FROM employees, employees_incompatible
+| EVAL id = emp_no::long
+| WHERE id NOT IN (FROM employees_incompatible | WHERE salary > 70000 | KEEP emp_no)
+| STATS cnt = COUNT(*) BY id
+| SORT id
+| KEEP id, cnt
 | LIMIT 3
 ;
 
-emp_no:integer | first_name:keyword | gender:text
-10002          | Bezalel            | F
-10006          | Anneke             | F
-10007          | Tzvetan            | F
+id:long | cnt:long
+10001   | 2
+10002   | 2
+10003   | 2
 ;
 
-textAntiJoinKeyword
+unionTypeCastToKeywordOutsideInSubquery
 required_capability: in_subquery
 
-FROM employees
-| WHERE gender NOT IN (FROM employees | EVAL g = "M" | KEEP g)
+FROM employees, employees_incompatible
+| EVAL fn = first_name::keyword
+| WHERE fn IN (FROM employees | WHERE salary > 70000 | KEEP first_name)
+| WHERE fn IS NOT NULL
+| STATS cnt = COUNT(*) BY fn
+| SORT fn
+| KEEP fn, cnt
+;
+
+fn:keyword  | cnt:long
+Divier      | 2
+Lillian     | 2
+Moss        | 2
+Otmar       | 2
+Remzi       | 2
+Tzvetan     | 2
+Valter      | 2
+;
+
+unionTypeFromSubqueryCastToLongOutsideInSubquery
+required_capability: in_subquery
+
+FROM
+  (FROM employees | KEEP emp_no, first_name, salary),
+  (FROM employees_incompatible | EVAL emp_no = emp_no::integer | KEEP emp_no, first_name, salary)
+| EVAL salary = salary::long
+| WHERE salary IN (FROM employees_incompatible | SORT salary DESC | LIMIT 3 | KEEP salary)
+| STATS cnt = COUNT(*) BY salary
+| SORT salary DESC
+| KEEP salary, cnt
+;
+
+salary:integer | cnt:long
+74999          | 2
+74970          | 2
+74572          | 2
+;
+
+unionTypeFromSubqueryCastToLongOutsideNotInSubquery
+required_capability: in_subquery
+
+FROM
+  (FROM employees | KEEP emp_no, first_name, salary),
+  (FROM employees_incompatible | EVAL emp_no = emp_no::integer | KEEP emp_no, first_name, salary)
+| EVAL id = emp_no::long
+| WHERE id NOT IN (FROM employees_incompatible | WHERE salary > 70000 | KEEP emp_no)
+| STATS cnt = COUNT(*)
+;
+
+cnt:long
+184
+;
+
+unionTypeCastToLongInsideInSubquery
+required_capability: in_subquery
+
+FROM employees_incompatible
+| WHERE emp_no IN (
+    FROM employees, employees_incompatible
+    | EVAL id = emp_no::long
+    | WHERE salary::long > 70000
+    | KEEP id
+  )
 | SORT emp_no
-| KEEP emp_no, first_name, gender
+| KEEP emp_no, first_name
 | LIMIT 3
 ;
 
-emp_no:integer | first_name:keyword | gender:text
-10002          | Bezalel            | F
-10006          | Anneke             | F
-10007          | Tzvetan            | F
+emp_no:long | first_name:keyword
+10007       | Tzvetan
+10019       | Lillian
+10027       | Divier
 ;
 
-keywordAntiJoinText
+unionTypeCastToLongInsideNotInSubquery
 required_capability: in_subquery
 
-FROM employees
-| EVAL g = gender::keyword
-| WHERE g NOT IN (FROM employees | WHERE gender == "M" | KEEP gender)
-| WHERE g IS NOT NULL
+FROM employees_incompatible
+| WHERE emp_no NOT IN (
+    FROM employees, employees_incompatible
+    | EVAL id = emp_no::long
+    | WHERE salary::long > 70000
+    | KEEP id
+  )
 | SORT emp_no
-| KEEP emp_no, first_name, g
+| KEEP emp_no, first_name
 | LIMIT 3
 ;
 
-emp_no:integer | first_name:keyword | g:keyword
-10002          | Bezalel            | F
-10006          | Anneke             | F
-10007          | Tzvetan            | F
+emp_no:long | first_name:keyword
+10001       | Georgi
+10002       | Bezalel
+10003       | Parto
+;
+
+unionTypeCastToKeywordInsideInSubquery
+required_capability: in_subquery
+
+FROM employees
+| WHERE first_name IN (
+    FROM employees, employees_incompatible
+    | EVAL fn = first_name::keyword
+    | WHERE salary::long > 70000 AND fn IS NOT NULL
+    | KEEP fn
+  )
+| SORT emp_no
+| KEEP emp_no, first_name
+| LIMIT 3
+;
+
+emp_no:integer | first_name:keyword
+10007          | Tzvetan
+10019          | Lillian
+10027          | Divier
+;
+
+unionTypeFromSubqueryCastToKeywordInsideInSubquery
+required_capability: in_subquery
+
+FROM employees_incompatible
+| WHERE salary IN (
+    FROM
+      (FROM employees | EVAL salary = salary::long | KEEP salary),
+      (FROM employees_incompatible | KEEP salary)
+    | STATS s = MAX(salary)
+    | KEEP s
+  )
+| SORT emp_no
+| KEEP emp_no, first_name, salary
+;
+
+emp_no:integer | first_name:keyword | salary:long
+10029          | Otmar              | 74999
+;
+
+unionTypeFromSubqueryCastToLongInsideNotInSubquery
+required_capability: in_subquery
+
+FROM employees_incompatible
+| WHERE salary NOT IN (
+    FROM
+      (FROM employees | EVAL salary = salary::long | KEEP salary),
+      (FROM employees_incompatible | KEEP salary)
+    | STATS s = MAX(salary)
+    | KEEP s
+  )
+| SORT emp_no
+| KEEP emp_no, first_name, salary
+| LIMIT 3
+;
+
+emp_no:integer | first_name:keyword | salary:long
+10001          | Georgi             | 57305
+10002          | Bezalel            | 56371
+10003          | Parto              | 61805
 ;

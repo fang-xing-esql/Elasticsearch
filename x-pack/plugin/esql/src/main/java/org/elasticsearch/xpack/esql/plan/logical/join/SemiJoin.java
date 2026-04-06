@@ -141,27 +141,19 @@ public class SemiJoin extends Join implements SortPreserving {
     }
 
     /**
-     * SemiJoin type compatibility: requires exact type match for numeric types (no implicit widening).
-     * KEYWORD and TEXT are compatible with each other and with IP or VERSION individually,
-     * but IP and VERSION are not compatible with each other.
+     * SemiJoin type compatibility: requires exact type match for most types.
+     * KEYWORD and TEXT are compatible with each other.
+     * IP, VERSION, KEYWORD and TEXT each require exact type match against themselves
+     * (IP vs KEYWORD, VERSION vs KEYWORD are NOT compatible).
      */
     private static boolean semiJoinCompatible(DataType leftType, DataType rightType) {
         if (leftType == rightType) {
             return true;
         }
-        // KEYWORD/TEXT are compatible with each other
+        // KEYWORD and TEXT are compatible with each other
         if (isKeywordOrText(leftType) && isKeywordOrText(rightType)) {
             return true;
         }
-        // KEYWORD/TEXT are compatible with IP
-        if ((isKeywordOrText(leftType) && rightType == DataType.IP) || (leftType == DataType.IP && isKeywordOrText(rightType))) {
-            return true;
-        }
-        // KEYWORD/TEXT are compatible with VERSION
-        if ((isKeywordOrText(leftType) && rightType == DataType.VERSION) || (leftType == DataType.VERSION && isKeywordOrText(rightType))) {
-            return true;
-        }
-        // IP and VERSION are NOT compatible with each other
         return false;
     }
 

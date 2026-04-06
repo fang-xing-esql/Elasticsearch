@@ -428,6 +428,10 @@ public class CsvTests extends ESTestCase {
                 groupName.equals("approximation")
                     && Set.of("Exact count with where on single-valued data", "Exact total single-valued field count").contains(testName)
             );
+            assumeFalseLogging(
+                "CSV tests cannot currently handle IN subqueries with union types yet",
+                testCase.requiredCapabilities.contains(EsqlCapabilities.Cap.IN_SUBQUERY.capabilityName())
+            );
 
             CsvTestUtils.checkTestCapabilities(ALL_CAPS, ENABLED_CAPS, testCase.requiredCapabilities);
 

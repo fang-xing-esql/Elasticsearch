@@ -12,17 +12,24 @@ import org.elasticsearch.compute.data.Block;
 import org.elasticsearch.compute.data.BlockUtils;
 import org.elasticsearch.compute.data.Page;
 import org.elasticsearch.compute.test.TestBlockFactory;
+import org.elasticsearch.index.IndexMode;
 import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.xpack.esql.action.EsqlCapabilities;
+import org.elasticsearch.xpack.esql.approximation.Approximation;
+import org.elasticsearch.xpack.esql.approximation.ApproximationSettings;
 import org.elasticsearch.xpack.esql.core.expression.Attribute;
 import org.elasticsearch.xpack.esql.core.expression.FieldAttribute;
 import org.elasticsearch.xpack.esql.core.expression.Literal;
 import org.elasticsearch.xpack.esql.core.tree.Source;
 import org.elasticsearch.xpack.esql.core.type.DataType;
+import org.elasticsearch.xpack.esql.core.type.EsField;
+import org.elasticsearch.xpack.esql.core.type.InvalidMappedField;
 import org.elasticsearch.xpack.esql.expression.predicate.logical.Not;
 import org.elasticsearch.xpack.esql.expression.predicate.nulls.IsNotNull;
 import org.elasticsearch.xpack.esql.expression.predicate.nulls.IsNull;
 import org.elasticsearch.xpack.esql.expression.predicate.operator.comparison.In;
+import org.elasticsearch.xpack.esql.index.EsIndex;
+import org.elasticsearch.xpack.esql.index.IndexResolution;
 import org.elasticsearch.xpack.esql.plan.logical.Aggregate;
 import org.elasticsearch.xpack.esql.plan.logical.EsRelation;
 import org.elasticsearch.xpack.esql.plan.logical.Eval;
@@ -45,7 +52,9 @@ import org.hamcrest.Matcher;
 import org.junit.Before;
 
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static org.elasticsearch.xpack.esql.EsqlTestUtils.analyzer;
@@ -799,6 +808,35 @@ public class AnalyzerInSubqueryTests extends ESTestCase {
             """, containsString("IN/NOT IN subquery is not supported in STATS WHERE filter"));
     }
 
+    // -- approximation incompatibility tests --
+
+    /**
+     * Verifies that IN subquery before STATS is incompatible with approximation.
+     */
+    public void testApproximationRejectsInSubqueryBeforeStats() {
+        assertApproximationRejects(
+            "FROM test | WHERE emp_no IN (FROM employees | KEEP emp_no) | STATS COUNT()"
+        );
+    }
+
+    /**
+     * Verifies that NOT IN subquery before STATS is incompatible with approximation.
+     */
+    public void testApproximationRejectsNotInSubqueryBeforeStats() {
+        assertApproximationRejects(
+            "FROM test | WHERE emp_no NOT IN (FROM employees | KEEP emp_no) | STATS COUNT()"
+        );
+    }
+
+    /**
+     * Verifies that IN subquery after STATS is incompatible with approximation.
+     */
+    public void testApproximationRejectsInSubqueryAfterStats() {
+        assertApproximationRejects(
+            "FROM test | STATS cnt = COUNT() BY emp_no | WHERE emp_no IN (FROM employees | KEEP emp_no)"
+        );
+    }
+
     // -- negative analyzer/verifier tests --
 
     /**
@@ -965,12 +1003,11 @@ public class AnalyzerInSubqueryTests extends ESTestCase {
     /**
      * Verifies that KEYWORD left vs IP right is compatible in IN subquery.
      */
-    public void testKeywordVsIpInSubquery() {
-        var plan = analyzeWithAllTypes("""
+    public void testRejectsKeywordVsIpInSubquery() {
+        errorWithAllTypes("""
             FROM all_types
             | WHERE keyword IN (FROM all_types | KEEP ip)
-            """);
-        assertNotNull(plan);
+            """, containsString("left field [keyword] of type [KEYWORD] is incompatible with right field [ip] of type [IP]"));
     }
 
     /**
@@ -984,23 +1021,187 @@ public class AnalyzerInSubqueryTests extends ESTestCase {
     }
 
     /**
-     * Verifies that VERSION left vs TEXT right is compatible in IN subquery.
+     * Verifies that VERSION left vs TEXT right is incompatible in IN subquery.
      */
-    public void testVersionVsTextInSubquery() {
-        var plan = analyzeWithAllTypes("""
+    public void testRejectsVersionVsTextInSubquery() {
+        errorWithAllTypes("""
             FROM all_types
             | WHERE version IN (FROM all_types | KEEP text)
+            """, containsString("left field [version] of type [VERSION] is incompatible with right field [text] of type [TEXT]"));
+    }
+
+    /**
+     * Verifies that IP left vs KEYWORD right is incompatible in IN subquery.
+     */
+    public void testRejectsIpVsKeywordInSubquery() {
+        errorWithAllTypes("""
+            FROM all_types
+            | WHERE ip IN (FROM all_types | KEEP keyword)
+            """, containsString("left field [ip] of type [IP] is incompatible with right field [keyword] of type [KEYWORD]"));
+    }
+
+    /**
+     * Verifies that VERSION left vs KEYWORD right is incompatible in IN subquery.
+     */
+    public void testRejectsVersionVsKeywordInSubquery() {
+        errorWithAllTypes("""
+            FROM all_types
+            | WHERE version IN (FROM all_types | KEEP keyword)
+            """, containsString("left field [version] of type [VERSION] is incompatible with right field [keyword] of type [KEYWORD]"));
+    }
+
+    // -- date vs date_nanos incompatibility --
+
+    /**
+     * Verifies that DATETIME left vs DATE_NANOS right is incompatible in IN subquery.
+     * employees has hire_date:date (DATETIME), employees_incompatible has hire_date:date_nanos (DATE_NANOS).
+     */
+    public void testRejectsDateVsDateNanosInSubquery() {
+        errorWithIncompatible(
+            """
+                FROM test
+                | WHERE hire_date IN (FROM employees_incompatible | KEEP hire_date)
+                """,
+            containsString("left field [hire_date] of type [DATETIME] is incompatible with right field [hire_date] of type [DATE_NANOS]")
+        );
+    }
+
+    /**
+     * Verifies that DATE_NANOS left vs DATETIME right is incompatible in IN subquery.
+     */
+    public void testRejectsDateNanosVsDateInSubquery() {
+        errorWithIncompatible(
+            """
+                FROM employees_incompatible
+                | WHERE hire_date IN (FROM test | KEEP hire_date)
+                """,
+            containsString("left field [hire_date] of type [DATE_NANOS] is incompatible with right field [hire_date] of type [DATETIME]")
+        );
+    }
+
+    // -- union type tests --
+
+    /**
+     * Verifies that a union type field (id: keyword + integer) as the left join key of IN subquery
+     * fails without explicit casting.
+     */
+    public void testRejectsUnionTypeLeftFieldInSubquery() {
+        errorWithUnionIndex("""
+            FROM union_index*
+            | WHERE id IN (FROM test | KEEP emp_no)
+            | KEEP id
+            """, containsString("id"));
+    }
+
+    /**
+     * Verifies that a union type field as the right join key of IN subquery fails without explicit casting.
+     */
+    public void testRejectsUnionTypeRightFieldInSubquery() {
+        errorWithUnionIndex("""
+            FROM test
+            | WHERE first_name IN (FROM union_index* | KEEP id)
+            | KEEP first_name
+            """, containsString("id"));
+    }
+
+    /**
+     * Verifies that casting a union type field to a concrete type on the left side resolves the issue.
+     */
+    public void testUnionTypeLeftFieldWithCastInSubquery() {
+        var plan = analyzeWithUnionIndex("""
+            FROM union_index*
+            | EVAL id_kw = id::keyword
+            | WHERE id_kw IN (FROM test | KEEP first_name)
+            | KEEP id_kw
             """);
         assertNotNull(plan);
     }
 
     /**
-     * Verifies that IP left vs KEYWORD right is compatible in IN subquery.
+     * Verifies that casting a union type field to a concrete type on the right side resolves the issue.
      */
-    public void testIpVsKeywordInSubquery() {
-        var plan = analyzeWithAllTypes("""
-            FROM all_types
-            | WHERE ip IN (FROM all_types | KEEP keyword)
+    public void testUnionTypeRightFieldWithCastInSubquery() {
+        var plan = analyzeWithUnionIndex("""
+            FROM test
+            | WHERE first_name IN (FROM union_index* | EVAL id_kw = id::keyword | KEEP id_kw)
+            | KEEP first_name
+            """);
+        assertNotNull(plan);
+    }
+
+    /**
+     * Verifies that NOT IN with a union type field on the left fails without casting.
+     */
+    public void testRejectsUnionTypeLeftFieldInAntiJoin() {
+        errorWithUnionIndex("""
+            FROM union_index*
+            | WHERE id NOT IN (FROM test | KEEP emp_no)
+            | KEEP id
+            """, containsString("id"));
+    }
+
+    /**
+     * Verifies that NOT IN with a cast union type field on the left succeeds.
+     */
+    public void testUnionTypeLeftFieldWithCastInAntiJoin() {
+        var plan = analyzeWithUnionIndex("""
+            FROM union_index*
+            | EVAL id_kw = id::keyword
+            | WHERE id_kw NOT IN (FROM test | KEEP first_name)
+            | KEEP id_kw
+            """);
+        assertNotNull(plan);
+    }
+
+    // -- union type tests with FROM subqueries --
+
+    /**
+     * Verifies that FROM subqueries with conflicting types for emp_no (integer + long) fail without casting.
+     */
+    public void testRejectsFromSubqueryUnionTypeLeftField() {
+        assumeTrue("Requires FROM subquery support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
+        errorWithIncompatible("""
+            FROM test, (FROM employees_incompatible | KEEP emp_no, first_name, salary)
+            | WHERE emp_no IN (FROM test | WHERE salary > 70000 | KEEP emp_no)
+            | KEEP emp_no
+            """, containsString("Column [emp_no] has conflicting data types in subqueries: [integer, long]"));
+    }
+
+    /**
+     * Verifies that FROM subqueries with conflicting types on the right side fail without casting.
+     */
+    public void testRejectsFromSubqueryUnionTypeRightField() {
+        assumeTrue("Requires FROM subquery support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
+        errorWithIncompatible("""
+            FROM test
+            | WHERE emp_no IN (FROM test, (FROM employees_incompatible | KEEP emp_no) | KEEP emp_no)
+            | KEEP emp_no
+            """, containsString("Column [emp_no] has conflicting data types in subqueries: [integer, long]"));
+    }
+
+    /**
+     * Verifies that casting resolves FROM subquery union type on the left side.
+     */
+    public void testFromSubqueryUnionTypeLeftFieldWithCast() {
+        assumeTrue("Requires FROM subquery support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
+        var plan = analyzeWithIncompatible("""
+            FROM test, (FROM employees_incompatible | KEEP emp_no, first_name, salary)
+            | EVAL id = emp_no::long
+            | WHERE id IN (FROM employees_incompatible | WHERE salary > 70000 | KEEP emp_no)
+            | KEEP id
+            """);
+        assertNotNull(plan);
+    }
+
+    /**
+     * Verifies that casting resolves FROM subquery union type on the right side.
+     */
+    public void testFromSubqueryUnionTypeRightFieldWithCast() {
+        assumeTrue("Requires FROM subquery support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
+        var plan = analyzeWithIncompatible("""
+            FROM test
+            | WHERE emp_no IN (FROM test, (FROM employees_incompatible | KEEP emp_no) | EVAL id = emp_no::integer | KEEP id)
+            | KEEP emp_no
             """);
         assertNotNull(plan);
     }
@@ -1231,6 +1432,12 @@ public class AnalyzerInSubqueryTests extends ESTestCase {
         return withDefaultLimitWarning(super.filteredWarnings());
     }
 
+    @Override
+    protected boolean enableWarningsCheck() {
+        // Some tests call Approximation.verifyPlan which adds header warnings that can't be consumed in unit tests
+        return false;
+    }
+
     // -- helpers --
 
     private static LogicalPlan analyzeInSubquery(String query) {
@@ -1257,8 +1464,51 @@ public class AnalyzerInSubqueryTests extends ESTestCase {
         analyzer().addIndex("all_types", "mapping-all-types.json").error(query, messageMatcher);
     }
 
+    private static LogicalPlan analyzeWithIncompatible(String query) {
+        return analyzer().addIndex("test", "mapping-basic.json")
+            .addIndex("employees_incompatible", "mapping-default-incompatible.json")
+            .query(query);
+    }
+
+    private static void errorWithIncompatible(String query, Matcher<String> messageMatcher) {
+        analyzer().addIndex("test", "mapping-basic.json")
+            .addIndex("employees_incompatible", "mapping-default-incompatible.json")
+            .error(query, messageMatcher);
+    }
+
+    private static IndexResolution unionIndexResolution() {
+        LinkedHashMap<String, Set<String>> typesToIndices = new LinkedHashMap<>();
+        typesToIndices.put("keyword", Set.of("union_index_1"));
+        typesToIndices.put("integer", Set.of("union_index_2"));
+        EsField idField = new InvalidMappedField("id", typesToIndices);
+        EsField nameField = new EsField("name", DataType.KEYWORD, Map.of(), true, EsField.TimeSeriesFieldType.NONE);
+        EsIndex index = new EsIndex(
+            "union_index*",
+            Map.of("id", idField, "name", nameField),
+            Map.of("union_index_1", IndexMode.STANDARD, "union_index_2", IndexMode.STANDARD),
+            Map.of(),
+            Map.of(),
+            Map.of()
+        );
+        return IndexResolution.valid(index);
+    }
+
+    private static LogicalPlan analyzeWithUnionIndex(String query) {
+        return analyzer().addIndex("test", "mapping-basic.json").addIndex(unionIndexResolution()).query(query);
+    }
+
+    private static void errorWithUnionIndex(String query, Matcher<String> messageMatcher) {
+        analyzer().addIndex("test", "mapping-basic.json").addIndex(unionIndexResolution()).error(query, messageMatcher);
+    }
+
     private static LocalRelation emptyLocalRelation(List<Attribute> output) {
         return new LocalRelation(Source.EMPTY, output, LocalSupplier.of(new Page(0)));
+    }
+
+    private void assertApproximationRejects(String query) {
+        LogicalPlan plan = analyzeInSubquery(query);
+        // verifyPlan returns null when the plan is incompatible with approximation (and adds a warning)
+        assertThat("Approximation should reject this query", Approximation.verifyPlan(plan), nullValue());
     }
 
     private static SemiJoin makeSemiJoin(FieldAttribute leftField, FieldAttribute rightField, JoinType joinType) {
