@@ -100,6 +100,7 @@ import org.elasticsearch.xpack.esql.planner.PlannerUtils;
 import org.elasticsearch.xpack.esql.planner.mapper.Mapper;
 import org.elasticsearch.xpack.esql.planner.premapper.PreMapper;
 import org.elasticsearch.xpack.esql.plugin.ComputeService;
+import org.elasticsearch.xpack.esql.plugin.QueryPragmas;
 import org.elasticsearch.xpack.esql.plugin.TransportActionServices;
 import org.elasticsearch.xpack.esql.telemetry.FeatureMetric;
 import org.elasticsearch.xpack.esql.telemetry.Metrics;
@@ -559,7 +560,7 @@ public class EsqlSession {
         ActionListener<Result> listener
     ) {
         var subPlansResults = new HashSet<LocalRelation>();
-        var subPlan = firstSubPlan(optimizedPlan, approximation, subPlansResults);
+        var subPlan = firstSubPlan(optimizedPlan, approximation, subPlansResults, configuration);
 
         // TODO: merge into one method
         if (subPlan != null) {
@@ -600,7 +601,12 @@ public class EsqlSession {
         boolean isSemiJoinSubPlan
     ) {};
 
-    private SubPlanAndCallback firstSubPlan(LogicalPlan optimizedPlan, Approximation approximation, Set<LocalRelation> subPlansResults) {
+    private SubPlanAndCallback firstSubPlan(
+        LogicalPlan optimizedPlan,
+        Approximation approximation,
+        Set<LocalRelation> subPlansResults,
+        Configuration configuration
+    ) {
         if (approximation != null) {
             LogicalPlan subPlan = approximation.firstSubPlan();
             if (subPlan != null) {
@@ -621,7 +627,12 @@ public class EsqlSession {
                     LocalRelation resultWrapper = resultToPlan(semiJoinTuple.subPlan().source(), result);
                     localRelationPage.set(resultWrapper.supplier().get());
                     subPlansResults.add(resultWrapper);
-                    return SemiJoin.newMainPlan(optimizedPlan, semiJoinTuple, resultWrapper, plannerSettings.inSubqueryHashJoinThreshold());
+                    return SemiJoin.newMainPlan(
+                        optimizedPlan,
+                        semiJoinTuple,
+                        resultWrapper,
+                        resolveInSubqueryHashJoinThreshold(configuration)
+                    );
                 }, () -> releaseLocalRelationBlocks(localRelationPage), true);
             }
         }
@@ -702,7 +713,7 @@ public class EsqlSession {
                 LOGGER.debug("New main plan after subplan execution:\n{}", newMainPlan);
 
                 // look for the next inlinejoin plan
-                var newSubPlan = firstSubPlan(newMainPlan, approximation, subPlansResults);
+                var newSubPlan = firstSubPlan(newMainPlan, approximation, subPlansResults, configuration);
                 LOGGER.debug("Next subplan: {}", newSubPlan != null ? newSubPlan.subPlan : "null");
 
                 if (newSubPlan == null) {
@@ -768,6 +779,14 @@ public class EsqlSession {
 
         Block[] blocks = SessionUtils.fromPages(schema, pages, blockFactory);
         return new LocalRelation(planSource, schema, LocalSupplier.of(blocks.length == 0 ? new Page(0) : new Page(blocks)));
+    }
+
+    /**
+     * Resolves the IN subquery hash join threshold: query pragma overrides the cluster setting.
+     */
+    private int resolveInSubqueryHashJoinThreshold(Configuration configuration) {
+        int pragmaValue = QueryPragmas.IN_SUBQUERY_HASH_JOIN_THRESHOLD.get(configuration.pragmas().getSettings());
+        return pragmaValue >= 0 ? pragmaValue : plannerSettings.inSubqueryHashJoinThreshold();
     }
 
     private static void releaseLocalRelationBlocks(AtomicReference<Page> localRelationPage) {

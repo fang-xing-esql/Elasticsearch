@@ -7,27 +7,13 @@
 
 package org.elasticsearch.xpack.esql.analysis;
 
-import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.compute.data.Block;
-import org.elasticsearch.compute.data.BlockUtils;
-import org.elasticsearch.compute.data.Page;
-import org.elasticsearch.compute.test.TestBlockFactory;
 import org.elasticsearch.index.IndexMode;
 import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.xpack.esql.action.EsqlCapabilities;
 import org.elasticsearch.xpack.esql.approximation.Approximation;
-import org.elasticsearch.xpack.esql.approximation.ApproximationSettings;
-import org.elasticsearch.xpack.esql.core.expression.Attribute;
-import org.elasticsearch.xpack.esql.core.expression.FieldAttribute;
-import org.elasticsearch.xpack.esql.core.expression.Literal;
-import org.elasticsearch.xpack.esql.core.tree.Source;
 import org.elasticsearch.xpack.esql.core.type.DataType;
 import org.elasticsearch.xpack.esql.core.type.EsField;
 import org.elasticsearch.xpack.esql.core.type.InvalidMappedField;
-import org.elasticsearch.xpack.esql.expression.predicate.logical.Not;
-import org.elasticsearch.xpack.esql.expression.predicate.nulls.IsNotNull;
-import org.elasticsearch.xpack.esql.expression.predicate.nulls.IsNull;
-import org.elasticsearch.xpack.esql.expression.predicate.operator.comparison.In;
 import org.elasticsearch.xpack.esql.index.EsIndex;
 import org.elasticsearch.xpack.esql.index.IndexResolution;
 import org.elasticsearch.xpack.esql.plan.logical.Aggregate;
@@ -41,17 +27,11 @@ import org.elasticsearch.xpack.esql.plan.logical.Project;
 import org.elasticsearch.xpack.esql.plan.logical.Subquery;
 import org.elasticsearch.xpack.esql.plan.logical.UnionAll;
 import org.elasticsearch.xpack.esql.plan.logical.join.AntiJoin;
-import org.elasticsearch.xpack.esql.plan.logical.join.Join;
-import org.elasticsearch.xpack.esql.plan.logical.join.JoinType;
 import org.elasticsearch.xpack.esql.plan.logical.join.JoinTypes;
 import org.elasticsearch.xpack.esql.plan.logical.join.SemiJoin;
-import org.elasticsearch.xpack.esql.plan.logical.local.LocalRelation;
-import org.elasticsearch.xpack.esql.plan.logical.local.LocalSupplier;
-import org.elasticsearch.xpack.esql.planner.PlannerSettings;
 import org.hamcrest.Matcher;
 import org.junit.Before;
 
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -59,17 +39,12 @@ import java.util.Set;
 
 import static org.elasticsearch.xpack.esql.EsqlTestUtils.analyzer;
 import static org.elasticsearch.xpack.esql.EsqlTestUtils.as;
-import static org.elasticsearch.xpack.esql.EsqlTestUtils.getFieldAttribute;
 import static org.elasticsearch.xpack.esql.EsqlTestUtils.withDefaultLimitWarning;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
-import static org.hamcrest.Matchers.instanceOf;
-import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.nullValue;
 
 public class AnalyzerInSubqueryTests extends ESTestCase {
-
-    private static final int HASH_JOIN_THRESHOLD = PlannerSettings.IN_SUBQUERY_HASH_JOIN_THRESHOLD.getDefault(Settings.EMPTY);
 
     @Before
     public void checkInSubquerySupport() {
@@ -814,27 +789,21 @@ public class AnalyzerInSubqueryTests extends ESTestCase {
      * Verifies that IN subquery before STATS is incompatible with approximation.
      */
     public void testApproximationRejectsInSubqueryBeforeStats() {
-        assertApproximationRejects(
-            "FROM test | WHERE emp_no IN (FROM employees | KEEP emp_no) | STATS COUNT()"
-        );
+        assertApproximationRejects("FROM test | WHERE emp_no IN (FROM employees | KEEP emp_no) | STATS COUNT()");
     }
 
     /**
      * Verifies that NOT IN subquery before STATS is incompatible with approximation.
      */
     public void testApproximationRejectsNotInSubqueryBeforeStats() {
-        assertApproximationRejects(
-            "FROM test | WHERE emp_no NOT IN (FROM employees | KEEP emp_no) | STATS COUNT()"
-        );
+        assertApproximationRejects("FROM test | WHERE emp_no NOT IN (FROM employees | KEEP emp_no) | STATS COUNT()");
     }
 
     /**
      * Verifies that IN subquery after STATS is incompatible with approximation.
      */
     public void testApproximationRejectsInSubqueryAfterStats() {
-        assertApproximationRejects(
-            "FROM test | STATS cnt = COUNT() BY emp_no | WHERE emp_no IN (FROM employees | KEEP emp_no)"
-        );
+        assertApproximationRejects("FROM test | STATS cnt = COUNT() BY emp_no | WHERE emp_no IN (FROM employees | KEEP emp_no)");
     }
 
     // -- negative analyzer/verifier tests --
@@ -1206,227 +1175,6 @@ public class AnalyzerInSubqueryTests extends ESTestCase {
         assertNotNull(plan);
     }
 
-    // -- inlineData tests --
-
-    /**
-     * Verifies that {@link SemiJoin#inlineData} converts a SEMI join with subquery results
-     * into a Filter with an In expression containing the values.
-     */
-    public void testInlineDataProducesFilterWithIn() {
-        FieldAttribute leftField = getFieldAttribute("emp_no", DataType.INTEGER);
-        FieldAttribute rightField = getFieldAttribute("emp_no", DataType.INTEGER);
-
-        SemiJoin semiJoin = makeSemiJoin(leftField, rightField, JoinTypes.SEMI);
-
-        Block[] blocks = new Block[] { BlockUtils.constantBlock(TestBlockFactory.getNonBreakingInstance(), 10, 3) };
-        LocalRelation result = new LocalRelation(Source.EMPTY, List.of(rightField), LocalSupplier.of(new Page(blocks)));
-
-        LogicalPlan inlined = SemiJoin.inlineData(semiJoin, result, HASH_JOIN_THRESHOLD);
-        var filter = as(inlined, Filter.class);
-        var inExpr = as(filter.condition(), In.class);
-        assertThat(inExpr.value(), equalTo(leftField));
-        assertThat(inExpr.list().size(), equalTo(3));
-    }
-
-    /**
-     * Verifies that {@link SemiJoin#inlineData} for an ANTI join wraps the In with Not.
-     */
-    public void testInlineDataAntiJoinProducesNotIn() {
-        FieldAttribute leftField = getFieldAttribute("emp_no", DataType.INTEGER);
-        FieldAttribute rightField = getFieldAttribute("emp_no", DataType.INTEGER);
-
-        SemiJoin semiJoin = makeSemiJoin(leftField, rightField, JoinTypes.ANTI);
-
-        Block[] blocks = new Block[] { BlockUtils.constantBlock(TestBlockFactory.getNonBreakingInstance(), 10, 2) };
-        LocalRelation result = new LocalRelation(Source.EMPTY, List.of(rightField), LocalSupplier.of(new Page(blocks)));
-
-        LogicalPlan inlined = SemiJoin.inlineData(semiJoin, result, HASH_JOIN_THRESHOLD);
-        var filter = as(inlined, Filter.class);
-        var not = as(filter.condition(), Not.class);
-        as(not.field(), In.class);
-    }
-
-    /**
-     * Verifies that inlining an empty result for SEMI yields FALSE (no rows match),
-     * and for ANTI yields TRUE (all rows pass).
-     */
-    public void testInlineDataEmptyResult() {
-        FieldAttribute leftField = getFieldAttribute("emp_no", DataType.INTEGER);
-        FieldAttribute rightField = getFieldAttribute("emp_no", DataType.INTEGER);
-
-        LocalRelation emptyResult = new LocalRelation(Source.EMPTY, List.of(rightField), LocalSupplier.of(new Page(0)));
-
-        // SEMI with empty result -> FALSE
-        SemiJoin semiJoin = makeSemiJoin(leftField, rightField, JoinTypes.SEMI);
-        var inlined = as(SemiJoin.inlineData(semiJoin, emptyResult, HASH_JOIN_THRESHOLD), Filter.class);
-        assertThat(inlined.condition(), equalTo(Literal.FALSE));
-
-        // ANTI with empty result -> TRUE
-        SemiJoin antiJoin = makeSemiJoin(leftField, rightField, JoinTypes.ANTI);
-        inlined = as(SemiJoin.inlineData(antiJoin, emptyResult, HASH_JOIN_THRESHOLD), Filter.class);
-        assertThat(inlined.condition(), equalTo(Literal.TRUE));
-    }
-
-    // -- hash join threshold tests --
-
-    /**
-     * Verifies that a SEMI join with more than HASH_JOIN_THRESHOLD values produces a
-     * Project -> Filter(IS NOT NULL) -> Join(LEFT) instead of Filter(IN(...)).
-     */
-    public void testInlineDataSemiJoinAboveThresholdProducesHashJoin() {
-        FieldAttribute leftField = getFieldAttribute("emp_no", DataType.INTEGER);
-        FieldAttribute rightField = getFieldAttribute("emp_no", DataType.INTEGER);
-
-        SemiJoin semiJoin = makeSemiJoin(leftField, rightField, JoinTypes.SEMI);
-
-        int count = HASH_JOIN_THRESHOLD + 1;
-        Block[] blocks = new Block[] { BlockUtils.constantBlock(TestBlockFactory.getNonBreakingInstance(), 10, count) };
-        LocalRelation result = new LocalRelation(Source.EMPTY, List.of(rightField), LocalSupplier.of(new Page(blocks)));
-
-        LogicalPlan inlined = SemiJoin.inlineData(semiJoin, result, HASH_JOIN_THRESHOLD);
-
-        // Project -> Filter -> Join(LEFT)
-        var project = as(inlined, Project.class);
-        var filter = as(project.child(), Filter.class);
-        as(filter.condition(), IsNotNull.class);
-        var join = as(filter.child(), Join.class);
-        assertThat(join.config().type(), equalTo(JoinTypes.LEFT));
-    }
-
-    /**
-     * Verifies that an ANTI join with more than HASH_JOIN_THRESHOLD values produces a
-     * Project -> Filter(IS NULL) -> Join(LEFT).
-     */
-    public void testInlineDataAntiJoinAboveThresholdProducesHashJoin() {
-        FieldAttribute leftField = getFieldAttribute("emp_no", DataType.INTEGER);
-        FieldAttribute rightField = getFieldAttribute("emp_no", DataType.INTEGER);
-
-        SemiJoin antiJoin = makeSemiJoin(leftField, rightField, JoinTypes.ANTI);
-
-        int count = HASH_JOIN_THRESHOLD + 1;
-        Block[] blocks = new Block[] { BlockUtils.constantBlock(TestBlockFactory.getNonBreakingInstance(), 10, count) };
-        LocalRelation result = new LocalRelation(Source.EMPTY, List.of(rightField), LocalSupplier.of(new Page(blocks)));
-
-        LogicalPlan inlined = SemiJoin.inlineData(antiJoin, result, HASH_JOIN_THRESHOLD);
-
-        var project = as(inlined, Project.class);
-        var filter = as(project.child(), Filter.class);
-        as(filter.condition(), IsNull.class);
-        var join = as(filter.child(), Join.class);
-        assertThat(join.config().type(), equalTo(JoinTypes.LEFT));
-    }
-
-    /**
-     * Verifies that exactly at the threshold, Filter(IN(...)) is still used.
-     */
-    public void testInlineDataAtThresholdStillUsesFilter() {
-        FieldAttribute leftField = getFieldAttribute("emp_no", DataType.INTEGER);
-        FieldAttribute rightField = getFieldAttribute("emp_no", DataType.INTEGER);
-
-        SemiJoin semiJoin = makeSemiJoin(leftField, rightField, JoinTypes.SEMI);
-
-        int count = HASH_JOIN_THRESHOLD;
-        Block[] blocks = new Block[] { BlockUtils.constantBlock(TestBlockFactory.getNonBreakingInstance(), 10, count) };
-        LocalRelation result = new LocalRelation(Source.EMPTY, List.of(rightField), LocalSupplier.of(new Page(blocks)));
-
-        LogicalPlan inlined = SemiJoin.inlineData(semiJoin, result, HASH_JOIN_THRESHOLD);
-
-        var filter = as(inlined, Filter.class);
-        as(filter.condition(), In.class);
-    }
-
-    // -- subplan discovery tests --
-
-    /**
-     * Verifies that {@link SemiJoin#firstSubPlan} finds the SemiJoin's right side as a subplan.
-     */
-    public void testFirstSubPlanFindsSemiJoin() {
-        FieldAttribute leftField = getFieldAttribute("emp_no", DataType.INTEGER);
-        FieldAttribute rightField = getFieldAttribute("emp_no", DataType.INTEGER);
-        LogicalPlan rightPlan = emptyLocalRelation(List.of(rightField));
-
-        SemiJoin semiJoin = new SemiJoin(
-            Source.EMPTY,
-            emptyLocalRelation(List.of(leftField)),
-            rightPlan,
-            JoinTypes.SEMI,
-            List.of(leftField),
-            List.of(rightField)
-        );
-
-        var subPlan = SemiJoin.firstSubPlan(semiJoin, new HashSet<>());
-        assertThat(subPlan, notNullValue());
-    }
-
-    /**
-     * Verifies that {@link SemiJoin#firstSubPlan} returns null when there are no SemiJoins.
-     */
-    public void testFirstSubPlanReturnsNullWithNoSemiJoin() {
-        LogicalPlan plan = emptyLocalRelation(List.of(getFieldAttribute("x", DataType.INTEGER)));
-        var subPlan = SemiJoin.firstSubPlan(plan, new HashSet<>());
-        assertThat(subPlan, nullValue());
-    }
-
-    /**
-     * Verifies that {@link SemiJoin#firstSubPlan} skips SemiJoins whose right side
-     * is a LocalRelation that has already been processed.
-     */
-    public void testFirstSubPlanSkipsAlreadyProcessedResults() {
-        FieldAttribute leftField = getFieldAttribute("emp_no", DataType.INTEGER);
-        FieldAttribute rightField = getFieldAttribute("emp_no", DataType.INTEGER);
-
-        LocalRelation alreadyProcessed = new LocalRelation(
-            Source.EMPTY,
-            List.of(rightField),
-            LocalSupplier.of(new Page(BlockUtils.constantBlock(TestBlockFactory.getNonBreakingInstance(), 1, 1)))
-        );
-
-        SemiJoin semiJoin = new SemiJoin(
-            Source.EMPTY,
-            emptyLocalRelation(List.of(leftField)),
-            alreadyProcessed,
-            JoinTypes.SEMI,
-            List.of(leftField),
-            List.of(rightField)
-        );
-
-        Set<LocalRelation> subPlansResults = new HashSet<>();
-        subPlansResults.add(alreadyProcessed);
-
-        var subPlan = SemiJoin.firstSubPlan(semiJoin, subPlansResults);
-        assertThat(subPlan, nullValue());
-    }
-
-    // -- newMainPlan tests --
-
-    /**
-     * Verifies that {@link SemiJoin#newMainPlan} replaces the SemiJoin with a Filter.
-     */
-    public void testNewMainPlanReplacesSemiJoinWithFilter() {
-        FieldAttribute leftField = getFieldAttribute("emp_no", DataType.INTEGER);
-        FieldAttribute rightField = getFieldAttribute("emp_no", DataType.INTEGER);
-        LogicalPlan rightPlan = emptyLocalRelation(List.of(rightField));
-
-        SemiJoin semiJoin = new SemiJoin(
-            Source.EMPTY,
-            emptyLocalRelation(List.of(leftField)),
-            rightPlan,
-            JoinTypes.SEMI,
-            List.of(leftField),
-            List.of(rightField)
-        );
-
-        var subPlan = SemiJoin.firstSubPlan(semiJoin, new HashSet<>());
-        assertThat(subPlan, notNullValue());
-
-        Block[] blocks = new Block[] { BlockUtils.constantBlock(TestBlockFactory.getNonBreakingInstance(), 42, 1) };
-        LocalRelation result = new LocalRelation(Source.EMPTY, List.of(rightField), LocalSupplier.of(new Page(blocks)));
-
-        LogicalPlan newPlan = SemiJoin.newMainPlan(semiJoin, subPlan, result, HASH_JOIN_THRESHOLD);
-        var filter = as(newPlan, Filter.class);
-        assertThat(filter.condition(), instanceOf(In.class));
-    }
-
     @Override
     protected List<String> filteredWarnings() {
         return withDefaultLimitWarning(super.filteredWarnings());
@@ -1501,33 +1249,9 @@ public class AnalyzerInSubqueryTests extends ESTestCase {
         analyzer().addIndex("test", "mapping-basic.json").addIndex(unionIndexResolution()).error(query, messageMatcher);
     }
 
-    private static LocalRelation emptyLocalRelation(List<Attribute> output) {
-        return new LocalRelation(Source.EMPTY, output, LocalSupplier.of(new Page(0)));
-    }
-
     private void assertApproximationRejects(String query) {
         LogicalPlan plan = analyzeInSubquery(query);
         // verifyPlan returns null when the plan is incompatible with approximation (and adds a warning)
         assertThat("Approximation should reject this query", Approximation.verifyPlan(plan), nullValue());
-    }
-
-    private static SemiJoin makeSemiJoin(FieldAttribute leftField, FieldAttribute rightField, JoinType joinType) {
-        if (JoinTypes.ANTI.equals(joinType)) {
-            return new AntiJoin(
-                Source.EMPTY,
-                emptyLocalRelation(List.of(leftField)),
-                emptyLocalRelation(List.of(rightField)),
-                List.of(leftField),
-                List.of(rightField)
-            );
-        }
-        return new SemiJoin(
-            Source.EMPTY,
-            emptyLocalRelation(List.of(leftField)),
-            emptyLocalRelation(List.of(rightField)),
-            joinType,
-            List.of(leftField),
-            List.of(rightField)
-        );
     }
 }
