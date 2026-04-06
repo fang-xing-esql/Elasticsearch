@@ -203,14 +203,15 @@ public class Fork extends LogicalPlan implements PostAnalysisPlanVerificationAwa
                 return;
             }
 
-            failures.add(
-                Failure.fail(
-                    otherFork,
-                    otherFork instanceof UnionAll
-                        ? "FORK after subquery is not supported"
-                        : "Only a single FORK command is supported, but found multiple"
-                )
-            );
+            String message;
+            if (otherFork instanceof UnionAllFromDisjunctiveInSubquery) {
+                message = "FORK after disjunctive (OR) IN/NOT IN subquery is not supported";
+            } else if (otherFork instanceof UnionAll) {
+                message = "FORK after subquery is not supported";
+            } else {
+                message = "Only a single FORK command is supported, but found multiple";
+            }
+            failures.add(Failure.fail(otherFork, message));
         });
 
         Map<String, DataType> outputTypes = fork.output().stream().collect(Collectors.toMap(Attribute::name, Attribute::dataType));

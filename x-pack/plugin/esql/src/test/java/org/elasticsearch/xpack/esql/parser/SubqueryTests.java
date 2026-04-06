@@ -37,6 +37,7 @@ import org.elasticsearch.xpack.esql.plan.logical.UnresolvedRelation;
 import org.elasticsearch.xpack.esql.plan.logical.inference.Completion;
 import org.elasticsearch.xpack.esql.plan.logical.inference.Rerank;
 import org.elasticsearch.xpack.esql.plan.logical.join.LookupJoin;
+import org.junit.Before;
 
 import java.util.List;
 
@@ -49,6 +50,11 @@ import static org.hamcrest.Matchers.containsString;
 
 public class SubqueryTests extends AbstractStatementParserTests {
 
+    @Before
+    public void checkSubqueryInFromCommandSupport() {
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
+    }
+
     /**
      * UnionAll[[]]
      * |_UnresolvedRelation[]
@@ -56,7 +62,6 @@ public class SubqueryTests extends AbstractStatementParserTests {
      *   \_UnresolvedRelation[]
      */
     public void testIndexPatternWithSubquery() {
-        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         var mainQueryIndexPattern = randomIndexPatterns();
         var subqueryIndexPattern = randomIndexPatterns();
         String query = LoggerMessageFormat.format(null, """
@@ -125,7 +130,6 @@ public class SubqueryTests extends AbstractStatementParserTests {
      *           \_UnresolvedRelation[lookup_index]
      */
     public void testSubqueryWithAllProcessingCommandsInMainquery() {
-        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         // remote cluster does not support COMPLETION or RERANK
         var mainQueryIndexPattern = randomIndexPatterns(without(CROSS_CLUSTER));
         var subqueryIndexPattern = randomIndexPatterns(without(CROSS_CLUSTER));
@@ -242,7 +246,6 @@ public class SubqueryTests extends AbstractStatementParserTests {
      *               \_UnresolvedRelation[lookup_index]
      */
     public void testWithSubqueryWithProcessingCommandsInSubquery() {
-        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         var mainQueryIndexPattern = randomIndexPatterns(without(CROSS_CLUSTER));
         var subqueryIndexPattern = randomIndexPatterns(without(CROSS_CLUSTER));
         var joinIndexPattern = "lookup_index";
@@ -314,7 +317,6 @@ public class SubqueryTests extends AbstractStatementParserTests {
      * Plan string is skipped as it is too long, and it should be the combination of the above two tests..
      */
     public void testSubqueryWithProcessingCommandsInSubqueryAndMainquery() {
-        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         var mainQueryIndexPattern = randomIndexPatterns(without(CROSS_CLUSTER));
         var subqueryIndexPattern = randomIndexPatterns(without(CROSS_CLUSTER));
         var joinIndexPattern = "lookup_index";
@@ -431,7 +433,6 @@ public class SubqueryTests extends AbstractStatementParserTests {
      * Verify there is no parsing error if the subquery ends with different modes.
      */
     public void testSubqueryEndsWithProcessingCommandsInDifferentMode() {
-        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         List<String> processingCommandInDifferentMode = List.of(
             "INLINE STATS max_e = MAX(e) BY f",  // inline mode, expression mode
             "DISSECT g \"%{b} %{c}\"",  // expression mode
@@ -475,7 +476,6 @@ public class SubqueryTests extends AbstractStatementParserTests {
      *   \_UnresolvedRelation[]
      */
     public void testSubqueryOnly() {
-        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         var subqueryIndexPattern1 = randomIndexPatterns();
         var subqueryIndexPattern2 = randomIndexPatterns();
         var subqueryIndexPattern3 = randomIndexPatterns();
@@ -522,7 +522,6 @@ public class SubqueryTests extends AbstractStatementParserTests {
      *                   \_UnresolvedRelation[]
      */
     public void testSubqueryOnlyWithProcessingCommandInMainquery() {
-        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         var subqueryIndexPattern = randomIndexPatterns();
         String query = LoggerMessageFormat.format(null, """
              FROM (FROM {})
@@ -573,7 +572,6 @@ public class SubqueryTests extends AbstractStatementParserTests {
      *                   \_UnresolvedRelation[]
      */
     public void testSubqueryOnlyWithProcessingCommandsInSubquery() {
-        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         var subqueryIndexPattern = randomIndexPatterns();
         String query = LoggerMessageFormat.format(null, """
              FROM (FROM {}
@@ -656,7 +654,6 @@ public class SubqueryTests extends AbstractStatementParserTests {
      *                                       \_UnresolvedRelation[]
      */
     public void testSubqueryOnlyWithProcessingCommandsInSubqueryAndMainquery() {
-        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         var subqueryIndexPattern = randomIndexPatterns();
         String query = LoggerMessageFormat.format(null, """
              FROM (FROM {}
@@ -721,7 +718,6 @@ public class SubqueryTests extends AbstractStatementParserTests {
      *   \_UnresolvedRelation[]
      */
     public void testMultipleMixedIndexPatternsAndSubqueries() {
-        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         var indexPattern1 = randomIndexPatterns();
         var indexPattern2 = randomIndexPatterns();
         var indexPattern3 = randomIndexPatterns();
@@ -821,7 +817,6 @@ public class SubqueryTests extends AbstractStatementParserTests {
      *                 \_UnresolvedRelation[lookup_index]
      */
     public void testMultipleSubqueriesWithProcessingCommands() {
-        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         var mainIndexPattern1 = randomIndexPatterns();
         var mainIndexPattern2 = randomIndexPatterns();
         var subqueryIndexPattern1 = randomIndexPatterns();
@@ -916,7 +911,6 @@ public class SubqueryTests extends AbstractStatementParserTests {
      *           \_UnresolvedRelation[]
      */
     public void testSimpleNestedSubquery() {
-        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         var indexPattern1 = randomIndexPatterns();
         var indexPattern2 = randomIndexPatterns();
         var indexPattern3 = randomIndexPatterns();
@@ -974,7 +968,6 @@ public class SubqueryTests extends AbstractStatementParserTests {
      *                   \_UnresolvedRelation[]
      */
     public void testNestedSubqueryWithProcessingCommands() {
-        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         var indexPattern1 = randomIndexPatterns();
         var indexPattern2 = randomIndexPatterns();
         var indexPattern3 = randomIndexPatterns();
@@ -1028,7 +1021,6 @@ public class SubqueryTests extends AbstractStatementParserTests {
      *           \_UnresolvedRelation[]
      */
     public void testSubqueriesWithMetadada() {
-        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         var indexPattern1 = randomIndexPatterns();
         var indexPattern2 = randomIndexPatterns();
         var indexPattern3 = randomIndexPatterns();
@@ -1078,7 +1070,6 @@ public class SubqueryTests extends AbstractStatementParserTests {
      *       \_UnresolvedRelation[]
      */
     public void testSubqueryWithRemoteCluster() {
-        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         var mainRemoteIndexPattern = randomIndexPatterns(CROSS_CLUSTER);
         var mainIndexPattern = randomIndexPatterns(without(CROSS_CLUSTER));
         var combinedMainIndexPattern = unquoteIndexPattern(mainRemoteIndexPattern) + "," + unquoteIndexPattern(mainIndexPattern);
@@ -1108,7 +1099,6 @@ public class SubqueryTests extends AbstractStatementParserTests {
     }
 
     public void testTimeSeriesWithSubquery() {
-        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         var mainIndexPattern = randomIndexPatterns();
         var subqueryIndexPattern = randomIndexPatterns();
         String query = LoggerMessageFormat.format(null, """
@@ -1117,4 +1107,5 @@ public class SubqueryTests extends AbstractStatementParserTests {
 
         expectThrows(ParsingException.class, containsString("line 1:2: Subqueries are not supported in TS command"), () -> query(query));
     }
+
 }

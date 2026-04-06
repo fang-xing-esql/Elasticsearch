@@ -32,6 +32,7 @@ import static org.elasticsearch.xpack.esql.telemetry.FeatureMetric.EVAL;
 import static org.elasticsearch.xpack.esql.telemetry.FeatureMetric.FROM;
 import static org.elasticsearch.xpack.esql.telemetry.FeatureMetric.GROK;
 import static org.elasticsearch.xpack.esql.telemetry.FeatureMetric.INLINE_STATS;
+import static org.elasticsearch.xpack.esql.telemetry.FeatureMetric.IN_SUBQUERY;
 import static org.elasticsearch.xpack.esql.telemetry.FeatureMetric.KEEP;
 import static org.elasticsearch.xpack.esql.telemetry.FeatureMetric.LIMIT;
 import static org.elasticsearch.xpack.esql.telemetry.FeatureMetric.LOOKUP_JOIN;
@@ -43,6 +44,7 @@ import static org.elasticsearch.xpack.esql.telemetry.FeatureMetric.ROW;
 import static org.elasticsearch.xpack.esql.telemetry.FeatureMetric.SHOW;
 import static org.elasticsearch.xpack.esql.telemetry.FeatureMetric.SORT;
 import static org.elasticsearch.xpack.esql.telemetry.FeatureMetric.STATS;
+import static org.elasticsearch.xpack.esql.telemetry.FeatureMetric.SUBQUERY;
 import static org.elasticsearch.xpack.esql.telemetry.FeatureMetric.TS;
 import static org.elasticsearch.xpack.esql.telemetry.FeatureMetric.WHERE;
 import static org.elasticsearch.xpack.esql.telemetry.Metrics.FEATURES_PREFIX;
@@ -834,6 +836,105 @@ public class VerifierMetricsTests extends ESTestCase {
         assertEquals(0, lookupJoinOnFields(c));
         assertEquals(0, lookupJoinOnExpression(c));
         assertEquals(0, subqueryInFromCommand(c));
+        assertEquals(0, inSubquery(c));
+    }
+
+    public void testInSubquery() {
+        assumeTrue("requires WHERE IN subquery capability", EsqlCapabilities.Cap.IN_SUBQUERY.isEnabled());
+        Counters c = esql("from employees | where emp_no IN (from employees | stats max(emp_no))");
+        assertEquals(0, dissect(c));
+        assertEquals(0, eval(c));
+        assertEquals(0, grok(c));
+        assertEquals(0, limit(c));
+        assertEquals(0, sort(c));
+        assertEquals(0, stats(c));
+        assertEquals(0, promql(c));
+        assertEquals(1L, where(c));
+        assertEquals(0, enrich(c));
+        assertEquals(0, mvExpand(c));
+        assertEquals(0, show(c));
+        assertEquals(0, row(c));
+        assertEquals(1L, from(c));
+        assertEquals(0, ts(c));
+        assertEquals(0, drop(c));
+        assertEquals(0, keep(c));
+        assertEquals(0, rename(c));
+        assertEquals(0, inlineStats(c));
+        assertEquals(0, lookupJoinOnFields(c));
+        assertEquals(0, lookupJoinOnExpression(c));
+        assertEquals(0, subqueryInFromCommand(c));
+        assertEquals(1L, inSubquery(c));
+        assertEquals(1L, function("max", c));
+    }
+
+    public void testNotInSubquery() {
+        assumeTrue("requires WHERE IN subquery capability", EsqlCapabilities.Cap.IN_SUBQUERY.isEnabled());
+        Counters c = esql("from employees | where emp_no NOT IN (from employees | stats max(emp_no))");
+        assertEquals(0, dissect(c));
+        assertEquals(0, eval(c));
+        assertEquals(0, grok(c));
+        assertEquals(0, limit(c));
+        assertEquals(0, sort(c));
+        assertEquals(0, stats(c));
+        assertEquals(0, promql(c));
+        assertEquals(1L, where(c));
+        assertEquals(0, enrich(c));
+        assertEquals(0, mvExpand(c));
+        assertEquals(0, show(c));
+        assertEquals(0, row(c));
+        assertEquals(1L, from(c));
+        assertEquals(0, ts(c));
+        assertEquals(0, drop(c));
+        assertEquals(0, keep(c));
+        assertEquals(0, rename(c));
+        assertEquals(0, inlineStats(c));
+        assertEquals(0, lookupJoinOnFields(c));
+        assertEquals(0, lookupJoinOnExpression(c));
+        assertEquals(0, subqueryInFromCommand(c));
+        assertEquals(1L, inSubquery(c));
+        assertEquals(1L, function("max", c));
+    }
+
+    public void testMixedInAndNotInSubqueries() {
+        assumeTrue("requires WHERE IN subquery capability", EsqlCapabilities.Cap.IN_SUBQUERY.isEnabled());
+        Counters c = esql("""
+            from employees
+            | where emp_no IN (from employees | stats max(emp_no))
+              and languages NOT IN (from employees | stats min(languages))
+            """);
+        assertEquals(1L, inSubquery(c));
+        assertEquals(1L, from(c));
+        assertEquals(1L, where(c));
+        assertEquals(1L, function("max", c));
+        assertEquals(1L, function("min", c));
+    }
+
+    public void testMultipleNotInSubqueries() {
+        assumeTrue("requires WHERE IN subquery capability", EsqlCapabilities.Cap.IN_SUBQUERY.isEnabled());
+        Counters c = esql("""
+            from employees
+            | where emp_no NOT IN (from employees | stats max(emp_no))
+            | where languages NOT IN (from employees | stats min(languages))
+            """);
+        assertEquals(1L, inSubquery(c));
+        assertEquals(1L, from(c));
+        assertEquals(1L, where(c));
+        assertEquals(1L, function("max", c));
+        assertEquals(1L, function("min", c));
+    }
+
+    public void testMultipleInSubqueries() {
+        assumeTrue("requires WHERE IN subquery capability", EsqlCapabilities.Cap.IN_SUBQUERY.isEnabled());
+        Counters c = esql("""
+            from employees
+            | where emp_no IN (from employees | stats max(emp_no))
+              and languages IN (from employees | stats min(languages))
+            """);
+        assertEquals(1L, inSubquery(c));
+        assertEquals(1L, from(c));
+        assertEquals(1L, where(c));
+        assertEquals(1L, function("max", c));
+        assertEquals(1L, function("min", c));
     }
 
     private long dissect(Counters c) {
@@ -917,7 +1018,11 @@ public class VerifierMetricsTests extends ESTestCase {
     }
 
     private long subqueryInFromCommand(Counters c) {
-        return c.get(FEATURES_PREFIX + FeatureMetric.SUBQUERY);
+        return c.get(FEATURES_PREFIX + SUBQUERY);
+    }
+
+    private long inSubquery(Counters c) {
+        return c.get(FEATURES_PREFIX + IN_SUBQUERY);
     }
 
     private long function(String function, Counters c) {

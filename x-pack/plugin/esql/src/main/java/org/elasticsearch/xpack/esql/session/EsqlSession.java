@@ -61,6 +61,7 @@ import org.elasticsearch.xpack.esql.core.expression.FoldContext;
 import org.elasticsearch.xpack.esql.core.expression.function.Function;
 import org.elasticsearch.xpack.esql.core.querydsl.QueryDslTimestampBoundsExtractor;
 import org.elasticsearch.xpack.esql.core.tree.Source;
+import org.elasticsearch.xpack.esql.core.util.Holder;
 import org.elasticsearch.xpack.esql.datasources.ExternalSourceResolution;
 import org.elasticsearch.xpack.esql.datasources.ExternalSourceResolver;
 import org.elasticsearch.xpack.esql.datasources.PartitionFilterHintExtractor;
@@ -87,6 +88,8 @@ import org.elasticsearch.xpack.esql.plan.logical.Explain;
 import org.elasticsearch.xpack.esql.plan.logical.InlineStats;
 import org.elasticsearch.xpack.esql.plan.logical.LogicalPlan;
 import org.elasticsearch.xpack.esql.plan.logical.join.InlineJoin;
+import org.elasticsearch.xpack.esql.plan.logical.join.SemiJoin;
+import org.elasticsearch.xpack.esql.plan.logical.join.StubRelation;
 import org.elasticsearch.xpack.esql.plan.logical.local.LocalRelation;
 import org.elasticsearch.xpack.esql.plan.logical.local.LocalSupplier;
 import org.elasticsearch.xpack.esql.plan.physical.EstimatesRowSize;
@@ -97,6 +100,7 @@ import org.elasticsearch.xpack.esql.planner.PlannerUtils;
 import org.elasticsearch.xpack.esql.planner.mapper.Mapper;
 import org.elasticsearch.xpack.esql.planner.premapper.PreMapper;
 import org.elasticsearch.xpack.esql.plugin.ComputeService;
+import org.elasticsearch.xpack.esql.plugin.QueryPragmas;
 import org.elasticsearch.xpack.esql.plugin.TransportActionServices;
 import org.elasticsearch.xpack.esql.telemetry.FeatureMetric;
 import org.elasticsearch.xpack.esql.telemetry.Metrics;
@@ -556,7 +560,7 @@ public class EsqlSession {
         ActionListener<Result> listener
     ) {
         var subPlansResults = new HashSet<LocalRelation>();
-        var subPlan = firstSubPlan(optimizedPlan, approximation, subPlansResults);
+        var subPlan = firstSubPlan(optimizedPlan, approximation, subPlansResults, configuration);
 
         // TODO: merge into one method
         if (subPlan != null) {
@@ -593,29 +597,88 @@ public class EsqlSession {
     private record SubPlanAndCallback(
         LogicalPlan subPlan,
         java.util.function.Function<Result, LogicalPlan> newMainPlan,
-        Runnable cleanup
+        Runnable cleanup,
+        boolean isSemiJoinSubPlan
     ) {};
 
-    private SubPlanAndCallback firstSubPlan(LogicalPlan optimizedPlan, Approximation approximation, Set<LocalRelation> subPlansResults) {
+    private SubPlanAndCallback firstSubPlan(
+        LogicalPlan optimizedPlan,
+        Approximation approximation,
+        Set<LocalRelation> subPlansResults,
+        Configuration configuration
+    ) {
         if (approximation != null) {
             LogicalPlan subPlan = approximation.firstSubPlan();
             if (subPlan != null) {
-                return new SubPlanAndCallback(subPlan, approximation::newMainPlan, () -> {});
+                return new SubPlanAndCallback(subPlan, approximation::newMainPlan, () -> {}, false);
             }
         }
 
-        InlineJoin.LogicalPlanTuple subPlans = InlineJoin.firstSubPlan(optimizedPlan, subPlansResults);
-        if (subPlans == null) {
-            return null;
+        // Find the first (bottom-up) SemiJoin or InlineJoin that needs subplan execution.
+        // Processing bottom-up ensures inner subplans (e.g. INLINE STATS inside IN subquery)
+        // are resolved before outer ones that depend on them.
+        LogicalPlan firstJoin = findFirstSubPlanJoin(optimizedPlan, subPlansResults);
+
+        if (firstJoin instanceof SemiJoin) {
+            SemiJoin.LogicalPlanTuple semiJoinTuple = SemiJoin.firstSubPlan(optimizedPlan, subPlansResults);
+            if (semiJoinTuple != null) {
+                AtomicReference<Page> localRelationPage = new AtomicReference<>();
+                return new SubPlanAndCallback(semiJoinTuple.subPlan(), result -> {
+                    LocalRelation resultWrapper = resultToPlan(semiJoinTuple.subPlan().source(), result);
+                    localRelationPage.set(resultWrapper.supplier().get());
+                    subPlansResults.add(resultWrapper);
+                    return SemiJoin.newMainPlan(
+                        optimizedPlan,
+                        semiJoinTuple,
+                        resultWrapper,
+                        resolveInSubqueryHashJoinThreshold(configuration)
+                    );
+                }, () -> releaseLocalRelationBlocks(localRelationPage), true);
+            }
         }
-        AtomicReference<Page> localRelationPage = new AtomicReference<>();
-        return new SubPlanAndCallback(subPlans.stubReplacedSubPlan(), result -> {
-            // Translate the subquery into a separate, coordinator based plan and the results 'broadcasted' as a local relation
-            LocalRelation resultWrapper = resultToPlan(subPlans.stubReplacedSubPlan().source(), result);
-            localRelationPage.set(resultWrapper.supplier().get());
-            subPlansResults.add(resultWrapper);
-            return InlineJoin.newMainPlan(optimizedPlan, subPlans, resultWrapper);
-        }, () -> releaseLocalRelationBlocks(localRelationPage));
+
+        if (firstJoin instanceof InlineJoin) {
+            InlineJoin.LogicalPlanTuple subPlans = InlineJoin.firstSubPlan(optimizedPlan, subPlansResults);
+            if (subPlans != null) {
+                AtomicReference<Page> localRelationPage = new AtomicReference<>();
+                return new SubPlanAndCallback(subPlans.stubReplacedSubPlan(), result -> {
+                    LocalRelation resultWrapper = resultToPlan(subPlans.stubReplacedSubPlan().source(), result);
+                    localRelationPage.set(resultWrapper.supplier().get());
+                    subPlansResults.add(resultWrapper);
+                    return InlineJoin.newMainPlan(optimizedPlan, subPlans, resultWrapper);
+                }, () -> releaseLocalRelationBlocks(localRelationPage), false);
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Finds the first (bottom-up) SemiJoin or InlineJoin in the plan that has an unresolved subplan.
+     * Returns the join node itself, or null if none found.
+     */
+    private static LogicalPlan findFirstSubPlanJoin(LogicalPlan plan, Set<LocalRelation> subPlansResults) {
+        Holder<LogicalPlan> result = new Holder<>();
+        plan.forEachUp(p -> {
+            if (result.get() != null) {
+                return;
+            }
+            if (p instanceof SemiJoin sj) {
+                if (sj.right() instanceof LocalRelation lr && subPlansResults.contains(lr)) {
+                    return; // already processed
+                }
+                result.set(sj);
+            } else if (p instanceof InlineJoin ij) {
+                if (ij.right().anyMatch(r -> r instanceof StubRelation)) {
+                    result.set(ij);
+                } else if (ij.right() instanceof LocalRelation lr && (subPlansResults.isEmpty() || subPlansResults.contains(lr) == false)) {
+                    result.set(ij);
+                } else if (ij.right() instanceof LocalRelation == false && ij.right().anyMatch(r -> r instanceof LocalRelation)) {
+                    result.set(ij);
+                }
+            }
+        });
+        return result.get();
     }
 
     private void executeSubPlan(
@@ -636,6 +699,9 @@ public class EsqlSession {
         LOGGER.debug("Executing subplan:\n{}", subPlan.subPlan);
         // Create a physical plan out of the logical sub-plan
         var physicalSubPlan = logicalPlanToPhysicalPlan(subPlan.subPlan, request, physicalPlanOptimizer, planTimeProfile);
+        if (subPlan.isSemiJoinSubPlan()) {
+            physicalSubPlan = Mapper.ensureExchangeForSubPlan(physicalSubPlan);
+        }
 
         executionInfo.startSubPlans();
 
@@ -644,11 +710,13 @@ public class EsqlSession {
             try {
                 var releasingNext = ActionListener.runAfter(next, subPlan.cleanup);
                 LogicalPlan newMainPlan = subPlan.newMainPlan.apply(result);
+                LOGGER.debug("New main plan after subplan execution:\n{}", newMainPlan);
 
                 // look for the next inlinejoin plan
-                var newSubPlan = firstSubPlan(newMainPlan, approximation, subPlansResults);
+                var newSubPlan = firstSubPlan(newMainPlan, approximation, subPlansResults, configuration);
+                LOGGER.debug("Next subplan: {}", newSubPlan != null ? newSubPlan.subPlan : "null");
 
-                if (newSubPlan == null) {// run the final "main" plan
+                if (newSubPlan == null) {
                     executionInfo.finishSubPlans();
                     var newPhysicalPlan = logicalPlanToPhysicalPlan(newMainPlan, request, physicalPlanOptimizer, planTimeProfile);
                     runner.run(
@@ -669,7 +737,7 @@ public class EsqlSession {
                             );
                         })
                     );
-                } else {// continue executing the subplans
+                } else {
                     executeSubPlan(
                         completionInfoAccumulator,
                         newMainPlan,
@@ -711,6 +779,14 @@ public class EsqlSession {
 
         Block[] blocks = SessionUtils.fromPages(schema, pages, blockFactory);
         return new LocalRelation(planSource, schema, LocalSupplier.of(blocks.length == 0 ? new Page(0) : new Page(blocks)));
+    }
+
+    /**
+     * Resolves the IN subquery hash join threshold: query pragma overrides the cluster setting.
+     */
+    private int resolveInSubqueryHashJoinThreshold(Configuration configuration) {
+        int pragmaValue = QueryPragmas.IN_SUBQUERY_HASH_JOIN_THRESHOLD.get(configuration.pragmas().getSettings());
+        return pragmaValue >= 0 ? pragmaValue : plannerSettings.inSubqueryHashJoinThreshold();
     }
 
     private static void releaseLocalRelationBlocks(AtomicReference<Page> localRelationPage) {
