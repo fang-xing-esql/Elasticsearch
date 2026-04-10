@@ -19,6 +19,8 @@ import org.elasticsearch.compute.operator.AsyncOperator;
 import org.elasticsearch.compute.operator.DriverContext;
 import org.elasticsearch.compute.operator.IsBlockedResult;
 import org.elasticsearch.compute.operator.Operator;
+import org.elasticsearch.compute.operator.lookup.RightChunkedExistsJoin;
+import org.elasticsearch.compute.operator.lookup.RightChunkedJoin;
 import org.elasticsearch.compute.operator.lookup.RightChunkedLeftJoin;
 import org.elasticsearch.core.Nullable;
 import org.elasticsearch.core.Releasable;
@@ -61,7 +63,8 @@ public final class LookupFromIndexOperator extends AsyncOperator<LookupFromIndex
         boolean useStreamingOperator,
         int exchangeBufferSize,
         boolean profile,
-        @Nullable Configuration configuration
+        @Nullable Configuration configuration,
+        @Nullable Boolean existsJoinAnti
     ) implements OperatorFactory {
 
         public Factory {
@@ -125,7 +128,8 @@ public final class LookupFromIndexOperator extends AsyncOperator<LookupFromIndex
                     loadFields,
                     source,
                     rightPreJoinPlan,
-                    joinOnConditions
+                    joinOnConditions,
+                    existsJoinAnti
                 );
             }
         }
@@ -144,6 +148,8 @@ public final class LookupFromIndexOperator extends AsyncOperator<LookupFromIndex
     private final Expression joinOnConditions;
     // MatchFieldsMapping is the same for all batches (based on operator configuration, not input pages)
     private final MatchFieldsMapping matchFieldsMapping;
+    @Nullable
+    private final Boolean existsJoinAnti;
     /**
      * Total number of pages emitted by this {@link Operator}.
      */
@@ -169,7 +175,8 @@ public final class LookupFromIndexOperator extends AsyncOperator<LookupFromIndex
         List<NamedExpression> loadFields,
         Source source,
         PhysicalPlan rightPreJoinPlan,
-        Expression joinOnConditions
+        Expression joinOnConditions,
+        @Nullable Boolean existsJoinAnti
     ) {
         super(driverContext, lookupService.getThreadContext(), maxOutstandingRequests);
         this.matchFields = matchFields;
@@ -182,6 +189,7 @@ public final class LookupFromIndexOperator extends AsyncOperator<LookupFromIndex
         this.source = source;
         this.rightPreJoinPlan = rightPreJoinPlan;
         this.joinOnConditions = joinOnConditions;
+        this.existsJoinAnti = existsJoinAnti;
         this.matchFieldsMapping = buildMatchFieldsMapping(matchFields, joinOnConditions);
     }
 
@@ -228,7 +236,10 @@ public final class LookupFromIndexOperator extends AsyncOperator<LookupFromIndex
         );
         lookupService.lookupAsync(request, parentTask, listener.map(response -> {
             List<Page> pages = response.takePages();
-            return new OngoingJoin(new RightChunkedLeftJoin(inputPage, loadFields.size()), pages.iterator());
+            RightChunkedJoin join = existsJoinAnti != null
+                ? new RightChunkedExistsJoin(inputPage, existsJoinAnti)
+                : new RightChunkedLeftJoin(inputPage, loadFields.size());
+            return new OngoingJoin(join, pages.iterator());
         }));
     }
 
@@ -260,14 +271,17 @@ public final class LookupFromIndexOperator extends AsyncOperator<LookupFromIndex
                 return null;
             }
         }
-        if (ongoing.itr.hasNext()) {
+        while (ongoing.itr.hasNext()) {
             // There's more to do in the ongoing join.
             Page right = ongoing.itr.next();
-            emittedPages++;
             try {
                 Page joinedPage = ongoing.join.join(right);
-                emittedRows += joinedPage.getPositionCount();
-                return joinedPage;
+                if (joinedPage != null) {
+                    emittedPages++;
+                    emittedRows += joinedPage.getPositionCount();
+                    return joinedPage;
+                }
+                // null means the join is accumulating (e.g., exists join) — continue consuming right pages.
             } finally {
                 right.releaseBlocks();
             }
@@ -449,7 +463,7 @@ public final class LookupFromIndexOperator extends AsyncOperator<LookupFromIndex
         }
     }
 
-    record OngoingJoin(RightChunkedLeftJoin join, Iterator<Page> itr) implements Releasable {
+    record OngoingJoin(RightChunkedJoin join, Iterator<Page> itr) implements Releasable {
         @Override
         public void close() {
             Releasables.close(join, Releasables.wrap(() -> Iterators.map(itr, page -> page::releaseBlocks)));

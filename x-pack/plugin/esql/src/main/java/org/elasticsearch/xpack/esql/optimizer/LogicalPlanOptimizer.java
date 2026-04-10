@@ -20,6 +20,7 @@ import org.elasticsearch.xpack.esql.optimizer.rules.logical.CombineEvals;
 import org.elasticsearch.xpack.esql.optimizer.rules.logical.CombineLimitTopN;
 import org.elasticsearch.xpack.esql.optimizer.rules.logical.CombineProjections;
 import org.elasticsearch.xpack.esql.optimizer.rules.logical.ConstantFolding;
+import org.elasticsearch.xpack.esql.optimizer.rules.logical.ConvertSemiJoinToExistsJoin;
 import org.elasticsearch.xpack.esql.optimizer.rules.logical.DeduplicateAggs;
 import org.elasticsearch.xpack.esql.optimizer.rules.logical.ExtractAggregateCommonFilter;
 import org.elasticsearch.xpack.esql.optimizer.rules.logical.FoldNull;
@@ -193,7 +194,8 @@ public class LogicalPlanOptimizer extends ParameterizedRuleExecutor<LogicalPlan,
             new ReplaceOrderByExpressionWithEval(),
             new ReplaceLimitByExpressionWithEval(),
             // new NormalizeAggregate(), - waits on https://github.com/elastic/elasticsearch/issues/100634
-            new SubstituteApproximationPlan()
+            new SubstituteApproximationPlan(),
+            new ConvertSemiJoinToExistsJoin()
         );
     }
 

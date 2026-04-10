@@ -325,7 +325,8 @@ public class LookupFromIndexOperatorTests extends AsyncOperatorTestCase {
             false,  // useStreamingOperator - testing non-streaming operator
             QueryPragmas.EXCHANGE_BUFFER_SIZE.getDefault(Settings.EMPTY),
             false, // profile
-            null // configuration - not needed for non-streaming tests
+            null, // configuration - not needed for non-streaming tests
+            null  // existsJoinAnti - regular lookup join
         );
     }
 

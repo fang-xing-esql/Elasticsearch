@@ -412,7 +412,8 @@ public class LookupFromIndexIT extends AbstractEsqlIntegTestCase {
                 true,  // useStreamingOperator
                 QueryPragmas.EXCHANGE_BUFFER_SIZE.getDefault(Settings.EMPTY),
                 false,  // profile
-                EsqlTestUtils.TEST_CFG
+                EsqlTestUtils.TEST_CFG,
+                null  // existsJoinAnti
             );
             DriverContext driverContext = driverContext();
             try (

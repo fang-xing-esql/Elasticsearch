@@ -26,6 +26,7 @@ import org.elasticsearch.xpack.esql.plan.logical.TopN;
 import org.elasticsearch.xpack.esql.plan.logical.TopNBy;
 import org.elasticsearch.xpack.esql.plan.logical.TsInfo;
 import org.elasticsearch.xpack.esql.plan.logical.UnaryPlan;
+import org.elasticsearch.xpack.esql.plan.logical.join.ExistsJoin;
 import org.elasticsearch.xpack.esql.plan.logical.join.Join;
 import org.elasticsearch.xpack.esql.plan.logical.join.JoinConfig;
 import org.elasticsearch.xpack.esql.plan.logical.join.JoinTypes;
@@ -183,6 +184,7 @@ public class LocalMapper {
             }
             // we want to do local physical planning on the lookup node eventually for the right side of the lookup join
             // so here we will wrap the logical plan with a FragmentExec and keep it as is
+            Boolean existsJoinAnti = join instanceof ExistsJoin ej ? ej.isAntiJoin() : null;
             FragmentExec fragmentExec = new FragmentExec(binary.right());
             return new LookupJoinExec(
                 join.source(),
@@ -191,7 +193,8 @@ public class LocalMapper {
                 config.leftFields(),
                 config.rightFields(),
                 join.rightOutputFields(),
-                config.joinOnConditions()
+                config.joinOnConditions(),
+                existsJoinAnti
             );
         }
         return MapperUtils.unsupported(binary);

@@ -965,7 +965,8 @@ public class LocalExecutionPlanner {
             }
             matchFields.add(new MatchConfig(fieldName, input));
         }
-        boolean useStreamingOperator = shouldUseStreamingOperator(lookupFromIndexService, indexName);
+        // ExistsJoin uses RightChunkedExistsJoin which is only supported by the non-streaming operator for now, just to limit the scope
+        boolean useStreamingOperator = join.existsJoinAnti() == null && shouldUseStreamingOperator(lookupFromIndexService, indexName);
         return source.with(
             new LookupFromIndexOperator.Factory(
                 matchFields,
@@ -982,7 +983,8 @@ public class LocalExecutionPlanner {
                 useStreamingOperator,
                 context.queryPragmas().exchangeBufferSize(),
                 configuration.profile(),
-                configuration
+                configuration,
+                join.existsJoinAnti()
             ),
             layout
         );

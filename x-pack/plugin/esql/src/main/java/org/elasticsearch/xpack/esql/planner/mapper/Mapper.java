@@ -29,6 +29,7 @@ import org.elasticsearch.xpack.esql.plan.logical.TopN;
 import org.elasticsearch.xpack.esql.plan.logical.TopNBy;
 import org.elasticsearch.xpack.esql.plan.logical.TsInfo;
 import org.elasticsearch.xpack.esql.plan.logical.UnaryPlan;
+import org.elasticsearch.xpack.esql.plan.logical.join.ExistsJoin;
 import org.elasticsearch.xpack.esql.plan.logical.join.Join;
 import org.elasticsearch.xpack.esql.plan.logical.join.JoinConfig;
 import org.elasticsearch.xpack.esql.plan.logical.join.JoinTypes;
@@ -233,6 +234,7 @@ public class Mapper {
             if (right instanceof FragmentExec fragment) {
                 boolean isIndexModeLookup = isIndexModeLookup(fragment);
                 if (isIndexModeLookup) {
+                    Boolean existsJoinAnti = join instanceof ExistsJoin ej ? ej.isAntiJoin() : null;
                     return new LookupJoinExec(
                         join.source(),
                         left,
@@ -240,7 +242,8 @@ public class Mapper {
                         config.leftFields(),
                         config.rightFields(),
                         join.rightOutputFields(),
-                        config.joinOnConditions()
+                        config.joinOnConditions(),
+                        existsJoinAnti
                     );
                 }
             }

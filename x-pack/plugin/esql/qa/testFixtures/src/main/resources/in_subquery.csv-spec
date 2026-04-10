@@ -1769,3 +1769,96 @@ emp_no:long | first_name:text | salary:long
 10002       | Bezalel         | 56371
 10003       | Parto           | 61805
 ;
+
+//
+// ExistsJoin: IN/NOT IN with lookup index (no pipeline breaker on right side)
+//
+
+existsJoinInSubqueryWithLookupIndexWithFilter
+required_capability: in_subquery
+
+FROM employees
+| WHERE languages IN (FROM languages_lookup | WHERE language_name == "French" | KEEP language_code)
+| STATS cnt = COUNT(*)
+;
+
+cnt:long
+19
+;
+
+existsJoinNotInSubqueryWithLookupIndexWithFilter
+required_capability: in_subquery
+
+FROM employees
+| WHERE languages NOT IN (FROM languages_lookup | WHERE language_name == "French" | KEEP language_code)
+| STATS cnt = COUNT(*)
+;
+
+cnt:long
+71
+;
+
+existsJoinInSubqueryWithLookupIndexWithInListPredicates
+required_capability: in_subquery
+
+FROM employees
+| WHERE languages IN (FROM languages_lookup | WHERE language_name IN ("French", "German") | KEEP language_code)
+| STATS cnt = COUNT(*) BY languages
+| SORT languages
+;
+
+cnt:long | languages:integer
+19       | 2
+18       | 4
+;
+
+existsJoinNotInSubqueryWithLookupIndexWithInListPredicates
+required_capability: in_subquery
+
+FROM employees
+| WHERE languages NOT IN (FROM languages_lookup | WHERE language_name IN ("French", "German") | KEEP language_code)
+| STATS cnt = COUNT(*) BY languages
+| SORT languages
+;
+
+cnt:long | languages:integer
+15       | 1
+17       | 3
+21       | 5
+;
+
+existsJoinInSubqueryWithLookupIndex
+required_capability: in_subquery
+
+FROM employees
+| WHERE languages IN (FROM languages_lookup | KEEP language_code)
+| STATS cnt = COUNT(*)
+;
+
+cnt:long
+69
+;
+
+existsJoinNotInSubqueryWithLookupIndex
+required_capability: in_subquery
+
+FROM employees
+| WHERE languages NOT IN (FROM languages_lookup | KEEP language_code)
+| STATS cnt = COUNT(*)
+;
+
+cnt:long
+21
+;
+
+existsJoinInSubqueryWithLookupIndexNoMatch
+required_capability: in_subquery
+
+FROM employees
+| WHERE languages IN (FROM languages_lookup | WHERE language_name == "notExists" | KEEP language_code)
+| STATS cnt = COUNT(*)
+;
+
+cnt:long
+0
+;

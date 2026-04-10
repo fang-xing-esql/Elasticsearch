@@ -11,6 +11,7 @@ import org.elasticsearch.TransportVersion;
 import org.elasticsearch.common.io.stream.NamedWriteableRegistry;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
+import org.elasticsearch.core.Nullable;
 import org.elasticsearch.xpack.esql.core.expression.Attribute;
 import org.elasticsearch.xpack.esql.core.expression.AttributeSet;
 import org.elasticsearch.xpack.esql.core.expression.Expression;
@@ -41,6 +42,9 @@ public class LookupJoinExec extends BinaryExec implements EstimatesRowSize {
      */
     private final List<Attribute> addedFields;
     private final Expression joinOnConditions;
+    /** null for regular lookup join, false for semi (IN), true for anti (NOT IN). Not serialized. */
+    @Nullable
+    private final Boolean existsJoinAnti;
     private List<Attribute> lazyOutput;
 
     public LookupJoinExec(
@@ -52,11 +56,25 @@ public class LookupJoinExec extends BinaryExec implements EstimatesRowSize {
         List<Attribute> addedFields,
         Expression joinOnConditions
     ) {
+        this(source, left, lookup, leftFields, rightFields, addedFields, joinOnConditions, null);
+    }
+
+    public LookupJoinExec(
+        Source source,
+        PhysicalPlan left,
+        PhysicalPlan lookup,
+        List<Attribute> leftFields,
+        List<Attribute> rightFields,
+        List<Attribute> addedFields,
+        Expression joinOnConditions,
+        @Nullable Boolean existsJoinAnti
+    ) {
         super(source, left, lookup);
         this.leftFields = leftFields;
         this.rightFields = rightFields;
         this.addedFields = addedFields;
         this.joinOnConditions = joinOnConditions;
+        this.existsJoinAnti = existsJoinAnti;
     }
 
     private LookupJoinExec(StreamInput in) throws IOException {
@@ -69,6 +87,7 @@ public class LookupJoinExec extends BinaryExec implements EstimatesRowSize {
         } else {
             this.joinOnConditions = null;
         }
+        this.existsJoinAnti = null;
     }
 
     @Override
@@ -150,9 +169,14 @@ public class LookupJoinExec extends BinaryExec implements EstimatesRowSize {
         return AttributeSet.EMPTY;
     }
 
+    @Nullable
+    public Boolean existsJoinAnti() {
+        return existsJoinAnti;
+    }
+
     @Override
     public LookupJoinExec replaceChildren(PhysicalPlan left, PhysicalPlan right) {
-        return new LookupJoinExec(source(), left, right, leftFields, rightFields, addedFields, joinOnConditions);
+        return new LookupJoinExec(source(), left, right, leftFields, rightFields, addedFields, joinOnConditions, existsJoinAnti);
     }
 
     @Override
