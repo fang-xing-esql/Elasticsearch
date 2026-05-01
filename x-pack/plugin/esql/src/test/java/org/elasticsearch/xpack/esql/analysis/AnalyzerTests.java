@@ -168,6 +168,7 @@ import static org.elasticsearch.xpack.esql.analysis.AnalyzerTestUtils.randomInfe
 import static org.elasticsearch.xpack.esql.analysis.AnalyzerTestUtils.unresolvedRelation;
 import static org.elasticsearch.xpack.esql.core.tree.Source.EMPTY;
 import static org.elasticsearch.xpack.esql.core.type.DataType.AGGREGATE_METRIC_DOUBLE;
+import static org.elasticsearch.xpack.esql.core.type.DataType.BOOLEAN;
 import static org.elasticsearch.xpack.esql.core.type.DataType.DATETIME;
 import static org.elasticsearch.xpack.esql.core.type.DataType.DATE_NANOS;
 import static org.elasticsearch.xpack.esql.core.type.DataType.DATE_PERIOD;
@@ -5307,6 +5308,180 @@ public class AnalyzerTests extends ESTestCase {
         assertEquals("test", subqueryIndex.indexPattern());
     }
 
+    public void testRowSubqueryInFrom() {
+        assumeTrue(
+            "Requires subquery with row as source command support",
+            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
+        );
+        LogicalPlan plan = basic().query("""
+            FROM test, (ROW x = 1)
+            | WHERE emp_no > 10000
+            """);
+
+        Limit limit = as(plan, Limit.class);
+        Filter filter = as(limit.child(), Filter.class);
+        GreaterThan greaterThan = as(filter.condition(), GreaterThan.class);
+        ReferenceAttribute empNo = as(greaterThan.left(), ReferenceAttribute.class);
+        assertEquals("emp_no", empNo.name());
+        Literal literal = as(greaterThan.right(), Literal.class);
+        assertEquals(10000, literal.value());
+        UnionAll unionAll = as(filter.child(), UnionAll.class);
+        assertEquals(2, unionAll.children().size());
+
+        // index leg: nullEval for the ROW alias `x`
+        Project indexProject = as(unionAll.children().get(0), Project.class);
+        assertEquals(12, indexProject.projections().size()); // 11 test fields + x
+        Eval indexEval = as(indexProject.child(), Eval.class);
+        List<Alias> indexAliases = indexEval.fields();
+        assertEquals(1, indexAliases.size());
+        assertEquals("x", indexAliases.get(0).name());
+        Literal indexNullLiteral = as(indexAliases.get(0).child(), Literal.class);
+        assertNull(indexNullLiteral.value());
+        assertEquals(INTEGER, indexNullLiteral.dataType());
+        EsRelation indexRelation = as(indexEval.child(), EsRelation.class);
+        assertEquals("test", indexRelation.indexPattern());
+
+        // ROW leg: nullEvals for the 11 test fields wrap a Subquery over Row[x = 1]
+        Project rowProject = as(unionAll.children().get(1), Project.class);
+        assertEquals(12, rowProject.projections().size());
+        Eval rowEval = as(rowProject.child(), Eval.class);
+        List<Alias> rowAliases = rowEval.fields();
+        assertEquals(11, rowAliases.size());
+        Subquery subquery = as(rowEval.child(), Subquery.class);
+        Row row = as(subquery.child(), Row.class);
+        assertEquals(1, row.fields().size());
+        assertEquals("x", row.fields().get(0).name());
+        Literal rowLiteral = as(row.fields().get(0).child(), Literal.class);
+        assertEquals(1, rowLiteral.value());
+    }
+
+    public void testRowSubqueryInFromWithProcessingCommandsInSubquery() {
+        assumeTrue(
+            "Requires subquery with row as source command support",
+            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
+        );
+        LogicalPlan plan = basic().query("""
+            FROM test, (ROW x = 1 | EVAL y = x + 1 | WHERE y > 0)
+            """);
+
+        Limit limit = as(plan, Limit.class);
+        UnionAll unionAll = as(limit.child(), UnionAll.class);
+        assertEquals(2, unionAll.children().size());
+
+        // index leg: nullEvals for the two ROW columns x and y
+        Project indexProject = as(unionAll.children().get(0), Project.class);
+        assertEquals(13, indexProject.projections().size()); // 11 test fields + x + y
+        Eval indexEval = as(indexProject.child(), Eval.class);
+        List<Alias> indexAliases = indexEval.fields();
+        assertEquals(2, indexAliases.size());
+        assertEquals("x", indexAliases.get(0).name());
+        assertEquals("y", indexAliases.get(1).name());
+        EsRelation indexRelation = as(indexEval.child(), EsRelation.class);
+        assertEquals("test", indexRelation.indexPattern());
+
+        // ROW leg: nullEvals for the 11 test fields wrap the analyzed subquery
+        Project rowProject = as(unionAll.children().get(1), Project.class);
+        assertEquals(13, rowProject.projections().size());
+        Eval rowEval = as(rowProject.child(), Eval.class);
+        List<Alias> rowAliases = rowEval.fields();
+        assertEquals(11, rowAliases.size());
+        Subquery subquery = as(rowEval.child(), Subquery.class);
+        Filter subqueryFilter = as(subquery.child(), Filter.class);
+        GreaterThan subqueryGt = as(subqueryFilter.condition(), GreaterThan.class);
+        ReferenceAttribute y = as(subqueryGt.left(), ReferenceAttribute.class);
+        assertEquals("y", y.name());
+        Eval subqueryEval = as(subqueryFilter.child(), Eval.class);
+        List<Alias> subqueryEvalFields = subqueryEval.fields();
+        assertEquals(1, subqueryEvalFields.size());
+        assertEquals("y", subqueryEvalFields.get(0).name());
+        Add add = as(subqueryEvalFields.get(0).child(), Add.class);
+        ReferenceAttribute addLeft = as(add.left(), ReferenceAttribute.class);
+        assertEquals("x", addLeft.name());
+        Row row = as(subqueryEval.child(), Row.class);
+        assertEquals(1, row.fields().size());
+        assertEquals("x", row.fields().get(0).name());
+    }
+
+    public void testRowSubqueryInFromWithoutMainIndexPattern() {
+        assumeTrue(
+            "Requires subquery with row as source command support",
+            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
+        );
+        LogicalPlan plan = basic().query("""
+            FROM (ROW x = 1 | EVAL y = x + 1)
+            | WHERE y > 0
+            """);
+
+        Limit limit = as(plan, Limit.class);
+        Filter filter = as(limit.child(), Filter.class);
+        GreaterThan greaterThan = as(filter.condition(), GreaterThan.class);
+        ReferenceAttribute y = as(greaterThan.left(), ReferenceAttribute.class);
+        assertEquals("y", y.name());
+        Eval eval = as(filter.child(), Eval.class);
+        List<Alias> evalFields = eval.fields();
+        assertEquals(1, evalFields.size());
+        assertEquals("y", evalFields.get(0).name());
+        Add add = as(evalFields.get(0).child(), Add.class);
+        ReferenceAttribute addLeft = as(add.left(), ReferenceAttribute.class);
+        assertEquals("x", addLeft.name());
+        Row row = as(eval.child(), Row.class);
+        assertEquals(1, row.fields().size());
+        assertEquals("x", row.fields().get(0).name());
+        Literal rowLiteral = as(row.fields().get(0).child(), Literal.class);
+        assertEquals(1, rowLiteral.value());
+    }
+
+    public void testMixedRowAndFromSubqueriesInFrom() {
+        assumeTrue(
+            "Requires subquery with row as source command support",
+            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
+        );
+        LogicalPlan plan = basic().addLanguages().query("""
+            FROM test
+            , (ROW x = 1)
+            , (FROM languages | WHERE language_code > 1)
+            """);
+
+        Limit limit = as(plan, Limit.class);
+        UnionAll unionAll = as(limit.child(), UnionAll.class);
+        assertEquals(3, unionAll.children().size());
+        // schema across all three legs: 11 test fields + 2 languages fields + ROW alias x = 14
+        int totalProjections = 14;
+
+        // index leg
+        Project indexProject = as(unionAll.children().get(0), Project.class);
+        assertEquals(totalProjections, indexProject.projections().size());
+        Eval indexEval = as(indexProject.child(), Eval.class);
+        // nullEvals: language_code, language_name, x
+        assertEquals(3, indexEval.fields().size());
+        EsRelation indexRelation = as(indexEval.child(), EsRelation.class);
+        assertEquals("test", indexRelation.indexPattern());
+
+        // ROW leg
+        Project rowProject = as(unionAll.children().get(1), Project.class);
+        assertEquals(totalProjections, rowProject.projections().size());
+        Eval rowEval = as(rowProject.child(), Eval.class);
+        // nullEvals: 11 test fields + 2 languages fields = 13
+        assertEquals(13, rowEval.fields().size());
+        Subquery rowSubquery = as(rowEval.child(), Subquery.class);
+        Row row = as(rowSubquery.child(), Row.class);
+        assertEquals("x", row.fields().get(0).name());
+
+        // FROM-subquery leg
+        Project fromProject = as(unionAll.children().get(2), Project.class);
+        assertEquals(totalProjections, fromProject.projections().size());
+        Eval fromEval = as(fromProject.child(), Eval.class);
+        // nullEvals: 11 test fields + ROW alias x = 12
+        assertEquals(12, fromEval.fields().size());
+        Subquery fromSubquery = as(fromEval.child(), Subquery.class);
+        Filter fromFilter = as(fromSubquery.child(), Filter.class);
+        GreaterThan fromGt = as(fromFilter.condition(), GreaterThan.class);
+        FieldAttribute languageCode = as(fromGt.left(), FieldAttribute.class);
+        assertEquals("language_code", languageCode.name());
+        EsRelation fromRelation = as(fromFilter.child(), EsRelation.class);
+        assertEquals("languages", fromRelation.indexPattern());
+    }
+
     public void testMultipleViewsInFrom() {
         assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.VIEWS_WITH_BRANCHING.isEnabled());
         LogicalPlan plan = basic().addLanguages()
@@ -6013,6 +6188,715 @@ public class AnalyzerTests extends ESTestCase {
         assertEquals(UNSUPPORTED, ua.dataType());
         assertThat(ua.originalTypes(), is(List.of(INTEGER.esType(), LONG.esType())));
         assertEquals("emp_no", ua.name());
+    }
+
+    /**
+     * Two ROW subqueries declare the same column name with conflicting types. The {@code UnionAll}
+     * output for the column collapses to an {@link UnsupportedAttribute} carrying both original types,
+     * mirroring {@link #testUnionAllWithConflictingTypesFromSubqueries()}.
+     *
+     * Limit[1000]
+     * \_Project[[!x]]
+     *   \_UnionAll[[!x]]
+     *     |_Project — Subquery → Row[[1[INTEGER] AS x]]
+     *     \_Project — Subquery → Row[[abc[KEYWORD] AS x]]
+     */
+    public void testUnionAllWithConflictingTypesFromRowSubqueries() {
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled());
+
+        LogicalPlan plan = analyzer().query("""
+            FROM (ROW x = 1), (ROW x = "abc")
+            | keep x
+            """);
+
+        Limit limit = as(plan, Limit.class);
+
+        Project project = as(limit.child(), Project.class);
+        var projections = project.projections();
+        assertThat(projections, hasSize(1));
+        UnsupportedAttribute ua = as(projections.getFirst(), UnsupportedAttribute.class);
+        assertEquals(UNSUPPORTED, ua.dataType());
+        assertThat(ua.originalTypes(), is(List.of(INTEGER.esType(), KEYWORD.esType())));
+        assertEquals("x", ua.name());
+
+        UnionAll unionAll = as(project.child(), UnionAll.class);
+        assertEquals(2, unionAll.children().size());
+
+        // Both legs share the structure Project → Eval[null[KEYWORD] AS x] → Subquery → Row
+        // The Eval is the conflict-resolution null injected by the analyzer to align the leg
+        // schema with the (UNSUPPORTED) union output.
+        for (int i = 0; i < 2; i++) {
+            Project legProject = as(unionAll.children().get(i), Project.class);
+            Eval legConflictEval = as(legProject.child(), Eval.class);
+            assertEquals(1, legConflictEval.fields().size());
+            assertEquals("x", legConflictEval.fields().get(0).name());
+            Literal legNull = as(legConflictEval.fields().get(0).child(), Literal.class);
+            assertNull(legNull.value());
+            assertEquals(KEYWORD, legNull.dataType());
+
+            Subquery legSubquery = as(legConflictEval.child(), Subquery.class);
+            Row row = as(legSubquery.child(), Row.class);
+            assertEquals(1, row.fields().size());
+            assertEquals("x", row.fields().get(0).name());
+        }
+    }
+
+    /**
+     * The conflicting-type column is not projected by the main query — it still surfaces as an
+     * {@link UnsupportedAttribute} in the {@code UnionAll} output.
+     */
+    public void testUnionAllWithConflictingTypesFromRowSubqueriesWithoutUsageInMainQuery() {
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled());
+
+        LogicalPlan plan = analyzer().query("""
+            FROM (ROW x = 1), (ROW x = "abc")
+            """);
+
+        Limit limit = as(plan, Limit.class);
+        UnionAll unionAll = as(limit.child(), UnionAll.class);
+        assertEquals(2, unionAll.children().size());
+
+        List<Attribute> output = unionAll.output();
+        Attribute xAttr = output.stream().filter(a -> "x".equals(a.name())).findFirst().orElseThrow();
+        UnsupportedAttribute ua = as(xAttr, UnsupportedAttribute.class);
+        assertEquals(UNSUPPORTED, ua.dataType());
+        assertThat(ua.originalTypes(), is(List.of(INTEGER.esType(), KEYWORD.esType())));
+        assertEquals("x", ua.name());
+    }
+
+    /**
+     * One ROW subquery and one FROM subquery declare the same column name with conflicting types.
+     * The {@code client_ip} attribute (IP from {@code sample_data}, INTEGER from the ROW) becomes an
+     * {@link UnsupportedAttribute} after the {@code UnionAll}.
+     */
+    public void testUnionAllWithConflictingTypesFromMixedRowAndFromSubqueries() {
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled());
+
+        LogicalPlan plan = sampleData().query("""
+            FROM (FROM sample_data), (ROW client_ip = 1)
+            | keep client_ip
+            """);
+
+        Limit limit = as(plan, Limit.class);
+
+        Project project = as(limit.child(), Project.class);
+        var projections = project.projections();
+        assertThat(projections, hasSize(1));
+        UnsupportedAttribute ua = as(projections.getFirst(), UnsupportedAttribute.class);
+        assertEquals(UNSUPPORTED, ua.dataType());
+        assertThat(ua.originalTypes(), is(List.of(IP.esType(), INTEGER.esType())));
+        assertEquals("client_ip", ua.name());
+
+        UnionAll unionAll = as(project.child(), UnionAll.class);
+        assertEquals(2, unionAll.children().size());
+
+        // FROM leg: Project → Eval[null[KEYWORD] AS client_ip] → Subquery → EsRelation[sample_data]
+        // The single Eval is the conflict-resolution null override; sample_data already provides
+        // every other column the union exposes, so there are no "missing field" nullEvals here.
+        Project fromProject = as(unionAll.children().get(0), Project.class);
+        Eval fromConflictEval = as(fromProject.child(), Eval.class);
+        assertEquals(1, fromConflictEval.fields().size());
+        assertEquals("client_ip", fromConflictEval.fields().get(0).name());
+        Literal fromNull = as(fromConflictEval.fields().get(0).child(), Literal.class);
+        assertNull(fromNull.value());
+        assertEquals(KEYWORD, fromNull.dataType());
+        Subquery fromSubquery = as(fromConflictEval.child(), Subquery.class);
+        EsRelation fromRelation = as(fromSubquery.child(), EsRelation.class);
+        assertEquals("sample_data", fromRelation.indexPattern());
+
+        // ROW leg: Project → Eval[null[KEYWORD] AS client_ip] → Eval[3 nullEvals for missing
+        // sample_data columns] → Subquery → Row[client_ip = 1]
+        Project rowProject = as(unionAll.children().get(1), Project.class);
+        Eval rowConflictEval = as(rowProject.child(), Eval.class);
+        assertEquals(1, rowConflictEval.fields().size());
+        assertEquals("client_ip", rowConflictEval.fields().get(0).name());
+        Literal rowNull = as(rowConflictEval.fields().get(0).child(), Literal.class);
+        assertNull(rowNull.value());
+        assertEquals(KEYWORD, rowNull.dataType());
+        Eval rowMissingEval = as(rowConflictEval.child(), Eval.class);
+        assertEquals(3, rowMissingEval.fields().size()); // @timestamp, event_duration, message
+        Subquery rowSubquery = as(rowMissingEval.child(), Subquery.class);
+        Row row = as(rowSubquery.child(), Row.class);
+        assertEquals("client_ip", row.fields().get(0).name());
+        Literal rowLiteral = as(row.fields().get(0).child(), Literal.class);
+        assertEquals(1, rowLiteral.value());
+        assertEquals(INTEGER, rowLiteral.dataType());
+    }
+
+    /**
+     * Main {@code FROM} index plus a ROW subquery with a conflicting column type. The ROW assigns a
+     * KEYWORD literal to {@code emp_no}, which is INTEGER in the {@code test} index, so {@code emp_no}
+     * becomes an {@link UnsupportedAttribute} after the {@code UnionAll}.
+     */
+    public void testUnionAllWithConflictingTypesFromRowSubqueryAndMainIndex() {
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled());
+
+        LogicalPlan plan = basic().query("""
+            FROM test, (ROW emp_no = "abc")
+            | keep emp_no
+            """);
+
+        Limit limit = as(plan, Limit.class);
+
+        Project project = as(limit.child(), Project.class);
+        var projections = project.projections();
+        assertThat(projections, hasSize(1));
+        UnsupportedAttribute ua = as(projections.getFirst(), UnsupportedAttribute.class);
+        assertEquals(UNSUPPORTED, ua.dataType());
+        assertThat(ua.originalTypes(), is(List.of(INTEGER.esType(), KEYWORD.esType())));
+        assertEquals("emp_no", ua.name());
+
+        UnionAll unionAll = as(project.child(), UnionAll.class);
+        assertEquals(2, unionAll.children().size());
+
+        // index leg: Project → Eval[null[KEYWORD] AS emp_no] → EsRelation[test]
+        // No "missing field" Eval is needed because the only ROW-introduced column (emp_no) is
+        // already in the index and is the conflicting one (nulled out above).
+        Project indexProject = as(unionAll.children().get(0), Project.class);
+        Eval indexConflictEval = as(indexProject.child(), Eval.class);
+        assertEquals(1, indexConflictEval.fields().size());
+        assertEquals("emp_no", indexConflictEval.fields().get(0).name());
+        Literal indexNull = as(indexConflictEval.fields().get(0).child(), Literal.class);
+        assertNull(indexNull.value());
+        assertEquals(KEYWORD, indexNull.dataType());
+        EsRelation indexRelation = as(indexConflictEval.child(), EsRelation.class);
+        assertEquals("test", indexRelation.indexPattern());
+
+        // ROW leg: Project → Eval[null[KEYWORD] AS emp_no] → Eval[10 nullEvals for missing
+        // test fields] → Subquery → Row[emp_no = "abc"]
+        Project rowProject = as(unionAll.children().get(1), Project.class);
+        Eval rowConflictEval = as(rowProject.child(), Eval.class);
+        assertEquals(1, rowConflictEval.fields().size());
+        assertEquals("emp_no", rowConflictEval.fields().get(0).name());
+        Literal rowNull = as(rowConflictEval.fields().get(0).child(), Literal.class);
+        assertNull(rowNull.value());
+        assertEquals(KEYWORD, rowNull.dataType());
+        Eval rowMissingEval = as(rowConflictEval.child(), Eval.class);
+        assertEquals(10, rowMissingEval.fields().size()); // every test field except emp_no
+        Subquery rowSubquery = as(rowMissingEval.child(), Subquery.class);
+        Row row = as(rowSubquery.child(), Row.class);
+        assertEquals("emp_no", row.fields().get(0).name());
+        Literal rowLiteral = as(row.fields().get(0).child(), Literal.class);
+        assertEquals(BytesRefs.toBytesRef("abc"), rowLiteral.value());
+        assertEquals(KEYWORD, rowLiteral.dataType());
+    }
+
+    /**
+     * Conflicting ROW vs index column types are resolved by an explicit cast <strong>inside</strong>
+     * the ROW subquery so the UnionAll legs agree on the type and no {@link UnsupportedAttribute}
+     * is produced. Mirrors {@link #testMixedDataTypesInSubquery()} but with a ROW source.
+     */
+    public void testMixedDataTypesInRowSubqueryWithExplicitCastingInside() {
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled());
+        LogicalPlan plan = basic().query("""
+            FROM test, (ROW emp_no = "1" | EVAL emp_no = emp_no::integer)
+            | WHERE emp_no > 0
+            """);
+
+        Limit limit = as(plan, Limit.class);
+        Filter filter = as(limit.child(), Filter.class);
+        GreaterThan greaterThan = as(filter.condition(), GreaterThan.class);
+        ReferenceAttribute empNo = as(greaterThan.left(), ReferenceAttribute.class);
+        assertEquals("emp_no", empNo.name());
+        assertEquals(INTEGER, empNo.dataType());
+
+        UnionAll unionAll = as(filter.child(), UnionAll.class);
+        // No UnsupportedAttribute in the union output: the inside cast aligned the ROW emp_no
+        // type with the index emp_no type (INTEGER).
+        for (Attribute attr : unionAll.output()) {
+            assertFalse("Unexpected UnsupportedAttribute for [" + attr.name() + "]", attr instanceof UnsupportedAttribute);
+        }
+        Attribute empNoOut = unionAll.output().stream().filter(a -> "emp_no".equals(a.name())).findFirst().orElseThrow();
+        assertEquals(INTEGER, empNoOut.dataType());
+
+        assertEquals(2, unionAll.children().size());
+
+        // index leg: no extra null/cast Evals (no missing columns introduced by the ROW)
+        Project indexProject = as(unionAll.children().get(0), Project.class);
+        EsRelation indexRelation = as(indexProject.child(), EsRelation.class);
+        assertEquals("test", indexRelation.indexPattern());
+
+        // ROW leg: Project → Eval[10 nullEvals for missing test columns]
+        // → Subquery → Eval[emp_no = emp_no::integer] → Row[emp_no = "1"]
+        Project rowProject = as(unionAll.children().get(1), Project.class);
+        Eval rowMissingEval = as(rowProject.child(), Eval.class);
+        assertEquals(10, rowMissingEval.fields().size());
+        Subquery rowSubquery = as(rowMissingEval.child(), Subquery.class);
+        Eval rowExplicitCastEval = as(rowSubquery.child(), Eval.class);
+        assertEquals(1, rowExplicitCastEval.fields().size());
+        Alias castAlias = rowExplicitCastEval.fields().get(0);
+        assertEquals("emp_no", castAlias.name());
+        ToInteger toInteger = as(castAlias.child(), ToInteger.class);
+        ReferenceAttribute toIntegerArg = as(toInteger.field(), ReferenceAttribute.class);
+        assertEquals("emp_no", toIntegerArg.name());
+        assertEquals(KEYWORD, toIntegerArg.dataType());
+        Row row = as(rowExplicitCastEval.child(), Row.class);
+        assertEquals(1, row.fields().size());
+        assertEquals("emp_no", row.fields().get(0).name());
+        Literal rowLiteral = as(row.fields().get(0).child(), Literal.class);
+        assertEquals(BytesRefs.toBytesRef("1"), rowLiteral.value());
+        assertEquals(KEYWORD, rowLiteral.dataType());
+    }
+
+    /**
+     * The ROW provides a matching type so the UnionAll has no conflict; the explicit cast happens
+     * in the main query and the analyzer pushes it down as an {@code Eval[TOLONG(emp_no) AS
+     * $$emp_no$converted_to$long]} into each leg of the UnionAll.
+     */
+    public void testMixedDataTypesInRowSubqueryWithExplicitCastingOutside() {
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled());
+        LogicalPlan plan = basic().query("""
+            FROM test, (ROW emp_no = 1)
+            | EVAL emp_no = emp_no::long
+            | WHERE emp_no > 1000
+            """);
+
+        // Top-level Project drops the internal $$emp_no$converted_to$long reference from output.
+        Project project = as(plan, Project.class);
+        Limit limit = as(project.child(), Limit.class);
+        Filter filter = as(limit.child(), Filter.class);
+        GreaterThan greaterThan = as(filter.condition(), GreaterThan.class);
+        ReferenceAttribute empNo = as(greaterThan.left(), ReferenceAttribute.class);
+        assertEquals("emp_no", empNo.name());
+        assertEquals(LONG, empNo.dataType());
+
+        // Outer Eval holds the user's `EVAL emp_no = emp_no::long` aliasing the pushed-down ref.
+        Eval outerEval = as(filter.child(), Eval.class);
+        assertEquals(1, outerEval.fields().size());
+        Alias outerAlias = outerEval.fields().get(0);
+        assertEquals("emp_no", outerAlias.name());
+        ReferenceAttribute outerRef = as(outerAlias.child(), ReferenceAttribute.class);
+        assertEquals("$$emp_no$converted_to$long", outerRef.name());
+        assertEquals(LONG, outerRef.dataType());
+
+        UnionAll unionAll = as(outerEval.child(), UnionAll.class);
+        for (Attribute attr : unionAll.output()) {
+            assertFalse("Unexpected UnsupportedAttribute for [" + attr.name() + "]", attr instanceof UnsupportedAttribute);
+        }
+        assertEquals(2, unionAll.children().size());
+
+        // index leg: Project → Eval[TOLONG(emp_no) AS $$converted] → EsRelation[test]
+        Project indexProject = as(unionAll.children().get(0), Project.class);
+        Eval indexCastEval = as(indexProject.child(), Eval.class);
+        assertEquals(1, indexCastEval.fields().size());
+        assertEquals("$$emp_no$converted_to$long", indexCastEval.fields().get(0).name());
+        ToLong indexToLong = as(indexCastEval.fields().get(0).child(), ToLong.class);
+        FieldAttribute indexEmpNo = as(indexToLong.field(), FieldAttribute.class);
+        assertEquals("emp_no", indexEmpNo.name());
+        assertEquals(INTEGER, indexEmpNo.dataType());
+        EsRelation indexRelation = as(indexCastEval.child(), EsRelation.class);
+        assertEquals("test", indexRelation.indexPattern());
+
+        // ROW leg: Project → Eval[TOLONG(emp_no) AS $$converted]
+        // → Eval[10 nullEvals] → Subquery → Row[emp_no = 1]
+        Project rowProject = as(unionAll.children().get(1), Project.class);
+        Eval rowCastEval = as(rowProject.child(), Eval.class);
+        assertEquals(1, rowCastEval.fields().size());
+        assertEquals("$$emp_no$converted_to$long", rowCastEval.fields().get(0).name());
+        ToLong rowToLong = as(rowCastEval.fields().get(0).child(), ToLong.class);
+        ReferenceAttribute rowEmpNoRef = as(rowToLong.field(), ReferenceAttribute.class);
+        assertEquals("emp_no", rowEmpNoRef.name());
+        assertEquals(INTEGER, rowEmpNoRef.dataType());
+        Eval rowMissingEval = as(rowCastEval.child(), Eval.class);
+        assertEquals(10, rowMissingEval.fields().size());
+        Subquery rowSubquery = as(rowMissingEval.child(), Subquery.class);
+        Row row = as(rowSubquery.child(), Row.class);
+        Literal rowLiteral = as(row.fields().get(0).child(), Literal.class);
+        assertEquals(1, rowLiteral.value());
+        assertEquals(INTEGER, rowLiteral.dataType());
+    }
+
+    /**
+     * Combination of {@link #testMixedDataTypesInRowSubqueryWithExplicitCastingInside()} and
+     * {@link #testMixedDataTypesInRowSubqueryWithExplicitCastingOutside()}: cast inside the ROW
+     * subquery to align the type, then add another explicit cast in the main query that gets
+     * pushed down into each UnionAll leg as a {@code $$emp_no$converted_to$long} reference.
+     */
+    public void testMixedDataTypesInRowSubqueryWithExplicitCastingInsideAndOutside() {
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled());
+        LogicalPlan plan = basic().query("""
+            FROM test, (ROW emp_no = "1" | EVAL emp_no = emp_no::integer)
+            | EVAL emp_no_long = emp_no::long
+            | WHERE emp_no_long > 0
+            """);
+
+        Project project = as(plan, Project.class);
+        Limit limit = as(project.child(), Limit.class);
+        Filter filter = as(limit.child(), Filter.class);
+        GreaterThan greaterThan = as(filter.condition(), GreaterThan.class);
+        ReferenceAttribute empNoLong = as(greaterThan.left(), ReferenceAttribute.class);
+        assertEquals("emp_no_long", empNoLong.name());
+        assertEquals(LONG, empNoLong.dataType());
+
+        // Outer Eval: emp_no_long = $$emp_no$converted_to$long (the pushed-down ref)
+        Eval outerEval = as(filter.child(), Eval.class);
+        assertEquals(1, outerEval.fields().size());
+        Alias outerAlias = outerEval.fields().get(0);
+        assertEquals("emp_no_long", outerAlias.name());
+        ReferenceAttribute outerRef = as(outerAlias.child(), ReferenceAttribute.class);
+        assertEquals("$$emp_no$converted_to$long", outerRef.name());
+        assertEquals(LONG, outerRef.dataType());
+
+        UnionAll unionAll = as(outerEval.child(), UnionAll.class);
+        Attribute empNoOut = unionAll.output().stream().filter(a -> "emp_no".equals(a.name())).findFirst().orElseThrow();
+        assertEquals(INTEGER, empNoOut.dataType());
+        assertEquals(2, unionAll.children().size());
+
+        // index leg: Project → Eval[TOLONG(emp_no) AS $$converted] → EsRelation[test]
+        Project indexProject = as(unionAll.children().get(0), Project.class);
+        Eval indexCastEval = as(indexProject.child(), Eval.class);
+        assertEquals("$$emp_no$converted_to$long", indexCastEval.fields().get(0).name());
+        ToLong indexToLong = as(indexCastEval.fields().get(0).child(), ToLong.class);
+        FieldAttribute indexEmpNo = as(indexToLong.field(), FieldAttribute.class);
+        assertEquals("emp_no", indexEmpNo.name());
+        assertEquals(INTEGER, indexEmpNo.dataType());
+        EsRelation indexRelation = as(indexCastEval.child(), EsRelation.class);
+        assertEquals("test", indexRelation.indexPattern());
+
+        // ROW leg: Project → Eval[TOLONG(emp_no) AS $$converted]
+        // → Eval[10 nullEvals]
+        // → Subquery → Eval[emp_no = emp_no::integer] → Row[emp_no = "1"]
+        Project rowProject = as(unionAll.children().get(1), Project.class);
+        Eval rowOuterCastEval = as(rowProject.child(), Eval.class);
+        assertEquals("$$emp_no$converted_to$long", rowOuterCastEval.fields().get(0).name());
+        as(rowOuterCastEval.fields().get(0).child(), ToLong.class);
+        Eval rowMissingEval = as(rowOuterCastEval.child(), Eval.class);
+        assertEquals(10, rowMissingEval.fields().size());
+        Subquery rowSubquery = as(rowMissingEval.child(), Subquery.class);
+        Eval rowInsideCastEval = as(rowSubquery.child(), Eval.class);
+        assertEquals(1, rowInsideCastEval.fields().size());
+        ToInteger toInteger = as(rowInsideCastEval.fields().get(0).child(), ToInteger.class);
+        ReferenceAttribute toIntegerArg = as(toInteger.field(), ReferenceAttribute.class);
+        assertEquals("emp_no", toIntegerArg.name());
+        assertEquals(KEYWORD, toIntegerArg.dataType());
+        Row row = as(rowInsideCastEval.child(), Row.class);
+        Literal rowLiteral = as(row.fields().get(0).child(), Literal.class);
+        assertEquals(BytesRefs.toBytesRef("1"), rowLiteral.value());
+        assertEquals(KEYWORD, rowLiteral.dataType());
+    }
+
+    /**
+     * Multiple ROW subqueries each provide the same column with a different literal type, but each
+     * one casts the column to a common type inside its own subquery so the {@code UnionAll} has no
+     * type conflict and produces a single resolved {@link ReferenceAttribute}.
+     */
+    public void testMultipleRowSubqueriesWithExplicitCastingInside() {
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled());
+        LogicalPlan plan = analyzer().query("""
+            FROM (ROW x = "1" | EVAL x = x::integer)
+               , (ROW x = 1.5 | EVAL x = x::integer)
+               , (ROW x = 3)
+            """);
+
+        Limit limit = as(plan, Limit.class);
+        UnionAll unionAll = as(limit.child(), UnionAll.class);
+        assertEquals(3, unionAll.children().size());
+
+        // The three legs all expose `x` as INTEGER — no UnsupportedAttribute in the union output.
+        Attribute xAttr = unionAll.output().stream().filter(a -> "x".equals(a.name())).findFirst().orElseThrow();
+        ReferenceAttribute xRef = as(xAttr, ReferenceAttribute.class);
+        assertEquals(INTEGER, xRef.dataType());
+
+        // Leg 0: KEYWORD literal cast to INTEGER inside.
+        Project leg0Project = as(unionAll.children().get(0), Project.class);
+        Subquery leg0Subquery = as(leg0Project.child(), Subquery.class);
+        Eval leg0Cast = as(leg0Subquery.child(), Eval.class);
+        as(leg0Cast.fields().get(0).child(), ToInteger.class);
+        Row leg0Row = as(leg0Cast.child(), Row.class);
+        Literal leg0Literal = as(leg0Row.fields().get(0).child(), Literal.class);
+        assertEquals(KEYWORD, leg0Literal.dataType());
+
+        // Leg 1: DOUBLE literal cast to INTEGER inside.
+        Project leg1Project = as(unionAll.children().get(1), Project.class);
+        Subquery leg1Subquery = as(leg1Project.child(), Subquery.class);
+        Eval leg1Cast = as(leg1Subquery.child(), Eval.class);
+        as(leg1Cast.fields().get(0).child(), ToInteger.class);
+        Row leg1Row = as(leg1Cast.child(), Row.class);
+        Literal leg1Literal = as(leg1Row.fields().get(0).child(), Literal.class);
+        assertEquals(DOUBLE, leg1Literal.dataType());
+
+        // Leg 2: INTEGER literal, no cast required.
+        Project leg2Project = as(unionAll.children().get(2), Project.class);
+        Subquery leg2Subquery = as(leg2Project.child(), Subquery.class);
+        Row leg2Row = as(leg2Subquery.child(), Row.class);
+        Literal leg2Literal = as(leg2Row.fields().get(0).child(), Literal.class);
+        assertEquals(INTEGER, leg2Literal.dataType());
+        assertEquals(3, leg2Literal.value());
+    }
+
+    /**
+     * Multiple ROW subqueries declaring the same columns with matching types — the {@code UnionAll}
+     * preserves the column types and there are no {@link UnsupportedAttribute}s in the output.
+     */
+    public void testUnionAllWithMatchingTypesFromMultipleRowSubqueries() {
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled());
+
+        LogicalPlan plan = analyzer().query("""
+            FROM (ROW a = 1, b = "x"), (ROW a = 2, b = "y"), (ROW a = 3, b = "z")
+            """);
+
+        Limit limit = as(plan, Limit.class);
+        UnionAll unionAll = as(limit.child(), UnionAll.class);
+        assertEquals(3, unionAll.children().size());
+
+        // The union output exposes both columns with their (compatible) types and no UnsupportedAttribute
+        List<Attribute> output = unionAll.output();
+        Attribute aAttr = output.stream().filter(attr -> "a".equals(attr.name())).findFirst().orElseThrow();
+        ReferenceAttribute aRef = as(aAttr, ReferenceAttribute.class);
+        assertEquals(INTEGER, aRef.dataType());
+        Attribute bAttr = output.stream().filter(attr -> "b".equals(attr.name())).findFirst().orElseThrow();
+        ReferenceAttribute bRef = as(bAttr, ReferenceAttribute.class);
+        assertEquals(KEYWORD, bRef.dataType());
+
+        for (int i = 0; i < 3; i++) {
+            Project legProject = as(unionAll.children().get(i), Project.class);
+            Subquery legSubquery = as(legProject.child(), Subquery.class);
+            Row row = as(legSubquery.child(), Row.class);
+            assertEquals(2, row.fields().size());
+            assertEquals("a", row.fields().get(0).name());
+            assertEquals("b", row.fields().get(1).name());
+            Literal aLiteral = as(row.fields().get(0).child(), Literal.class);
+            assertEquals(INTEGER, aLiteral.dataType());
+            assertEquals(i + 1, aLiteral.value());
+            Literal bLiteral = as(row.fields().get(1).child(), Literal.class);
+            assertEquals(KEYWORD, bLiteral.dataType());
+        }
+    }
+
+    /**
+     * Two ROW subqueries declaring the same field names with the same data types but with the
+     * scalar/multivalue shape swapped between legs. Because the per-field {@link DataType}s match
+     * across both legs, the {@code UnionAll} output exposes plain {@link ReferenceAttribute}s and
+     * each leg keeps its {@link Row} unchanged below a {@code Project → Subquery} wrapper.
+     */
+    public void testTwoRowSubqueriesEachWithMixedScalarAndMultivalueFieldsMatchingTypes() {
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled());
+
+        LogicalPlan plan = analyzer().query("""
+            FROM (ROW a = 1, b = [10, 20]), (ROW a = [100, 200], b = 1)
+            """);
+
+        Limit limit = as(plan, Limit.class);
+        UnionAll unionAll = as(limit.child(), UnionAll.class);
+        assertEquals(2, unionAll.children().size());
+
+        // Both fields are INTEGER on both legs — the union output carries no UnsupportedAttribute.
+        Attribute aAttr = unionAll.output().stream().filter(attr -> "a".equals(attr.name())).findFirst().orElseThrow();
+        assertEquals(INTEGER, as(aAttr, ReferenceAttribute.class).dataType());
+        Attribute bAttr = unionAll.output().stream().filter(attr -> "b".equals(attr.name())).findFirst().orElseThrow();
+        assertEquals(INTEGER, as(bAttr, ReferenceAttribute.class).dataType());
+
+        // Leg 1: scalar a, multivalue b.
+        Project leg0Project = as(unionAll.children().get(0), Project.class);
+        Subquery leg0Subquery = as(leg0Project.child(), Subquery.class);
+        Row leg0Row = as(leg0Subquery.child(), Row.class);
+        assertEquals(2, leg0Row.fields().size());
+        assertEquals("a", leg0Row.fields().get(0).name());
+        Literal leg0A = as(leg0Row.fields().get(0).child(), Literal.class);
+        assertEquals(INTEGER, leg0A.dataType());
+        assertEquals(1, leg0A.value());
+        assertEquals("b", leg0Row.fields().get(1).name());
+        Literal leg0B = as(leg0Row.fields().get(1).child(), Literal.class);
+        assertEquals(INTEGER, leg0B.dataType());
+        assertEquals(List.of(10, 20), leg0B.value());
+
+        // Leg 2: multivalue a, scalar b.
+        Project leg1Project = as(unionAll.children().get(1), Project.class);
+        Subquery leg1Subquery = as(leg1Project.child(), Subquery.class);
+        Row leg1Row = as(leg1Subquery.child(), Row.class);
+        assertEquals(2, leg1Row.fields().size());
+        Literal leg1A = as(leg1Row.fields().get(0).child(), Literal.class);
+        assertEquals(INTEGER, leg1A.dataType());
+        assertEquals(List.of(100, 200), leg1A.value());
+        Literal leg1B = as(leg1Row.fields().get(1).child(), Literal.class);
+        assertEquals(INTEGER, leg1B.dataType());
+        assertEquals(1, leg1B.value());
+    }
+
+    /**
+     * Two ROW subqueries declaring the same field names with conflicting data types and with the
+     * scalar/multivalue shape swapped between legs. Both fields collapse to
+     * {@link UnsupportedAttribute} in the {@code UnionAll} output, mirroring the behaviour of
+     * {@link #testUnionAllWithConflictingTypesFromRowSubqueries()} for two columns at once.
+     */
+    public void testTwoRowSubqueriesEachWithMixedScalarAndMultivalueFieldsConflictingTypes() {
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled());
+
+        LogicalPlan plan = analyzer().query("""
+            FROM (ROW a = 1, b = ["cat", "dog"]), (ROW a = [1.5, 2.5], b = true)
+            | KEEP a, b
+            """);
+
+        Limit limit = as(plan, Limit.class);
+        Project project = as(limit.child(), Project.class);
+        var projections = project.projections();
+        assertThat(projections, hasSize(2));
+        UnsupportedAttribute aUa = as(projections.get(0), UnsupportedAttribute.class);
+        assertEquals("a", aUa.name());
+        assertEquals(UNSUPPORTED, aUa.dataType());
+        // Original types are reported in leg order: leg 0 declares INTEGER, leg 1 declares DOUBLE.
+        assertThat(aUa.originalTypes(), is(List.of(INTEGER.esType(), DOUBLE.esType())));
+        UnsupportedAttribute bUa = as(projections.get(1), UnsupportedAttribute.class);
+        assertEquals("b", bUa.name());
+        assertEquals(UNSUPPORTED, bUa.dataType());
+        assertThat(bUa.originalTypes(), is(List.of(KEYWORD.esType(), BOOLEAN.esType())));
+
+        UnionAll unionAll = as(project.child(), UnionAll.class);
+        assertEquals(2, unionAll.children().size());
+
+        // Both legs share the structure Project → Eval[null AS a, null AS b] → Subquery → Row.
+        // The Eval is the conflict-resolution null injected by the analyzer to align each leg's
+        // schema with the (UNSUPPORTED) union output.
+        for (int i = 0; i < 2; i++) {
+            Project legProject = as(unionAll.children().get(i), Project.class);
+            Eval legConflictEval = as(legProject.child(), Eval.class);
+            assertEquals(2, legConflictEval.fields().size());
+            for (Alias alias : legConflictEval.fields()) {
+                Literal nullLit = as(alias.child(), Literal.class);
+                assertNull(nullLit.value());
+            }
+
+            Subquery legSubquery = as(legConflictEval.child(), Subquery.class);
+            Row row = as(legSubquery.child(), Row.class);
+            assertEquals(2, row.fields().size());
+            assertEquals("a", row.fields().get(0).name());
+            assertEquals("b", row.fields().get(1).name());
+        }
+    }
+
+    /**
+     * Three ROW subqueries with disjoint field names and a different scalar/multivalue mix per leg
+     * across various data types. The analyzer aligns the schemas by injecting an {@link Eval} of
+     * null literals on each leg for the four fields the leg does not declare, and the
+     * {@code UnionAll} output carries six plain {@link ReferenceAttribute}s — no
+     * {@link UnsupportedAttribute}s, since every field name is unique to one leg.
+     */
+    public void testThreeRowSubqueriesWithDisjointFieldNamesMixedScalarAndMultivalue() {
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled());
+
+        LogicalPlan plan = analyzer().query("""
+            FROM (ROW a = 1, b = [10, 20, 30])
+               , (ROW c = "hello", d = [true, false])
+               , (ROW e = [1.5, -2.5], f = 100)
+            """);
+
+        Limit limit = as(plan, Limit.class);
+        UnionAll unionAll = as(limit.child(), UnionAll.class);
+        assertEquals(3, unionAll.children().size());
+
+        // Six distinct fields, no conflicts.
+        List<Attribute> output = unionAll.output();
+        assertEquals(6, output.size());
+        assertAttributeType(output, "a", INTEGER);
+        assertAttributeType(output, "b", INTEGER);
+        assertAttributeType(output, "c", KEYWORD);
+        assertAttributeType(output, "d", BOOLEAN);
+        assertAttributeType(output, "e", DOUBLE);
+        assertAttributeType(output, "f", INTEGER);
+        for (Attribute attr : output) {
+            assertFalse("Unexpected UnsupportedAttribute for [" + attr.name() + "]", attr instanceof UnsupportedAttribute);
+        }
+
+        // Leg 0 (a, b) — nullEvals for c, d, e, f.
+        assertRowLegWithNullEvals(unionAll.children().get(0), List.of("a", "b"), List.of(1, List.of(10, 20, 30)));
+        // Leg 1 (c, d) — nullEvals for a, b, e, f.
+        assertRowLegWithNullEvals(unionAll.children().get(1), List.of("c", "d"), List.of(new BytesRef("hello"), List.of(true, false)));
+        // Leg 2 (e, f) — nullEvals for a, b, c, d.
+        assertRowLegWithNullEvals(unionAll.children().get(2), List.of("e", "f"), List.of(List.of(1.5, -2.5), 100));
+    }
+
+    /**
+     * An index pattern combined with two ROW subqueries that declare the same field names with the
+     * scalar/multivalue shape swapped and with conflicting element types. Because the index has
+     * neither {@code x} nor {@code y}, those fields are introduced solely by the two ROW legs; the
+     * conflicting types between the ROWs collapse to {@link UnsupportedAttribute}s in the union
+     * output, while the index leg gets null evals for both.
+     */
+    public void testIndexPatternWithMixedRowSubqueriesAndConflictingTypes() {
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled());
+
+        LogicalPlan plan = basic().query("""
+            FROM test, (ROW x = 1, y = ["cat", "dog"]), (ROW x = [1.5, -2.5], y = true)
+            """);
+
+        Limit limit = as(plan, Limit.class);
+        UnionAll unionAll = as(limit.child(), UnionAll.class);
+        assertEquals(3, unionAll.children().size());
+
+        // Schema: 11 test fields + x + y = 13. x and y are UnsupportedAttribute due to type
+        // conflicts between the two ROWs (INTEGER vs DOUBLE for x, KEYWORD vs BOOLEAN for y).
+        List<Attribute> output = unionAll.output();
+        assertEquals(13, output.size());
+        // Reported in leg order: the index leg synthesises a null x of the first ROW's type
+        // (INTEGER), then ROW 1 contributes INTEGER and ROW 2 contributes DOUBLE.
+        Attribute xAttr = output.stream().filter(a -> "x".equals(a.name())).findFirst().orElseThrow();
+        UnsupportedAttribute xUa = as(xAttr, UnsupportedAttribute.class);
+        assertEquals(UNSUPPORTED, xUa.dataType());
+        assertThat(xUa.originalTypes(), is(List.of(INTEGER.esType(), INTEGER.esType(), DOUBLE.esType())));
+        // Same shape for y: KEYWORD null on the index leg, KEYWORD from ROW 1, BOOLEAN from ROW 2.
+        Attribute yAttr = output.stream().filter(a -> "y".equals(a.name())).findFirst().orElseThrow();
+        UnsupportedAttribute yUa = as(yAttr, UnsupportedAttribute.class);
+        assertEquals(UNSUPPORTED, yUa.dataType());
+        assertThat(yUa.originalTypes(), is(List.of(KEYWORD.esType(), KEYWORD.esType(), BOOLEAN.esType())));
+
+        // Index leg: Project → Eval[null[KEYWORD] AS x, null[KEYWORD] AS y] ← conflict-resolution
+        // → Eval[null[INTEGER] AS x, null[KEYWORD] AS y] ← missing-field fill
+        // → EsRelation[test].
+        Project indexProject = as(unionAll.children().get(0), Project.class);
+        Eval indexConflictEval = as(indexProject.child(), Eval.class);
+        assertEquals(2, indexConflictEval.fields().size());
+        Eval indexMissingEval = as(indexConflictEval.child(), Eval.class);
+        assertEquals(2, indexMissingEval.fields().size());
+        EsRelation indexRelation = as(indexMissingEval.child(), EsRelation.class);
+        assertEquals("test", indexRelation.indexPattern());
+
+        // ROW legs: Project → Eval[conflict-resolution null for x, y]
+        // → Eval[11 nullEvals for the test-only fields]
+        // → Subquery → Row.
+        for (int i = 1; i < 3; i++) {
+            Project rowLegProject = as(unionAll.children().get(i), Project.class);
+            Eval rowConflictEval = as(rowLegProject.child(), Eval.class);
+            assertEquals(2, rowConflictEval.fields().size()); // x, y conflict-resolution nulls
+            Eval rowMissingEval = as(rowConflictEval.child(), Eval.class);
+            assertEquals(11, rowMissingEval.fields().size()); // 11 test-index fields nulled
+            Subquery rowLegSubquery = as(rowMissingEval.child(), Subquery.class);
+            Row row = as(rowLegSubquery.child(), Row.class);
+            assertEquals(2, row.fields().size());
+            assertEquals("x", row.fields().get(0).name());
+            assertEquals("y", row.fields().get(1).name());
+        }
+    }
+
+    /**
+     * Helper: asserts the {@link UnionAll} output contains an attribute with the given name and
+     * data type; the attribute is expected to be a {@link ReferenceAttribute} (not an
+     * {@link UnsupportedAttribute}).
+     */
+    private static void assertAttributeType(List<Attribute> output, String name, DataType expected) {
+        Attribute attr = output.stream().filter(a -> name.equals(a.name())).findFirst().orElseThrow();
+        ReferenceAttribute ref = as(attr, ReferenceAttribute.class);
+        assertEquals("Wrong type for [" + name + "]", expected, ref.dataType());
+    }
+
+    /**
+     * Helper: asserts a {@link UnionAll} leg has the shape
+     * {@code Project → Eval[<nullEvals>] → Subquery → Row[<expectedFieldNames>]} with the given
+     * literal values for each ROW field. Used by
+     * {@link #testThreeRowSubqueriesWithDisjointFieldNamesMixedScalarAndMultivalue()}.
+     */
+    private static void assertRowLegWithNullEvals(LogicalPlan legPlan, List<String> rowFieldNames, List<Object> rowFieldValues) {
+        Project legProject = as(legPlan, Project.class);
+        Eval legEval = as(legProject.child(), Eval.class);
+        // The other 4 fields not in this leg are null-filled.
+        assertEquals(4, legEval.fields().size());
+        Subquery legSubquery = as(legEval.child(), Subquery.class);
+        Row row = as(legSubquery.child(), Row.class);
+        assertEquals(rowFieldNames.size(), row.fields().size());
+        for (int i = 0; i < rowFieldNames.size(); i++) {
+            assertEquals(rowFieldNames.get(i), row.fields().get(i).name());
+            Literal literal = as(row.fields().get(i).child(), Literal.class);
+            assertEquals(rowFieldValues.get(i), literal.value());
+        }
     }
 
     public void testSubqueryWithTimeSeriesIndexInMainQuery() {

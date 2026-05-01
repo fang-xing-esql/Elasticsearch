@@ -122,7 +122,12 @@ indexPatternOrSubquery
     ;
 
 subquery
-    : LP fromCommand (PIPE processingCommand)* RP
+    : LP subquerySourceCommand (PIPE processingCommand)* RP
+    ;
+
+subquerySourceCommand
+    : fromCommand
+    | {this.isDevVersion()}? rowCommand
     ;
 
 indexPattern

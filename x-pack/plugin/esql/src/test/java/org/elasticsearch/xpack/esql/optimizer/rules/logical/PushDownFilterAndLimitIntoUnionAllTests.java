@@ -38,6 +38,7 @@ import org.elasticsearch.xpack.esql.plan.logical.Subquery;
 import org.elasticsearch.xpack.esql.plan.logical.TopN;
 import org.elasticsearch.xpack.esql.plan.logical.UnionAll;
 import org.elasticsearch.xpack.esql.plan.logical.join.Join;
+import org.elasticsearch.xpack.esql.plan.logical.local.LocalRelation;
 import org.junit.Before;
 
 import java.util.List;
@@ -1158,4 +1159,292 @@ public class PushDownFilterAndLimitIntoUnionAllTests extends AbstractLogicalPlan
         relation = as(filter.child(), EsRelation.class);
         assertEquals("languages", relation.indexPattern());
     }
+
+    /**
+     * Filter on {@code emp_no} (present in both legs) is pushed past the {@code UnionAll} into each
+     * branch — including the ROW branch. After the optimizer's
+     * {@code ReplaceRowAsLocalRelation} rule the ROW is folded into a {@link LocalRelation}, but
+     * the pushed-down filter still sits on top of it.
+     */
+    public void testPushDownSimpleFilterPastUnionAllWithRowSubquery() {
+        assumeTrue(
+            "Requires subquery with row as source command support",
+            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
+        );
+        var plan = planSubquery("""
+            FROM test, (ROW emp_no = 100, salary = 50000)
+            | WHERE emp_no > 10
+            """);
+
+        Limit limit = as(plan, Limit.class);
+        UnionAll unionAll = as(limit.child(), UnionAll.class);
+        assertEquals(2, unionAll.children().size());
+
+        // index leg: Project → Filter[emp_no > 10] → EsRelation[test]
+        Project child1 = as(unionAll.children().get(0), Project.class);
+        Filter indexFilter = as(child1.child(), Filter.class);
+        GreaterThan indexGt = as(indexFilter.condition(), GreaterThan.class);
+        FieldAttribute indexEmpNo = as(indexGt.left(), FieldAttribute.class);
+        assertEquals("emp_no", indexEmpNo.name());
+        Literal indexThreshold = as(indexGt.right(), Literal.class);
+        assertEquals(10, indexThreshold.value());
+        EsRelation indexRelation = as(indexFilter.child(), EsRelation.class);
+        assertEquals("test", indexRelation.indexPattern());
+
+        // ROW leg: Project → Eval[null evals for missing test fields] → Subquery → LocalRelation.
+        // The pushed-down `emp_no > 10` filter is constant-folded against the ROW values
+        // (`100 > 10 == true`) so the Filter node is removed and the LocalRelation is preserved.
+        Project child2 = as(unionAll.children().get(1), Project.class);
+        Eval rowMissingEval = as(child2.child(), Eval.class);
+        assertEquals(9, rowMissingEval.fields().size()); // 11 test fields - emp_no - salary
+        Subquery subquery = as(rowMissingEval.child(), Subquery.class);
+        as(subquery.child(), LocalRelation.class);
+    }
+
+    /**
+     * Same shape as {@link #testPushDownSimpleFilterPastUnionAllWithRowSubquery()} but the filter
+     * does not pass against the ROW's constant value, so the ROW leg is fully pruned by the
+     * optimizer (the pushed-down filter constant-folds to an empty {@link LocalRelation}).
+     */
+    public void testPushDownSimpleFilterPrunesRowBranch() {
+        assumeTrue(
+            "Requires subquery with row as source command support",
+            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
+        );
+        var plan = planSubquery("""
+            FROM test, (ROW emp_no = 1, salary = 100)
+            | WHERE emp_no > 10
+            """);
+
+        Limit limit = as(plan, Limit.class);
+        UnionAll unionAll = as(limit.child(), UnionAll.class);
+        assertEquals(1, unionAll.children().size());
+
+        Project child1 = as(unionAll.children().get(0), Project.class);
+        Filter indexFilter = as(child1.child(), Filter.class);
+        GreaterThan indexGt = as(indexFilter.condition(), GreaterThan.class);
+        FieldAttribute indexEmpNo = as(indexGt.left(), FieldAttribute.class);
+        assertEquals("emp_no", indexEmpNo.name());
+        EsRelation indexRelation = as(indexFilter.child(), EsRelation.class);
+        assertEquals("test", indexRelation.indexPattern());
+    }
+
+    /**
+     * Multiple ROW subqueries with no main index pattern; the filter on a column declared by every
+     * ROW is pushed into each branch.
+     */
+    public void testPushDownFilterPastUnionAllWithRowOnlySubqueries() {
+        assumeTrue(
+            "Requires subquery with row as source command support",
+            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
+        );
+        var plan = planSubquery("""
+            FROM (ROW emp_no = 100, salary = 50000)
+               , (ROW emp_no = 200, salary = 80000)
+               , (ROW emp_no = 10,  salary = 5000)
+            | WHERE emp_no > 50
+            """);
+
+        Limit limit = as(plan, Limit.class);
+        UnionAll unionAll = as(limit.child(), UnionAll.class);
+        // First two legs (emp_no=100, emp_no=200) survive; the third (emp_no=10) is pruned.
+        assertEquals(2, unionAll.children().size());
+
+        for (int i = 0; i < 2; i++) {
+            Project childProject = as(unionAll.children().get(i), Project.class);
+            Subquery subquery = as(childProject.child(), Subquery.class);
+            // The ROW values (100, 200) both satisfy emp_no > 50, so the pushed-down filter
+            // constant-folds away and only the bare LocalRelation remains.
+            as(subquery.child(), LocalRelation.class);
+        }
+    }
+
+    /**
+     * The filter references a column that is not declared by the ROW subquery, so the analyzer
+     * substitutes {@code null} on that leg. The filter pushdown reduces the leg to an empty
+     * {@link LocalRelation} which the optimizer then prunes from the {@code UnionAll}.
+     */
+    public void testPushDownFilterPrunesRowBranchWithoutTheField() {
+        assumeTrue(
+            "Requires subquery with row as source command support",
+            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
+        );
+        var plan = planSubquery("""
+            FROM test, (ROW emp_no = 1)
+            | WHERE first_name == "Bob"
+            """);
+
+        Limit limit = as(plan, Limit.class);
+        UnionAll unionAll = as(limit.child(), UnionAll.class);
+        // The ROW leg is pruned because its first_name is null and `null == "Bob"` is false.
+        assertEquals(1, unionAll.children().size());
+
+        Project child1 = as(unionAll.children().get(0), Project.class);
+        Filter filter = as(child1.child(), Filter.class);
+        as(filter.child(), EsRelation.class);
+    }
+
+    /**
+     * A full-text {@code MATCH} operator targets a column that exists in the index leg as a real
+     * {@link FieldAttribute} but is not declared by the ROW subquery. The filter is pushed past the
+     * {@code UnionAll}: the index leg keeps the pushed-down match, while the ROW leg's reference
+     * to the missing column is null and the constant-folded predicate prunes the leg entirely
+     * (mirrors {@link #testFullTextFunctionCanBePushedDownPastUnionAll()} but with a ROW source).
+     */
+    public void testPushDownFullTextMatchOperatorPastUnionAllWithRowSubquery() {
+        assumeTrue(
+            "Requires subquery with row as source command support",
+            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
+        );
+        var plan = planSubquery("""
+            FROM test, (ROW emp_no = 1, salary = 50000)
+            | WHERE first_name:"Bob"
+            """);
+
+        Limit limit = as(plan, Limit.class);
+        UnionAll unionAll = as(limit.child(), UnionAll.class);
+        // ROW leg is pruned — first_name is null in the ROW so the pushed-down match folds to false.
+        assertEquals(1, unionAll.children().size());
+
+        Project child1 = as(unionAll.children().get(0), Project.class);
+        Filter indexFilter = as(child1.child(), Filter.class);
+        MatchOperator indexMatch = as(indexFilter.condition(), MatchOperator.class);
+        FieldAttribute indexFirstName = as(indexMatch.field(), FieldAttribute.class);
+        assertEquals("first_name", indexFirstName.name());
+        Literal indexQuery = as(indexMatch.query(), Literal.class);
+        assertEquals(new BytesRef("Bob"), indexQuery.value());
+        as(indexFilter.child(), EsRelation.class);
+    }
+
+    /**
+     * Conjunction of multiple full-text functions ({@code MATCH operator}, {@code MATCH function},
+     * {@code QSTR}, {@code KQL}) covering columns from the index. Two FROM legs and one ROW leg
+     * — the index legs receive the pushed-down conjunctive filter and the ROW leg (which has none
+     * of the referenced fields) is pruned.
+     */
+    public void testPushDownConjunctiveFullTextFunctionsPastUnionAllWithRowSubquery() {
+        assumeTrue(
+            "Requires subquery with row as source command support",
+            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
+        );
+        var plan = planSubquery("""
+            FROM test, (FROM test | WHERE languages > 0), (ROW emp_no = 1, salary = 50000)
+            | WHERE first_name:"first" AND match(last_name, "last") AND qstr("gender:female") AND kql("first_name:bob")
+            """);
+
+        Limit limit = as(plan, Limit.class);
+        UnionAll unionAll = as(limit.child(), UnionAll.class);
+        // The ROW leg is pruned, only the two FROM legs remain.
+        assertEquals(2, unionAll.children().size());
+
+        // index leg 1: Project → Filter[<full text conjunction>] → EsRelation
+        Project child1 = as(unionAll.children().get(0), Project.class);
+        Filter indexFilter1 = as(child1.child(), Filter.class);
+        assertFullTextConjunction(indexFilter1.condition());
+        as(indexFilter1.child(), EsRelation.class);
+
+        // index leg 2: Project → Subquery → Filter[<conjunction> AND languages > 0] → EsRelation
+        Project child2 = as(unionAll.children().get(1), Project.class);
+        Subquery subquery = as(child2.child(), Subquery.class);
+        Filter indexFilter2 = as(subquery.child(), Filter.class);
+        And outer = as(indexFilter2.condition(), And.class);
+        // The pre-existing `languages > 0` from the subquery sits on the left, the pushed-down
+        // full-text conjunction sits on the right.
+        GreaterThan languagesGt = as(outer.left(), GreaterThan.class);
+        assertEquals("languages", as(languagesGt.left(), FieldAttribute.class).name());
+        assertEquals(0, as(languagesGt.right(), Literal.class).value());
+        assertFullTextConjunction(outer.right());
+        as(indexFilter2.child(), EsRelation.class);
+    }
+
+    /**
+     * Helper for the conjunctive full-text test. Walks through:
+     * {@code ((first_name:"first") AND match(last_name, "last")) AND (qstr(...) AND kql(...))}.
+     */
+    private static void assertFullTextConjunction(Expression condition) {
+        And outer = as(condition, And.class);
+        And leftAnd = as(outer.left(), And.class);
+        MatchOperator matchOperator = as(leftAnd.left(), MatchOperator.class);
+        assertEquals("first_name", as(matchOperator.field(), FieldAttribute.class).name());
+        assertEquals(new BytesRef("first"), as(matchOperator.query(), Literal.class).value());
+        Match matchFunction = as(leftAnd.right(), Match.class);
+        assertEquals("last_name", as(matchFunction.field(), FieldAttribute.class).name());
+        assertEquals(new BytesRef("last"), as(matchFunction.query(), Literal.class).value());
+
+        And rightAnd = as(outer.right(), And.class);
+        QueryString queryString = as(rightAnd.left(), QueryString.class);
+        assertEquals(new BytesRef("gender:female"), as(queryString.query(), Literal.class).value());
+        Kql kql = as(rightAnd.right(), Kql.class);
+        assertEquals(new BytesRef("first_name:bob"), as(kql.query(), Literal.class).value());
+    }
+
+    /**
+     * Disjunctive full-text filter ({@code first_name:"first" OR match_phrase(last_name, "last")})
+     * over a UnionAll containing a FROM leg and a ROW leg without any of the referenced columns.
+     * The whole disjunction is pushed past the {@code UnionAll} into each branch; on the ROW leg
+     * every disjunct evaluates to false against the null-filled columns, so the leg is pruned.
+     * Note: {@code QSTR}/{@code KQL} are intentionally excluded — those functions disallow
+     * {@code LocalRelation} in their plan lineage and would fail post-optimization verification.
+     */
+    public void testPushDownDisjunctiveFullTextFunctionPastUnionAllWithRowSubquery() {
+        assumeTrue(
+            "Requires subquery with row as source command support",
+            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
+        );
+        var plan = planSubquery("""
+            FROM test, (ROW emp_no = 1)
+            | WHERE first_name:"first" OR match_phrase(last_name, "last")
+            """);
+
+        Limit limit = as(plan, Limit.class);
+        UnionAll unionAll = as(limit.child(), UnionAll.class);
+        // ROW leg is pruned — every disjunct matches against a null and folds to false.
+        assertEquals(1, unionAll.children().size());
+
+        Project child1 = as(unionAll.children().get(0), Project.class);
+        Filter indexFilter = as(child1.child(), Filter.class);
+        Or or = as(indexFilter.condition(), Or.class);
+        MatchOperator matchOperator = as(or.left(), MatchOperator.class);
+        assertEquals("first_name", as(matchOperator.field(), FieldAttribute.class).name());
+        assertEquals(new BytesRef("first"), as(matchOperator.query(), Literal.class).value());
+        MatchPhrase matchPhrase = as(or.right(), MatchPhrase.class);
+        assertEquals("last_name", as(matchPhrase.field(), FieldAttribute.class).name());
+        assertEquals(new BytesRef("last"), as(matchPhrase.query(), Literal.class).value());
+        as(indexFilter.child(), EsRelation.class);
+    }
+
+    /**
+     * Combination of a full-text predicate and an integer-comparison predicate over a UnionAll
+     * with one FROM leg and one ROW leg. The ROW provides {@code emp_no} so the integer comparison
+     * can be evaluated against the constant; however the {@code MATCH} function references
+     * {@code first_name}, which is not declared by the ROW. The ROW leg therefore folds to empty
+     * and is pruned, while the FROM leg keeps the full conjunctive filter pushed down.
+     */
+    public void testPushDownMixedFullTextAndComparisonPastUnionAllWithRowSubquery() {
+        assumeTrue(
+            "Requires subquery with row as source command support",
+            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
+        );
+        var plan = planSubquery("""
+            FROM test, (ROW emp_no = 100, salary = 50000)
+            | WHERE first_name:"Bob" AND emp_no > 10
+            """);
+
+        Limit limit = as(plan, Limit.class);
+        UnionAll unionAll = as(limit.child(), UnionAll.class);
+        // ROW leg pruned — `first_name:"Bob"` evaluates to false on the null-filled first_name.
+        assertEquals(1, unionAll.children().size());
+
+        Project child1 = as(unionAll.children().get(0), Project.class);
+        Filter indexFilter = as(child1.child(), Filter.class);
+        And and = as(indexFilter.condition(), And.class);
+        MatchOperator matchOperator = as(and.left(), MatchOperator.class);
+        assertEquals("first_name", as(matchOperator.field(), FieldAttribute.class).name());
+        assertEquals(new BytesRef("Bob"), as(matchOperator.query(), Literal.class).value());
+        GreaterThan gt = as(and.right(), GreaterThan.class);
+        assertEquals("emp_no", as(gt.left(), FieldAttribute.class).name());
+        assertEquals(10, as(gt.right(), Literal.class).value());
+        as(indexFilter.child(), EsRelation.class);
+    }
+
 }

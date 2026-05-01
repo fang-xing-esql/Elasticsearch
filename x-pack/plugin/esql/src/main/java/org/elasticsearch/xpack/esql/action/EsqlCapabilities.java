@@ -1254,6 +1254,11 @@ public class EsqlCapabilities {
         SUBQUERY_IN_FROM_COMMAND_UNION_TYPES_CONFLICT_RESOLUTION,
 
         /**
+         * Support ROW as a source command inside subquery in the from command.
+         */
+        SUBQUERY_IN_FROM_COMMAND_WITH_ROW(Build.current().isSnapshot()),
+
+        /**
          * Support for views in cluster state (and REST API).
          */
         VIEWS_IN_CLUSTER_STATE,
