@@ -1540,8 +1540,7 @@ public class LogicalPlanBuilder extends ExpressionBuilder {
             params.bucketsLiteral(),
             params.scrapeIntervalLiteral(),
             valueColumnName,
-            new UnresolvedTimestamp(source),
-            false
+            new UnresolvedTimestamp(source)
         );
     }
 

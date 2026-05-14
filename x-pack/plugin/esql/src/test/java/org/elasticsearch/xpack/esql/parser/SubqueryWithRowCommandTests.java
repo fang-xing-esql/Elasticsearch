@@ -45,10 +45,7 @@ public class SubqueryWithRowCommandTests extends AbstractStatementParserTests {
 
     @Before
     public void checkSubqueryWithRowCommand() {
-        assumeTrue(
-            "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled()
-        );
+        assumeTrue("Requires subquery with row as source command support", EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled());
     }
 
     /**

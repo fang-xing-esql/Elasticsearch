@@ -1167,10 +1167,7 @@ public class PushDownFilterAndLimitIntoUnionAllTests extends AbstractLogicalPlan
      * the pushed-down filter still sits on top of it.
      */
     public void testPushDownSimpleFilterPastUnionAllWithRowSubquery() {
-        assumeTrue(
-            "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled()
-        );
+        assumeTrue("Requires subquery with row as source command support", EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled());
         var plan = planSubquery("""
             FROM test, (ROW emp_no = 100, salary = 50000)
             | WHERE emp_no > 10
@@ -1207,10 +1204,7 @@ public class PushDownFilterAndLimitIntoUnionAllTests extends AbstractLogicalPlan
      * optimizer (the pushed-down filter constant-folds to an empty {@link LocalRelation}).
      */
     public void testPushDownSimpleFilterPrunesRowBranch() {
-        assumeTrue(
-            "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled()
-        );
+        assumeTrue("Requires subquery with row as source command support", EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled());
         var plan = planSubquery("""
             FROM test, (ROW emp_no = 1, salary = 100)
             | WHERE emp_no > 10
@@ -1234,10 +1228,7 @@ public class PushDownFilterAndLimitIntoUnionAllTests extends AbstractLogicalPlan
      * ROW is pushed into each branch.
      */
     public void testPushDownFilterPastUnionAllWithRowOnlySubqueries() {
-        assumeTrue(
-            "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled()
-        );
+        assumeTrue("Requires subquery with row as source command support", EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled());
         var plan = planSubquery("""
             FROM (ROW emp_no = 100, salary = 50000)
                , (ROW emp_no = 200, salary = 80000)
@@ -1265,10 +1256,7 @@ public class PushDownFilterAndLimitIntoUnionAllTests extends AbstractLogicalPlan
      * {@link LocalRelation} which the optimizer then prunes from the {@code UnionAll}.
      */
     public void testPushDownFilterPrunesRowBranchWithoutTheField() {
-        assumeTrue(
-            "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled()
-        );
+        assumeTrue("Requires subquery with row as source command support", EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled());
         var plan = planSubquery("""
             FROM test, (ROW emp_no = 1)
             | WHERE first_name == "Bob"
@@ -1292,10 +1280,7 @@ public class PushDownFilterAndLimitIntoUnionAllTests extends AbstractLogicalPlan
      * (mirrors {@link #testFullTextFunctionCanBePushedDownPastUnionAll()} but with a ROW source).
      */
     public void testPushDownFullTextMatchOperatorPastUnionAllWithRowSubquery() {
-        assumeTrue(
-            "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled()
-        );
+        assumeTrue("Requires subquery with row as source command support", EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled());
         var plan = planSubquery("""
             FROM test, (ROW emp_no = 1, salary = 50000)
             | WHERE first_name:"Bob"
@@ -1323,10 +1308,7 @@ public class PushDownFilterAndLimitIntoUnionAllTests extends AbstractLogicalPlan
      * of the referenced fields) is pruned.
      */
     public void testPushDownConjunctiveFullTextFunctionsPastUnionAllWithRowSubquery() {
-        assumeTrue(
-            "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled()
-        );
+        assumeTrue("Requires subquery with row as source command support", EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled());
         var plan = planSubquery("""
             FROM test, (FROM test | WHERE languages > 0), (ROW emp_no = 1, salary = 50000)
             | WHERE first_name:"first" AND match(last_name, "last") AND qstr("gender:female") AND kql("first_name:bob")
@@ -1387,10 +1369,7 @@ public class PushDownFilterAndLimitIntoUnionAllTests extends AbstractLogicalPlan
      * {@code LocalRelation} in their plan lineage and would fail post-optimization verification.
      */
     public void testPushDownDisjunctiveFullTextFunctionPastUnionAllWithRowSubquery() {
-        assumeTrue(
-            "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled()
-        );
+        assumeTrue("Requires subquery with row as source command support", EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled());
         var plan = planSubquery("""
             FROM test, (ROW emp_no = 1)
             | WHERE first_name:"first" OR match_phrase(last_name, "last")
@@ -1421,10 +1400,7 @@ public class PushDownFilterAndLimitIntoUnionAllTests extends AbstractLogicalPlan
      * and is pruned, while the FROM leg keeps the full conjunctive filter pushed down.
      */
     public void testPushDownMixedFullTextAndComparisonPastUnionAllWithRowSubquery() {
-        assumeTrue(
-            "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled()
-        );
+        assumeTrue("Requires subquery with row as source command support", EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled());
         var plan = planSubquery("""
             FROM test, (ROW emp_no = 100, salary = 50000)
             | WHERE first_name:"Bob" AND emp_no > 10

@@ -5306,10 +5306,7 @@ public class AnalyzerTests extends ESTestCase {
     }
 
     public void testRowSubqueryInFrom() {
-        assumeTrue(
-            "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled()
-        );
+        assumeTrue("Requires subquery with row as source command support", EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled());
         LogicalPlan plan = basic().query("""
             FROM test, (ROW x = 1)
             | WHERE emp_no > 10000
@@ -5353,10 +5350,7 @@ public class AnalyzerTests extends ESTestCase {
     }
 
     public void testRowSubqueryInFromWithProcessingCommandsInSubquery() {
-        assumeTrue(
-            "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled()
-        );
+        assumeTrue("Requires subquery with row as source command support", EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled());
         LogicalPlan plan = basic().query("""
             FROM test, (ROW x = 1 | EVAL y = x + 1 | WHERE y > 0)
             """);
@@ -5400,10 +5394,7 @@ public class AnalyzerTests extends ESTestCase {
     }
 
     public void testRowSubqueryInFromWithoutMainIndexPattern() {
-        assumeTrue(
-            "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled()
-        );
+        assumeTrue("Requires subquery with row as source command support", EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled());
         LogicalPlan plan = basic().query("""
             FROM (ROW x = 1 | EVAL y = x + 1)
             | WHERE y > 0
@@ -5429,10 +5420,7 @@ public class AnalyzerTests extends ESTestCase {
     }
 
     public void testMixedRowAndFromSubqueriesInFrom() {
-        assumeTrue(
-            "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled()
-        );
+        assumeTrue("Requires subquery with row as source command support", EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled());
         LogicalPlan plan = basic().addLanguages().query("""
             FROM test
             , (ROW x = 1)
