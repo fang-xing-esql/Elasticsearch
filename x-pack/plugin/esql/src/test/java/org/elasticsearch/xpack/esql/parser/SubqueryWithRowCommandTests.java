@@ -14,10 +14,15 @@ import org.elasticsearch.xpack.esql.action.EsqlCapabilities;
 import org.elasticsearch.xpack.esql.core.expression.Alias;
 import org.elasticsearch.xpack.esql.core.expression.Attribute;
 import org.elasticsearch.xpack.esql.core.expression.Literal;
+import org.elasticsearch.xpack.esql.core.expression.UnresolvedAttribute;
 import org.elasticsearch.xpack.esql.core.type.DataType;
+import org.elasticsearch.xpack.esql.expression.predicate.logical.And;
+import org.elasticsearch.xpack.esql.expression.predicate.logical.Not;
 import org.elasticsearch.xpack.esql.expression.predicate.operator.comparison.GreaterThan;
+import org.elasticsearch.xpack.esql.expression.predicate.operator.comparison.InSubquery;
 import org.elasticsearch.xpack.esql.plan.logical.Eval;
 import org.elasticsearch.xpack.esql.plan.logical.Filter;
+import org.elasticsearch.xpack.esql.plan.logical.Keep;
 import org.elasticsearch.xpack.esql.plan.logical.Limit;
 import org.elasticsearch.xpack.esql.plan.logical.LogicalPlan;
 import org.elasticsearch.xpack.esql.plan.logical.Row;
@@ -39,8 +44,11 @@ import static org.hamcrest.Matchers.containsString;
 public class SubqueryWithRowCommandTests extends AbstractStatementParserTests {
 
     @Before
-    public void checkSubqueryInFromCommand() {
-        assumeTrue("Requires subquery in from command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
+    public void checkSubqueryWithRowCommand() {
+        assumeTrue(
+            "Requires subquery with row as source command support",
+            EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled()
+        );
     }
 
     /**
@@ -52,10 +60,7 @@ public class SubqueryWithRowCommandTests extends AbstractStatementParserTests {
      *   \_Row[[1[INTEGER] AS x]]
      */
     public void testIndexPatternWithRowSubquery() {
-        assumeTrue(
-            "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
-        );
+        assumeTrue("Requires subquery in from command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         var mainQueryIndexPattern = randomIndexPatterns();
         String query = LoggerMessageFormat.format(null, """
             FROM {}, (ROW x = 1)
@@ -84,10 +89,7 @@ public class SubqueryWithRowCommandTests extends AbstractStatementParserTests {
      *   \_Row[[1[INTEGER] AS a, 2[INTEGER] AS b, hello[KEYWORD] AS c]]
      */
     public void testIndexPatternWithRowSubqueryMultipleFields() {
-        assumeTrue(
-            "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
-        );
+        assumeTrue("Requires subquery in from command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         var mainQueryIndexPattern = randomIndexPatterns();
         String query = LoggerMessageFormat.format(null, """
             FROM {}, (ROW a = 1, b = 2, c = "hello")
@@ -122,10 +124,7 @@ public class SubqueryWithRowCommandTests extends AbstractStatementParserTests {
      *     \_UnresolvedRelation[]
      */
     public void testIndexPatternWithRowAndFromSubqueries() {
-        assumeTrue(
-            "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
-        );
+        assumeTrue("Requires subquery in from command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         var mainQueryIndexPattern = randomIndexPatterns();
         var subqueryIndexPattern = randomIndexPatterns();
         String query = LoggerMessageFormat.format(null, """
@@ -171,10 +170,7 @@ public class SubqueryWithRowCommandTests extends AbstractStatementParserTests {
      *         \_Row[[1[INTEGER] AS x]]
      */
     public void testRowSubqueryWithProcessingCommandsInSubquery() {
-        assumeTrue(
-            "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
-        );
+        assumeTrue("Requires subquery in from command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         var mainQueryIndexPattern = randomIndexPatterns();
         String query = LoggerMessageFormat.format(null, """
             FROM {}, (ROW x = 1
@@ -210,10 +206,7 @@ public class SubqueryWithRowCommandTests extends AbstractStatementParserTests {
      *       \_Row[[1[INTEGER] AS x]]
      */
     public void testRowSubqueryWithProcessingCommandsInMainQuery() {
-        assumeTrue(
-            "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
-        );
+        assumeTrue("Requires subquery in from command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         var mainQueryIndexPattern = randomIndexPatterns();
         String query = LoggerMessageFormat.format(null, """
             FROM {}, (ROW x = 1)
@@ -248,10 +241,7 @@ public class SubqueryWithRowCommandTests extends AbstractStatementParserTests {
      *         \_Row[[1[INTEGER] AS x]]
      */
     public void testRowSubqueryWithProcessingCommandsInSubqueryAndMainQuery() {
-        assumeTrue(
-            "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
-        );
+        assumeTrue("Requires subquery in from command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         var mainQueryIndexPattern = randomIndexPatterns();
         String query = LoggerMessageFormat.format(null, """
             FROM {}, (ROW x = 1 | EVAL y = x + 1)
@@ -283,10 +273,7 @@ public class SubqueryWithRowCommandTests extends AbstractStatementParserTests {
      * Row[[1[INTEGER] AS x]]
      */
     public void testRowSubqueryOnly() {
-        assumeTrue(
-            "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
-        );
+        assumeTrue("Requires subquery in from command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         String query = "FROM (ROW x = 1)";
 
         LogicalPlan plan = query(query);
@@ -307,10 +294,7 @@ public class SubqueryWithRowCommandTests extends AbstractStatementParserTests {
      *   \_Row[[3[INTEGER] AS c]]
      */
     public void testMultipleRowSubqueriesOnly() {
-        assumeTrue(
-            "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
-        );
+        assumeTrue("Requires subquery in from command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         String query = "FROM (ROW a = 1), (ROW b = 2), (ROW c = 3)";
 
         LogicalPlan plan = query(query);
@@ -338,10 +322,7 @@ public class SubqueryWithRowCommandTests extends AbstractStatementParserTests {
      *   \_UnresolvedRelation[]
      */
     public void testRowAndFromSubqueriesOnly() {
-        assumeTrue(
-            "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
-        );
+        assumeTrue("Requires subquery in from command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         var subqueryIndexPattern = randomIndexPatterns();
         String query = LoggerMessageFormat.format(null, """
             FROM (ROW x = 1), (FROM {})
@@ -372,10 +353,7 @@ public class SubqueryWithRowCommandTests extends AbstractStatementParserTests {
      *       \_Row[[1[INTEGER] AS x]]
      */
     public void testRowSubqueryNestedInsideFromSubquery() {
-        assumeTrue(
-            "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
-        );
+        assumeTrue("Requires subquery in from command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         var outerIndexPattern = randomIndexPatterns();
         var innerIndexPattern = randomIndexPatterns();
         String query = LoggerMessageFormat.format(null, """
@@ -409,10 +387,7 @@ public class SubqueryWithRowCommandTests extends AbstractStatementParserTests {
      * tree is asserted only at a high level since the goal is to ensure no parse errors occur.
      */
     public void testRowSubqueryEndsWithProcessingCommandsInDifferentMode() {
-        assumeTrue(
-            "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
-        );
+        assumeTrue("Requires subquery in from command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         List<String> processingCommandInDifferentMode = List.of(
             "INLINE STATS max_x = MAX(x) BY x",
             "DISSECT y \"%{a} %{b}\"",
@@ -442,33 +417,6 @@ public class SubqueryWithRowCommandTests extends AbstractStatementParserTests {
     }
 
     /**
-     * The TS source command does not allow subqueries, regardless of whether the subquery uses FROM or ROW.
-     */
-    public void testTimeSeriesWithRowSubquery() {
-        assumeTrue(
-            "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
-        );
-        String query = "TS index1, (ROW x = 1)";
-        expectThrows(ParsingException.class, containsString("line 1:1: Subqueries are not supported in TS command"), () -> query(query));
-    }
-
-    /**
-     * In a release build (non-snapshot) the ROW alternative is gated off by the {@code isDevVersion}
-     * predicate in the grammar, and the parser must reject it.
-     */
-    public void testRowSubqueryNotAllowedInReleaseBuild() {
-        assumeFalse("only relevant for non-snapshot builds", Build.current().isSnapshot());
-        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
-        var mainQueryIndexPattern = randomIndexPatterns();
-        String query = LoggerMessageFormat.format(null, """
-            FROM {}, (ROW x = 1)
-            """, mainQueryIndexPattern);
-
-        expectThrows(ParsingException.class, () -> query(query));
-    }
-
-    /**
      * A ROW subquery whose single field is assigned a multivalue (list) of integers. The parser
      * stores the values inside a single {@link Literal} of type {@link DataType#INTEGER}, with the
      * value being a {@link List} of boxed integers.
@@ -479,10 +427,7 @@ public class SubqueryWithRowCommandTests extends AbstractStatementParserTests {
      *   \_Row[[[1, 2, 3][INTEGER] AS x]]
      */
     public void testIndexPatternWithMultivalueIntRowSubquery() {
-        assumeTrue(
-            "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
-        );
+        assumeTrue("Requires subquery in from command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         var mainQueryIndexPattern = randomIndexPatterns();
         String query = LoggerMessageFormat.format(null, """
             FROM {}, (ROW x = [1, 2, 3])
@@ -513,10 +458,7 @@ public class SubqueryWithRowCommandTests extends AbstractStatementParserTests {
      *           [true, false, true][BOOLEAN] AS c, [cat, dog][KEYWORD] AS d]]
      */
     public void testMultivalueRowSubqueryMultipleFields() {
-        assumeTrue(
-            "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
-        );
+        assumeTrue("Requires subquery in from command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         var mainQueryIndexPattern = randomIndexPatterns();
         String query = LoggerMessageFormat.format(null, """
             FROM {}, (ROW a = [1, 2], b = [1.5, -2.5], c = [true, false, true], d = ["cat", "dog"])
@@ -551,10 +493,7 @@ public class SubqueryWithRowCommandTests extends AbstractStatementParserTests {
      *           [cat, dog][KEYWORD] AS d, true[BOOLEAN] AS e, [1.5, -2.5][DOUBLE] AS f]]
      */
     public void testRowSubqueryWithMixedScalarAndMultivalueFields() {
-        assumeTrue(
-            "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
-        );
+        assumeTrue("Requires subquery in from command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         var mainQueryIndexPattern = randomIndexPatterns();
         String query = LoggerMessageFormat.format(null, """
             FROM {}, (ROW a = 1, b = [10, 20, 30], c = "hello", d = ["cat", "dog"], e = true, f = [1.5, -2.5])
@@ -592,10 +531,7 @@ public class SubqueryWithRowCommandTests extends AbstractStatementParserTests {
      *   \_Row[[[2147483648, 1][LONG] AS c]]
      */
     public void testMultivalueRowSubqueryWithWideningType() {
-        assumeTrue(
-            "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
-        );
+        assumeTrue("Requires subquery in from command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         var mainQueryIndexPattern = randomIndexPatterns();
         String query = LoggerMessageFormat.format(null, """
             FROM {}, (ROW c = [2147483648, 1])
@@ -625,10 +561,7 @@ public class SubqueryWithRowCommandTests extends AbstractStatementParserTests {
      *       \_Row[[[1, 2, 3][INTEGER] AS x]]
      */
     public void testMultivalueRowSubqueryWithProcessingCommands() {
-        assumeTrue(
-            "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
-        );
+        assumeTrue("Requires subquery in from command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         var mainQueryIndexPattern = randomIndexPatterns();
         String query = LoggerMessageFormat.format(null, """
             FROM {}, (ROW x = [1, 2, 3]
@@ -666,10 +599,7 @@ public class SubqueryWithRowCommandTests extends AbstractStatementParserTests {
      *   \_Row[[[10, 20, 30][INTEGER] AS x]]
      */
     public void testMixedScalarAndMultivalueRowSubqueries() {
-        assumeTrue(
-            "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
-        );
+        assumeTrue("Requires subquery in from command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         String query = "FROM (ROW x = 1), (ROW x = [10, 20, 30])";
 
         LogicalPlan plan = query(query);
@@ -692,15 +622,437 @@ public class SubqueryWithRowCommandTests extends AbstractStatementParserTests {
      * Row[[[cat, dog][KEYWORD] AS animals]]
      */
     public void testMultivalueRowSubqueryOnly() {
-        assumeTrue(
-            "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
-        );
+        assumeTrue("Requires subquery in from command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
         String query = "FROM (ROW animals = [\"cat\", \"dog\"])";
 
         LogicalPlan plan = query(query);
         Row row = as(plan, Row.class);
         assertMultivalueRowField(row, "animals", DataType.KEYWORD, List.of(new BytesRef("cat"), new BytesRef("dog")));
+    }
+
+    // ---- WHERE (NOT) IN (ROW ...) subqueries ----
+
+    /**
+     * A basic IN subquery whose source command is ROW:
+     * {@code FROM main_index | WHERE x IN (ROW a = 1)}.
+     *
+     * Filter[InSubquery[?x, Row[[1[INTEGER] AS a]]]]
+     * \_UnresolvedRelation[main_index]
+     */
+    public void testWhereInRowSubqueryBasic() {
+        assumeTrue("Requires IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
+        String query = "FROM main_index | WHERE x IN (ROW a = 1)";
+
+        LogicalPlan plan = query(query);
+        Filter filter = as(plan, Filter.class);
+        InSubquery inSubquery = as(filter.condition(), InSubquery.class);
+        UnresolvedAttribute value = as(inSubquery.value(), UnresolvedAttribute.class);
+        assertEquals("x", value.name());
+
+        Row row = as(inSubquery.subquery(), Row.class);
+        assertRowField(row, "a", 1);
+
+        UnresolvedRelation mainRelation = as(filter.child(), UnresolvedRelation.class);
+        assertEquals("main_index", mainRelation.indexPattern().indexPattern());
+    }
+
+    /**
+     * A NOT IN subquery whose source command is ROW:
+     * {@code FROM main_index | WHERE x NOT IN (ROW a = 1)}.
+     *
+     * Filter[NOT(InSubquery[?x, Row[[1[INTEGER] AS a]]])]
+     * \_UnresolvedRelation[main_index]
+     */
+    public void testWhereNotInRowSubquery() {
+        assumeTrue("Requires IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
+        String query = "FROM main_index | WHERE x NOT IN (ROW a = 1)";
+
+        LogicalPlan plan = query(query);
+        Filter filter = as(plan, Filter.class);
+        Not not = as(filter.condition(), Not.class);
+        InSubquery inSubquery = as(not.field(), InSubquery.class);
+        UnresolvedAttribute value = as(inSubquery.value(), UnresolvedAttribute.class);
+        assertEquals("x", value.name());
+
+        Row row = as(inSubquery.subquery(), Row.class);
+        assertRowField(row, "a", 1);
+
+        UnresolvedRelation mainRelation = as(filter.child(), UnresolvedRelation.class);
+        assertEquals("main_index", mainRelation.indexPattern().indexPattern());
+    }
+
+    /**
+     * IN ROW subquery with processing commands inside the subquery:
+     * {@code FROM main_index | WHERE x (NOT)? IN (ROW a = 1 | WHERE a > 0 | EVAL b = a + 1 | KEEP a | LIMIT 5)}.
+     *
+     * Filter[(NOT) InSubquery[?x, Limit[Keep[Eval[Filter[Row[[1[INTEGER] AS a]]]]]]]]
+     * \_UnresolvedRelation[main_index]
+     */
+    public void testWhereInRowSubqueryWithProcessingCommands() {
+        assumeTrue("Requires IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
+        boolean negated = randomBoolean();
+        String notClause = negated ? "NOT " : "";
+        String query = LoggerMessageFormat.format(null, """
+            FROM main_index | WHERE x {}IN (ROW a = 1
+                                            | WHERE a > 0
+                                            | EVAL b = a + 1
+                                            | KEEP a
+                                            | LIMIT 5)
+            """, notClause);
+
+        LogicalPlan plan = query(query);
+        Filter filter = as(plan, Filter.class);
+        InSubquery inSubquery;
+        if (negated) {
+            Not not = as(filter.condition(), Not.class);
+            inSubquery = as(not.field(), InSubquery.class);
+        } else {
+            inSubquery = as(filter.condition(), InSubquery.class);
+        }
+        assertEquals("x", as(inSubquery.value(), UnresolvedAttribute.class).name());
+
+        Limit limit = as(inSubquery.subquery(), Limit.class);
+        Keep keep = as(limit.child(), Keep.class);
+        Eval eval = as(keep.child(), Eval.class);
+        Filter subqueryFilter = as(eval.child(), Filter.class);
+        GreaterThan gt = as(subqueryFilter.condition(), GreaterThan.class);
+        assertEquals("a", as(gt.left(), Attribute.class).name());
+        Row row = as(subqueryFilter.child(), Row.class);
+        assertRowField(row, "a", 1);
+
+        UnresolvedRelation mainRelation = as(filter.child(), UnresolvedRelation.class);
+        assertEquals("main_index", mainRelation.indexPattern().indexPattern());
+    }
+
+    /**
+     * IN ROW subquery declaring multiple fields, with a KEEP pruning down to one:
+     * {@code FROM main_index | WHERE x IN (ROW a = 1, b = 2, c = "hello" | KEEP a)}.
+     *
+     * Filter[InSubquery[?x, Keep[Row[[1[INTEGER] AS a, 2[INTEGER] AS b, hello[KEYWORD] AS c]]]]]
+     * \_UnresolvedRelation[main_index]
+     */
+    public void testWhereInRowSubqueryMultipleFields() {
+        assumeTrue("Requires IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
+        String query = """
+            FROM main_index | WHERE x IN (ROW a = 1, b = 2, c = "hello" | KEEP a)
+            """;
+
+        LogicalPlan plan = query(query);
+        Filter filter = as(plan, Filter.class);
+        InSubquery inSubquery = as(filter.condition(), InSubquery.class);
+        assertEquals("x", as(inSubquery.value(), UnresolvedAttribute.class).name());
+
+        Keep keep = as(inSubquery.subquery(), Keep.class);
+        Row row = as(keep.child(), Row.class);
+        assertEquals(3, row.fields().size());
+        assertEquals("a", row.fields().get(0).name());
+        assertEquals("b", row.fields().get(1).name());
+        assertEquals("c", row.fields().get(2).name());
+
+        UnresolvedRelation mainRelation = as(filter.child(), UnresolvedRelation.class);
+        assertEquals("main_index", mainRelation.indexPattern().indexPattern());
+    }
+
+    /**
+     * IN ROW subquery declaring a multivalue field:
+     * {@code FROM main_index | WHERE x (NOT)? IN (ROW a = [1, 2, 3])}.
+     *
+     * Filter[(NOT) InSubquery[?x, Row[[[1, 2, 3][INTEGER] AS a]]]]
+     * \_UnresolvedRelation[main_index]
+     */
+    public void testWhereInRowSubqueryMultivalue() {
+        assumeTrue("Requires IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
+        boolean negated = randomBoolean();
+        String notClause = negated ? "NOT " : "";
+        String query = "FROM main_index | WHERE x " + notClause + "IN (ROW a = [1, 2, 3])";
+
+        LogicalPlan plan = query(query);
+        Filter filter = as(plan, Filter.class);
+        InSubquery inSubquery;
+        if (negated) {
+            Not not = as(filter.condition(), Not.class);
+            inSubquery = as(not.field(), InSubquery.class);
+        } else {
+            inSubquery = as(filter.condition(), InSubquery.class);
+        }
+        assertEquals("x", as(inSubquery.value(), UnresolvedAttribute.class).name());
+
+        Row row = as(inSubquery.subquery(), Row.class);
+        assertMultivalueRowField(row, "a", DataType.INTEGER, List.of(1, 2, 3));
+
+        UnresolvedRelation mainRelation = as(filter.child(), UnresolvedRelation.class);
+        assertEquals("main_index", mainRelation.indexPattern().indexPattern());
+    }
+
+    /**
+     * IN ROW subquery combined with another boolean condition in the WHERE clause:
+     * {@code FROM main_index | WHERE a > 5 AND x IN (ROW b = 1)}.
+     *
+     * Filter[And[GreaterThan[?a, 5], InSubquery[?x, Row[[1[INTEGER] AS b]]]]]
+     * \_UnresolvedRelation[main_index]
+     */
+    public void testWhereInRowSubqueryWithOtherConditions() {
+        assumeTrue("Requires IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
+        String query = "FROM main_index | WHERE a > 5 AND x IN (ROW b = 1)";
+
+        LogicalPlan plan = query(query);
+        Filter filter = as(plan, Filter.class);
+        And and = as(filter.condition(), And.class);
+        as(and.left(), GreaterThan.class);
+
+        InSubquery inSubquery = as(and.right(), InSubquery.class);
+        assertEquals("x", as(inSubquery.value(), UnresolvedAttribute.class).name());
+        Row row = as(inSubquery.subquery(), Row.class);
+        assertRowField(row, "b", 1);
+
+        UnresolvedRelation mainRelation = as(filter.child(), UnresolvedRelation.class);
+        assertEquals("main_index", mainRelation.indexPattern().indexPattern());
+    }
+
+    /**
+     * Nested IN ROW subquery — an outer IN subquery whose own WHERE contains another IN ROW subquery:
+     * {@code FROM main | WHERE x IN (FROM sub | WHERE y IN (ROW a = 1) | KEEP y)}.
+     *
+     * Filter[InSubquery[?x, Keep[Filter[InSubquery[?y, Row[[1[INTEGER] AS a]]]][UnresolvedRelation[sub]]]]]
+     * \_UnresolvedRelation[main]
+     */
+    public void testWhereInSubqueryWithNestedInRowSubquery() {
+        assumeTrue("Requires IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
+        String query = """
+            FROM main
+            | WHERE x IN (FROM sub | WHERE y IN (ROW a = 1) | KEEP y)
+            """;
+
+        LogicalPlan plan = query(query);
+        Filter outerFilter = as(plan, Filter.class);
+        InSubquery outerIn = as(outerFilter.condition(), InSubquery.class);
+
+        Keep keep = as(outerIn.subquery(), Keep.class);
+        Filter innerFilter = as(keep.child(), Filter.class);
+        InSubquery innerIn = as(innerFilter.condition(), InSubquery.class);
+        assertEquals("y", as(innerIn.value(), UnresolvedAttribute.class).name());
+        assertRowField(as(innerIn.subquery(), Row.class), "a", 1);
+
+        UnresolvedRelation subRelation = as(innerFilter.child(), UnresolvedRelation.class);
+        assertEquals("sub", subRelation.indexPattern().indexPattern());
+
+        UnresolvedRelation mainRelation = as(outerFilter.child(), UnresolvedRelation.class);
+        assertEquals("main", mainRelation.indexPattern().indexPattern());
+    }
+
+    // mixed subquery in where command and where in subquery
+    /**
+     * IN subquery whose FROM has a sibling ROW subquery — the FROM-subquery becomes a UnionAll of an
+     * index pattern and a {@link Subquery} wrapping the {@link Row}:
+     * {@code FROM main | WHERE x (NOT)? IN (FROM sub, (ROW a = 1))}.
+     *
+     * Filter[(NOT) InSubquery[?x, UnionAll[UnresolvedRelation[sub], Subquery[Row[[1[INTEGER] AS a]]]]]]
+     * \_UnresolvedRelation[main]
+     */
+    public void testWhereInSubqueryWithRowInsideFromSubquery() {
+        assumeTrue("Requires IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
+        assumeTrue("Requires FROM subquery support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
+        boolean negated = randomBoolean();
+        String notClause = negated ? "NOT " : "";
+        String query = LoggerMessageFormat.format(null, """
+            FROM main
+            | WHERE x {}IN (FROM sub, (ROW a = 1))
+            """, notClause);
+
+        LogicalPlan plan = query(query);
+        Filter filter = as(plan, Filter.class);
+        InSubquery inSubquery;
+        if (negated) {
+            Not not = as(filter.condition(), Not.class);
+            inSubquery = as(not.field(), InSubquery.class);
+        } else {
+            inSubquery = as(filter.condition(), InSubquery.class);
+        }
+        assertEquals("x", as(inSubquery.value(), UnresolvedAttribute.class).name());
+
+        UnionAll unionAll = as(inSubquery.subquery(), UnionAll.class);
+        List<LogicalPlan> children = unionAll.children();
+        assertEquals(2, children.size());
+
+        UnresolvedRelation subRelation = as(children.get(0), UnresolvedRelation.class);
+        assertEquals("sub", subRelation.indexPattern().indexPattern());
+
+        Subquery rowSubquery = as(children.get(1), Subquery.class);
+        assertRowField(as(rowSubquery.plan(), Row.class), "a", 1);
+
+        UnresolvedRelation mainRelation = as(filter.child(), UnresolvedRelation.class);
+        assertEquals("main", mainRelation.indexPattern().indexPattern());
+    }
+
+    /**
+     * Same shape as {@link #testWhereInSubqueryWithRowInsideFromSubquery()} but with processing commands
+     * stacked on both the inner ROW subquery and on the IN-subquery's FROM source:
+     * {@code FROM main | WHERE x IN (FROM sub, (ROW a = 1 | WHERE a > 0 | EVAL b = a + 1) | KEEP b)}.
+     *
+     * Filter[InSubquery[?x, Keep[UnionAll[UnresolvedRelation[sub],
+     *                                      Subquery[Eval[Filter[Row[[1[INTEGER] AS a]]]]]]]]]
+     * \_UnresolvedRelation[main]
+     */
+    public void testWhereInSubqueryWithRowAndProcessingCommandsInsideFromSubquery() {
+        assumeTrue("Requires IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
+        assumeTrue("Requires FROM subquery support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
+        String query = """
+            FROM main
+            | WHERE x IN (FROM sub,
+                          (ROW a = 1 | WHERE a > 0 | EVAL b = a + 1)
+                          | KEEP b)
+            """;
+
+        LogicalPlan plan = query(query);
+        Filter filter = as(plan, Filter.class);
+        InSubquery inSubquery = as(filter.condition(), InSubquery.class);
+        assertEquals("x", as(inSubquery.value(), UnresolvedAttribute.class).name());
+
+        Keep keep = as(inSubquery.subquery(), Keep.class);
+        UnionAll unionAll = as(keep.child(), UnionAll.class);
+        List<LogicalPlan> children = unionAll.children();
+        assertEquals(2, children.size());
+
+        UnresolvedRelation subRelation = as(children.get(0), UnresolvedRelation.class);
+        assertEquals("sub", subRelation.indexPattern().indexPattern());
+
+        Subquery rowSubquery = as(children.get(1), Subquery.class);
+        Eval eval = as(rowSubquery.plan(), Eval.class);
+        Filter rowFilter = as(eval.child(), Filter.class);
+        GreaterThan gt = as(rowFilter.condition(), GreaterThan.class);
+        assertEquals("a", as(gt.left(), Attribute.class).name());
+        assertRowField(as(rowFilter.child(), Row.class), "a", 1);
+
+        UnresolvedRelation mainRelation = as(filter.child(), UnresolvedRelation.class);
+        assertEquals("main", mainRelation.indexPattern().indexPattern());
+    }
+
+    /**
+     * IN subquery whose FROM only wraps a single ROW subquery — the {@code UnionAll} collapses and the
+     * {@link Row} is hung directly under the {@link InSubquery}, mirroring {@link #testRowSubqueryOnly()}:
+     * {@code FROM main | WHERE x IN (FROM (ROW a = 1))}.
+     *
+     * Filter[InSubquery[?x, Row[[1[INTEGER] AS a]]]]
+     * \_UnresolvedRelation[main]
+     */
+    public void testWhereInSubqueryWithSingleRowFromSubquery() {
+        assumeTrue("Requires IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
+        assumeTrue("Requires FROM subquery support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
+        String query = "FROM main | WHERE x IN (FROM (ROW a = 1))";
+
+        LogicalPlan plan = query(query);
+        Filter filter = as(plan, Filter.class);
+        InSubquery inSubquery = as(filter.condition(), InSubquery.class);
+        assertEquals("x", as(inSubquery.value(), UnresolvedAttribute.class).name());
+        assertRowField(as(inSubquery.subquery(), Row.class), "a", 1);
+
+        UnresolvedRelation mainRelation = as(filter.child(), UnresolvedRelation.class);
+        assertEquals("main", mainRelation.indexPattern().indexPattern());
+    }
+
+    /**
+     * IN subquery whose FROM stitches together two ROW subqueries — produces a {@code UnionAll} of
+     * {@link Subquery}-wrapped {@link Row}s (no index pattern):
+     * {@code FROM main | WHERE x IN (FROM (ROW a = 1), (ROW b = 2))}.
+     *
+     * Filter[InSubquery[?x, UnionAll[Subquery[Row[[1[INTEGER] AS a]]], Subquery[Row[[2[INTEGER] AS b]]]]]]
+     * \_UnresolvedRelation[main]
+     */
+    public void testWhereInSubqueryWithMultipleRowFromSubqueries() {
+        assumeTrue("Requires IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
+        assumeTrue("Requires FROM subquery support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
+        String query = "FROM main | WHERE x IN (FROM (ROW a = 1), (ROW b = 2))";
+
+        LogicalPlan plan = query(query);
+        Filter filter = as(plan, Filter.class);
+        InSubquery inSubquery = as(filter.condition(), InSubquery.class);
+        assertEquals("x", as(inSubquery.value(), UnresolvedAttribute.class).name());
+
+        UnionAll unionAll = as(inSubquery.subquery(), UnionAll.class);
+        List<LogicalPlan> children = unionAll.children();
+        assertEquals(2, children.size());
+
+        Subquery first = as(children.get(0), Subquery.class);
+        assertRowField(as(first.plan(), Row.class), "a", 1);
+
+        Subquery second = as(children.get(1), Subquery.class);
+        assertRowField(as(second.plan(), Row.class), "b", 2);
+
+        UnresolvedRelation mainRelation = as(filter.child(), UnresolvedRelation.class);
+        assertEquals("main", mainRelation.indexPattern().indexPattern());
+    }
+
+    /**
+     * The outer FROM exposes a ROW subquery as one of its branches, and that branch internally references
+     * an IN subquery — i.e. ROW-source subquery on the outside hosts the WHERE IN subquery:
+     * {@code FROM main, (ROW x = 1 | WHERE x IN (FROM sub))}.
+     *
+     * UnionAll
+     * |_UnresolvedRelation[main]
+     * \_Subquery
+     *   \_Filter[InSubquery[?x, UnresolvedRelation[sub]]]
+     *     \_Row[[1[INTEGER] AS x]]
+     */
+    public void testFromRowSubqueryWithWhereInSubqueryInside() {
+        assumeTrue("Requires IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
+        assumeTrue("Requires FROM subquery support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
+        String query = """
+            FROM main, (ROW x = 1 | WHERE x IN (FROM sub))
+            """;
+
+        LogicalPlan plan = query(query);
+        UnionAll unionAll = as(plan, UnionAll.class);
+        List<LogicalPlan> children = unionAll.children();
+        assertEquals(2, children.size());
+
+        UnresolvedRelation mainRelation = as(children.get(0), UnresolvedRelation.class);
+        assertEquals("main", mainRelation.indexPattern().indexPattern());
+
+        Subquery rowSubquery = as(children.get(1), Subquery.class);
+        Filter filter = as(rowSubquery.plan(), Filter.class);
+        InSubquery inSubquery = as(filter.condition(), InSubquery.class);
+        assertEquals("x", as(inSubquery.value(), UnresolvedAttribute.class).name());
+        UnresolvedRelation subRelation = as(inSubquery.subquery(), UnresolvedRelation.class);
+        assertEquals("sub", subRelation.indexPattern().indexPattern());
+        assertRowField(as(filter.child(), Row.class), "x", 1);
+    }
+
+    /**
+     * The outer FROM exposes a FROM-subquery branch which uses an IN-subquery whose source is ROW —
+     * combines all three constructs: outer FROM-subquery, WHERE IN subquery, and ROW as the IN source:
+     * {@code FROM main, (FROM sub | WHERE y IN (ROW a = 1) | KEEP y)}.
+     *
+     * UnionAll
+     * |_UnresolvedRelation[main]
+     * \_Subquery
+     *   \_Keep
+     *     \_Filter[InSubquery[?y, Row[[1[INTEGER] AS a]]]]
+     *       \_UnresolvedRelation[sub]
+     */
+    public void testFromSubqueryWithWhereInRowSubqueryInside() {
+        assumeTrue("Requires IN subquery support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY.isEnabled());
+        assumeTrue("Requires FROM subquery support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
+        String query = """
+            FROM main, (FROM sub | WHERE y IN (ROW a = 1) | KEEP y)
+            """;
+
+        LogicalPlan plan = query(query);
+        UnionAll unionAll = as(plan, UnionAll.class);
+        List<LogicalPlan> children = unionAll.children();
+        assertEquals(2, children.size());
+
+        UnresolvedRelation mainRelation = as(children.get(0), UnresolvedRelation.class);
+        assertEquals("main", mainRelation.indexPattern().indexPattern());
+
+        Subquery fromSubquery = as(children.get(1), Subquery.class);
+        Keep keep = as(fromSubquery.plan(), Keep.class);
+        Filter filter = as(keep.child(), Filter.class);
+        InSubquery inSubquery = as(filter.condition(), InSubquery.class);
+        assertEquals("y", as(inSubquery.value(), UnresolvedAttribute.class).name());
+        assertRowField(as(inSubquery.subquery(), Row.class), "a", 1);
+
+        UnresolvedRelation subRelation = as(filter.child(), UnresolvedRelation.class);
+        assertEquals("sub", subRelation.indexPattern().indexPattern());
     }
 
     /**
@@ -746,5 +1098,29 @@ public class SubqueryWithRowCommandTests extends AbstractStatementParserTests {
         assertEquals(aliasName, alias.name());
         Literal literal = as(alias.child(), Literal.class);
         assertEquals(aliasValue, literal.value());
+    }
+
+    /**
+     * The TS source command does not allow subqueries, regardless of whether the subquery uses FROM or ROW.
+     */
+    public void testTimeSeriesWithRowSubquery() {
+        assumeTrue("Requires subquery in from command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
+        String query = "TS index1, (ROW x = 1)";
+        expectThrows(ParsingException.class, containsString("line 1:1: Subqueries are not supported in TS command"), () -> query(query));
+    }
+
+    /**
+     * In a release build (non-snapshot) the ROW alternative is gated off by the {@code isDevVersion}
+     * predicate in the grammar, and the parser must reject it.
+     */
+    public void testRowSubqueryNotAllowedInReleaseBuild() {
+        assumeFalse("only relevant for non-snapshot builds", Build.current().isSnapshot());
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
+        var mainQueryIndexPattern = randomIndexPatterns();
+        String query = LoggerMessageFormat.format(null, """
+            FROM {}, (ROW x = 1)
+            """, mainQueryIndexPattern);
+
+        expectThrows(ParsingException.class, () -> query(query));
     }
 }

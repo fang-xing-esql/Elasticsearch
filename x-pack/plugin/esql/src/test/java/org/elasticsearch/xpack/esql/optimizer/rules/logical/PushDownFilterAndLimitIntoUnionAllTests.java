@@ -1169,7 +1169,7 @@ public class PushDownFilterAndLimitIntoUnionAllTests extends AbstractLogicalPlan
     public void testPushDownSimpleFilterPastUnionAllWithRowSubquery() {
         assumeTrue(
             "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
+            EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled()
         );
         var plan = planSubquery("""
             FROM test, (ROW emp_no = 100, salary = 50000)
@@ -1209,7 +1209,7 @@ public class PushDownFilterAndLimitIntoUnionAllTests extends AbstractLogicalPlan
     public void testPushDownSimpleFilterPrunesRowBranch() {
         assumeTrue(
             "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
+            EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled()
         );
         var plan = planSubquery("""
             FROM test, (ROW emp_no = 1, salary = 100)
@@ -1236,7 +1236,7 @@ public class PushDownFilterAndLimitIntoUnionAllTests extends AbstractLogicalPlan
     public void testPushDownFilterPastUnionAllWithRowOnlySubqueries() {
         assumeTrue(
             "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
+            EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled()
         );
         var plan = planSubquery("""
             FROM (ROW emp_no = 100, salary = 50000)
@@ -1267,7 +1267,7 @@ public class PushDownFilterAndLimitIntoUnionAllTests extends AbstractLogicalPlan
     public void testPushDownFilterPrunesRowBranchWithoutTheField() {
         assumeTrue(
             "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
+            EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled()
         );
         var plan = planSubquery("""
             FROM test, (ROW emp_no = 1)
@@ -1294,7 +1294,7 @@ public class PushDownFilterAndLimitIntoUnionAllTests extends AbstractLogicalPlan
     public void testPushDownFullTextMatchOperatorPastUnionAllWithRowSubquery() {
         assumeTrue(
             "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
+            EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled()
         );
         var plan = planSubquery("""
             FROM test, (ROW emp_no = 1, salary = 50000)
@@ -1325,7 +1325,7 @@ public class PushDownFilterAndLimitIntoUnionAllTests extends AbstractLogicalPlan
     public void testPushDownConjunctiveFullTextFunctionsPastUnionAllWithRowSubquery() {
         assumeTrue(
             "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
+            EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled()
         );
         var plan = planSubquery("""
             FROM test, (FROM test | WHERE languages > 0), (ROW emp_no = 1, salary = 50000)
@@ -1389,7 +1389,7 @@ public class PushDownFilterAndLimitIntoUnionAllTests extends AbstractLogicalPlan
     public void testPushDownDisjunctiveFullTextFunctionPastUnionAllWithRowSubquery() {
         assumeTrue(
             "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
+            EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled()
         );
         var plan = planSubquery("""
             FROM test, (ROW emp_no = 1)
@@ -1423,7 +1423,7 @@ public class PushDownFilterAndLimitIntoUnionAllTests extends AbstractLogicalPlan
     public void testPushDownMixedFullTextAndComparisonPastUnionAllWithRowSubquery() {
         assumeTrue(
             "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
+            EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled()
         );
         var plan = planSubquery("""
             FROM test, (ROW emp_no = 100, salary = 50000)

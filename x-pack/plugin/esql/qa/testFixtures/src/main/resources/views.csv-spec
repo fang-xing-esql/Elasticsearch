@@ -729,6 +729,8 @@ c:long
 viewRowConstantsBody
 required_capability: views_with_no_branching
 required_capability: views_crud_as_index_actions
+required_capability: subquery_in_from_command
+required_capability: subquery_with_row
 
 FROM view_row_constants
 | SORT seed, label
@@ -741,6 +743,8 @@ seed:integer | label:keyword
 viewRowEvalBody
 required_capability: views_with_no_branching
 required_capability: views_crud_as_index_actions
+required_capability: subquery_in_from_command
+required_capability: subquery_with_row
 
 FROM view_row_eval
 | SORT multiplier
@@ -752,9 +756,10 @@ multiplier:integer | triple:integer
 
 viewEmployeesRowSubqueryBody
 required_capability: subquery_in_from_command
-required_capability: subquery_in_from_command_with_row
 required_capability: views_with_branching
 required_capability: views_crud_as_index_actions
+required_capability: subquery_in_from_command
+required_capability: subquery_with_row
 
 FROM view_employees_row_subquery
 ;

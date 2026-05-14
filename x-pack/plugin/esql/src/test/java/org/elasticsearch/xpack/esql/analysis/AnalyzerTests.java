@@ -5308,7 +5308,7 @@ public class AnalyzerTests extends ESTestCase {
     public void testRowSubqueryInFrom() {
         assumeTrue(
             "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
+            EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled()
         );
         LogicalPlan plan = basic().query("""
             FROM test, (ROW x = 1)
@@ -5355,7 +5355,7 @@ public class AnalyzerTests extends ESTestCase {
     public void testRowSubqueryInFromWithProcessingCommandsInSubquery() {
         assumeTrue(
             "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
+            EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled()
         );
         LogicalPlan plan = basic().query("""
             FROM test, (ROW x = 1 | EVAL y = x + 1 | WHERE y > 0)
@@ -5402,7 +5402,7 @@ public class AnalyzerTests extends ESTestCase {
     public void testRowSubqueryInFromWithoutMainIndexPattern() {
         assumeTrue(
             "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
+            EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled()
         );
         LogicalPlan plan = basic().query("""
             FROM (ROW x = 1 | EVAL y = x + 1)
@@ -5431,7 +5431,7 @@ public class AnalyzerTests extends ESTestCase {
     public void testMixedRowAndFromSubqueriesInFrom() {
         assumeTrue(
             "Requires subquery with row as source command support",
-            EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled()
+            EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled()
         );
         LogicalPlan plan = basic().addLanguages().query("""
             FROM test
@@ -6199,7 +6199,7 @@ public class AnalyzerTests extends ESTestCase {
      *     \_Project — Subquery → Row[[abc[KEYWORD] AS x]]
      */
     public void testUnionAllWithConflictingTypesFromRowSubqueries() {
-        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled());
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled());
 
         LogicalPlan plan = analyzer().query("""
             FROM (ROW x = 1), (ROW x = "abc")
@@ -6243,7 +6243,7 @@ public class AnalyzerTests extends ESTestCase {
      * {@link UnsupportedAttribute} in the {@code UnionAll} output.
      */
     public void testUnionAllWithConflictingTypesFromRowSubqueriesWithoutUsageInMainQuery() {
-        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled());
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled());
 
         LogicalPlan plan = analyzer().query("""
             FROM (ROW x = 1), (ROW x = "abc")
@@ -6267,7 +6267,7 @@ public class AnalyzerTests extends ESTestCase {
      * {@link UnsupportedAttribute} after the {@code UnionAll}.
      */
     public void testUnionAllWithConflictingTypesFromMixedRowAndFromSubqueries() {
-        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled());
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled());
 
         LogicalPlan plan = sampleData().query("""
             FROM (FROM sample_data), (ROW client_ip = 1)
@@ -6326,7 +6326,7 @@ public class AnalyzerTests extends ESTestCase {
      * becomes an {@link UnsupportedAttribute} after the {@code UnionAll}.
      */
     public void testUnionAllWithConflictingTypesFromRowSubqueryAndMainIndex() {
-        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled());
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled());
 
         LogicalPlan plan = basic().query("""
             FROM test, (ROW emp_no = "abc")
@@ -6384,7 +6384,7 @@ public class AnalyzerTests extends ESTestCase {
      * is produced. Mirrors {@link #testMixedDataTypesInSubquery()} but with a ROW source.
      */
     public void testMixedDataTypesInRowSubqueryWithExplicitCastingInside() {
-        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled());
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled());
         LogicalPlan plan = basic().query("""
             FROM test, (ROW emp_no = "1" | EVAL emp_no = emp_no::integer)
             | WHERE emp_no > 0
@@ -6441,7 +6441,7 @@ public class AnalyzerTests extends ESTestCase {
      * $$emp_no$converted_to$long]} into each leg of the UnionAll.
      */
     public void testMixedDataTypesInRowSubqueryWithExplicitCastingOutside() {
-        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled());
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled());
         LogicalPlan plan = basic().query("""
             FROM test, (ROW emp_no = 1)
             | EVAL emp_no = emp_no::long
@@ -6510,7 +6510,7 @@ public class AnalyzerTests extends ESTestCase {
      * pushed down into each UnionAll leg as a {@code $$emp_no$converted_to$long} reference.
      */
     public void testMixedDataTypesInRowSubqueryWithExplicitCastingInsideAndOutside() {
-        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled());
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled());
         LogicalPlan plan = basic().query("""
             FROM test, (ROW emp_no = "1" | EVAL emp_no = emp_no::integer)
             | EVAL emp_no_long = emp_no::long
@@ -6578,7 +6578,7 @@ public class AnalyzerTests extends ESTestCase {
      * type conflict and produces a single resolved {@link ReferenceAttribute}.
      */
     public void testMultipleRowSubqueriesWithExplicitCastingInside() {
-        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled());
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled());
         LogicalPlan plan = analyzer().query("""
             FROM (ROW x = "1" | EVAL x = x::integer)
                , (ROW x = 1.5 | EVAL x = x::integer)
@@ -6626,7 +6626,7 @@ public class AnalyzerTests extends ESTestCase {
      * preserves the column types and there are no {@link UnsupportedAttribute}s in the output.
      */
     public void testUnionAllWithMatchingTypesFromMultipleRowSubqueries() {
-        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled());
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled());
 
         LogicalPlan plan = analyzer().query("""
             FROM (ROW a = 1, b = "x"), (ROW a = 2, b = "y"), (ROW a = 3, b = "z")
@@ -6667,7 +6667,7 @@ public class AnalyzerTests extends ESTestCase {
      * each leg keeps its {@link Row} unchanged below a {@code Project → Subquery} wrapper.
      */
     public void testTwoRowSubqueriesEachWithMixedScalarAndMultivalueFieldsMatchingTypes() {
-        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled());
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled());
 
         LogicalPlan plan = analyzer().query("""
             FROM (ROW a = 1, b = [10, 20]), (ROW a = [100, 200], b = 1)
@@ -6717,7 +6717,7 @@ public class AnalyzerTests extends ESTestCase {
      * {@link #testUnionAllWithConflictingTypesFromRowSubqueries()} for two columns at once.
      */
     public void testTwoRowSubqueriesEachWithMixedScalarAndMultivalueFieldsConflictingTypes() {
-        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled());
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled());
 
         LogicalPlan plan = analyzer().query("""
             FROM (ROW a = 1, b = ["cat", "dog"]), (ROW a = [1.5, 2.5], b = true)
@@ -6769,7 +6769,7 @@ public class AnalyzerTests extends ESTestCase {
      * {@link UnsupportedAttribute}s, since every field name is unique to one leg.
      */
     public void testThreeRowSubqueriesWithDisjointFieldNamesMixedScalarAndMultivalue() {
-        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled());
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled());
 
         LogicalPlan plan = analyzer().query("""
             FROM (ROW a = 1, b = [10, 20, 30])
@@ -6810,7 +6810,7 @@ public class AnalyzerTests extends ESTestCase {
      * output, while the index leg gets null evals for both.
      */
     public void testIndexPatternWithMixedRowSubqueriesAndConflictingTypes() {
-        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND_WITH_ROW.isEnabled());
+        assumeTrue("Requires subquery in FROM command support", EsqlCapabilities.Cap.SUBQUERY_WITH_ROW.isEnabled());
 
         LogicalPlan plan = basic().query("""
             FROM test, (ROW x = 1, y = ["cat", "dog"]), (ROW x = [1.5, -2.5], y = true)
