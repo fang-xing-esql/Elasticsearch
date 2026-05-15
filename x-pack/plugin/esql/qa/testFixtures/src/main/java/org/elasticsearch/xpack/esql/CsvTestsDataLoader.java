@@ -301,7 +301,12 @@ public class CsvTestsDataLoader {
         new ViewConfig("employees_not_rehired"),
         new ViewConfig("employees_all"),
         new ViewConfig("employees_extra"),
-        new ViewConfig("view_with_subquery")
+        new ViewConfig("view_with_subquery"),
+        new ViewConfig("k8s_max_bytes_by_cluster"),
+        new ViewConfig("k8s_max_rate"),
+        new ViewConfig("k8s_downsampled_low_tx_count"),
+        new ViewConfig("k8s_early_window"),
+        new ViewConfig("k8s_downsampled_first_bucket")
     ).collect(toMap(ViewConfig::name, Function.identity()));
 
     /**

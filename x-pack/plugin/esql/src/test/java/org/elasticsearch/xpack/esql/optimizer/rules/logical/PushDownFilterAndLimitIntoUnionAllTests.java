@@ -56,6 +56,246 @@ public class PushDownFilterAndLimitIntoUnionAllTests extends AbstractLogicalPlan
         );
     }
 
+    // ============================================================================================
+    // The following tests mirror the FROM-subquery push-down tests above but exercise subqueries
+    // sourced from the TS command. The TS branch is wrapped in a Subquery node and resolves over
+    // an EsRelation in TIME_SERIES mode, so the outer Filter must travel past the Subquery wrapper
+    // and combine with any in-subquery filter before reaching the EsRelation.
+    // ============================================================================================
+
+    /*
+     * Limit[1000]
+     * \_UnionAll[...]
+     *   |_Project (sample_data leg)
+     *   |  \_Eval[null evals for the k8s fields]
+     *   |    \_Filter[@timestamp > 2024-01-01]   outer predicate pushed down
+     *   |      \_EsRelation[sample_data]
+     *   \_Project (TS k8s leg)
+     *     \_Eval[null for sample_data fields + counter demotions]
+     *       \_Subquery
+     *         \_Filter[@timestamp > 2025-10-07]  in-subquery + outer predicate combined and simplified
+     *           \_EsRelation[k8s][TIME_SERIES]
+     */
+    public void testPushDownSimpleFilterPastUnionAllWithTsSubquery() {
+        assumeTrue("Requires subquery with TS source support", EsqlCapabilities.Cap.SUBQUERY_WITH_TS.isEnabled());
+
+        var plan = planSubquery("""
+            FROM sample_data, (TS k8s | WHERE @timestamp > "2025-10-07")
+            | WHERE @timestamp > "2024-01-01"
+            """);
+
+        Limit limit = as(plan, Limit.class);
+        UnionAll unionAll = as(limit.child(), UnionAll.class);
+        assertEquals(2, unionAll.children().size());
+
+        // Left leg — sample_data: outer @timestamp filter pushed past Eval directly above EsRelation.
+        Project sampleProject = as(unionAll.children().get(0), Project.class);
+        Eval sampleEval = as(sampleProject.child(), Eval.class);
+        Filter sampleFilter = as(sampleEval.child(), Filter.class);
+        GreaterThan sampleGt = as(sampleFilter.condition(), GreaterThan.class);
+        FieldAttribute sampleTimestamp = as(sampleGt.left(), FieldAttribute.class);
+        assertEquals("@timestamp", sampleTimestamp.name());
+        EsRelation sampleRelation = as(sampleFilter.child(), EsRelation.class);
+        assertEquals("sample_data", sampleRelation.indexPattern());
+
+        // Right leg — TS k8s: outer predicate is combined with the subquery's WHERE @timestamp.
+        // After constant folding, "@timestamp > 2024-01-01 AND @timestamp > 2025-10-07" collapses
+        // to a single predicate "@timestamp > 2025-10-07".
+        Project tsProject = as(unionAll.children().get(1), Project.class);
+        Eval tsEval = as(tsProject.child(), Eval.class);
+        Subquery tsSubquery = as(tsEval.child(), Subquery.class);
+        Filter tsFilter = as(tsSubquery.child(), Filter.class);
+        GreaterThan tsGt = as(tsFilter.condition(), GreaterThan.class);
+        FieldAttribute tsTimestamp = as(tsGt.left(), FieldAttribute.class);
+        assertEquals("@timestamp", tsTimestamp.name());
+        EsRelation tsRelation = as(tsFilter.child(), EsRelation.class);
+        assertEquals("k8s", tsRelation.indexPattern());
+    }
+
+    /**
+     * Conjunctive outer predicate "<code>@timestamp &gt; X AND @timestamp &lt; Y</code>" is pushed past
+     * the UnionAll into each branch; the TS branch combines it with its existing WHERE filter.
+     */
+    public void testPushDownConjunctiveFilterPastUnionAllWithTsSubquery() {
+        assumeTrue("Requires subquery with TS source support", EsqlCapabilities.Cap.SUBQUERY_WITH_TS.isEnabled());
+
+        var plan = planSubquery("""
+            FROM sample_data, (TS k8s | WHERE @timestamp > "2025-10-07")
+            | WHERE @timestamp > "2024-01-01" AND @timestamp < "2025-12-31"
+            """);
+
+        Limit limit = as(plan, Limit.class);
+        UnionAll unionAll = as(limit.child(), UnionAll.class);
+        assertEquals(2, unionAll.children().size());
+
+        // Left leg — sample_data: Filter[@timestamp > "2024-01-01" AND @timestamp < "2025-12-31"]
+        Project sampleProject = as(unionAll.children().get(0), Project.class);
+        Eval sampleEval = as(sampleProject.child(), Eval.class);
+        Filter sampleFilter = as(sampleEval.child(), Filter.class);
+        And sampleAnd = as(sampleFilter.condition(), And.class);
+        GreaterThan sampleGt = as(sampleAnd.left(), GreaterThan.class);
+        assertEquals("@timestamp", as(sampleGt.left(), FieldAttribute.class).name());
+        LessThan sampleLt = as(sampleAnd.right(), LessThan.class);
+        assertEquals("@timestamp", as(sampleLt.left(), FieldAttribute.class).name());
+        EsRelation sampleRelation = as(sampleFilter.child(), EsRelation.class);
+        assertEquals("sample_data", sampleRelation.indexPattern());
+
+        // Right leg — TS k8s: original "@timestamp > 2025-10-07" combined with outer conjunction.
+        // The "@timestamp > 2024-01-01" branch is absorbed because of the stricter inner predicate,
+        // leaving Filter[@timestamp > 2025-10-07 AND @timestamp < 2025-12-31].
+        Project tsProject = as(unionAll.children().get(1), Project.class);
+        Eval tsEval = as(tsProject.child(), Eval.class);
+        Subquery tsSubquery = as(tsEval.child(), Subquery.class);
+        Filter tsFilter = as(tsSubquery.child(), Filter.class);
+        And tsAnd = as(tsFilter.condition(), And.class);
+        GreaterThan tsGt = as(tsAnd.left(), GreaterThan.class);
+        assertEquals("@timestamp", as(tsGt.left(), FieldAttribute.class).name());
+        LessThan tsLt = as(tsAnd.right(), LessThan.class);
+        assertEquals("@timestamp", as(tsLt.left(), FieldAttribute.class).name());
+        EsRelation tsRelation = as(tsFilter.child(), EsRelation.class);
+        assertEquals("k8s", tsRelation.indexPattern());
+    }
+
+    /**
+     * Disjunctive outer predicate is pushed past the UnionAll. The TS branch retains its in-subquery
+     * AND-predicate, so the resulting Filter combines the in-subquery condition with the outer OR
+     * via "(inner) AND (outerOr)".
+     */
+    public void testPushDownDisjunctiveFilterPastUnionAllWithTsSubquery() {
+        assumeTrue("Requires subquery with TS source support", EsqlCapabilities.Cap.SUBQUERY_WITH_TS.isEnabled());
+
+        var plan = planSubquery("""
+            FROM sample_data, (TS k8s | WHERE @timestamp > "2025-10-07")
+            | WHERE @timestamp > "2024-01-01" OR @timestamp < "2020-01-01"
+            """);
+
+        Limit limit = as(plan, Limit.class);
+        UnionAll unionAll = as(limit.child(), UnionAll.class);
+        assertEquals(2, unionAll.children().size());
+
+        // Left leg — sample_data: a single Or sits above EsRelation.
+        Project sampleProject = as(unionAll.children().get(0), Project.class);
+        Eval sampleEval = as(sampleProject.child(), Eval.class);
+        Filter sampleFilter = as(sampleEval.child(), Filter.class);
+        Or sampleOr = as(sampleFilter.condition(), Or.class);
+        GreaterThan sampleGt = as(sampleOr.left(), GreaterThan.class);
+        assertEquals("@timestamp", as(sampleGt.left(), FieldAttribute.class).name());
+        LessThan sampleLt = as(sampleOr.right(), LessThan.class);
+        assertEquals("@timestamp", as(sampleLt.left(), FieldAttribute.class).name());
+        EsRelation sampleRelation = as(sampleFilter.child(), EsRelation.class);
+        assertEquals("sample_data", sampleRelation.indexPattern());
+
+        // Right leg — TS k8s: the in-subquery WHERE is combined with the outer OR via
+        // And(inner_gt, Or(outer_gt, outer_lt)). The optimizer keeps the inner @timestamp gt
+        // on the left of the And because it is the tightest bound.
+        Project tsProject = as(unionAll.children().get(1), Project.class);
+        Eval tsEval = as(tsProject.child(), Eval.class);
+        Subquery tsSubquery = as(tsEval.child(), Subquery.class);
+        Filter tsFilter = as(tsSubquery.child(), Filter.class);
+        And tsAnd = as(tsFilter.condition(), And.class);
+        GreaterThan innerGt = as(tsAnd.left(), GreaterThan.class);
+        assertEquals("@timestamp", as(innerGt.left(), FieldAttribute.class).name());
+        Or tsOr = as(tsAnd.right(), Or.class);
+        GreaterThan outerGt = as(tsOr.left(), GreaterThan.class);
+        assertEquals("@timestamp", as(outerGt.left(), FieldAttribute.class).name());
+        LessThan outerLt = as(tsOr.right(), LessThan.class);
+        assertEquals("@timestamp", as(outerLt.left(), FieldAttribute.class).name());
+        EsRelation tsRelation = as(tsFilter.child(), EsRelation.class);
+        assertEquals("k8s", tsRelation.indexPattern());
+    }
+
+    /**
+     * A full-text predicate outside the UnionAll on a field that exists only in one branch
+     * (<code>message</code> is present in <code>sample_data</code> but not in the TS branch).
+     * The TS branch is pruned (its <code>message</code> reference is null and cannot be matched),
+     * leaving the single sample_data leg with the MatchOperator pushed onto the EsRelation.
+     */
+    public void testPushDownFullTextFunctionPastUnionAllWithTsSubqueryPrunesTsBranch() {
+        assumeTrue("Requires subquery with TS source support", EsqlCapabilities.Cap.SUBQUERY_WITH_TS.isEnabled());
+
+        var plan = planSubquery("""
+            FROM sample_data, (TS k8s | WHERE @timestamp > "2025-10-07")
+            | WHERE message:"connect"
+            """);
+
+        Limit limit = as(plan, Limit.class);
+        UnionAll unionAll = as(limit.child(), UnionAll.class);
+        assertEquals(1, unionAll.children().size());
+
+        Project sampleProject = as(unionAll.children().get(0), Project.class);
+        Eval sampleEval = as(sampleProject.child(), Eval.class);
+        Filter sampleFilter = as(sampleEval.child(), Filter.class);
+        MatchOperator match = as(sampleFilter.condition(), MatchOperator.class);
+        FieldAttribute messageField = as(match.field(), FieldAttribute.class);
+        assertEquals("message", messageField.name());
+        Literal queryLiteral = as(match.query(), Literal.class);
+        assertEquals(new BytesRef("connect"), queryLiteral.value());
+        EsRelation sampleRelation = as(sampleFilter.child(), EsRelation.class);
+        assertEquals("sample_data", sampleRelation.indexPattern());
+    }
+
+    /**
+     * Conjunctive full-text predicate outside the UnionAll. Two leaf full-text functions reference
+     * fields that exist only in <code>sample_data</code>, so the TS branch is pruned and the
+     * remaining branch carries both MatchOperator and QueryString above the EsRelation.
+     */
+    public void testPushDownConjunctiveFullTextFunctionPastUnionAllWithTsSubquery() {
+        assumeTrue("Requires subquery with TS source support", EsqlCapabilities.Cap.SUBQUERY_WITH_TS.isEnabled());
+
+        var plan = planSubquery("""
+            FROM sample_data, (TS k8s | WHERE @timestamp > "2025-10-07")
+            | WHERE message:"connect" AND qstr("message:disconnect")
+            """);
+
+        Limit limit = as(plan, Limit.class);
+        UnionAll unionAll = as(limit.child(), UnionAll.class);
+        assertEquals(1, unionAll.children().size());
+
+        Project sampleProject = as(unionAll.children().get(0), Project.class);
+        Eval sampleEval = as(sampleProject.child(), Eval.class);
+        Filter sampleFilter = as(sampleEval.child(), Filter.class);
+        And and = as(sampleFilter.condition(), And.class);
+        MatchOperator match = as(and.left(), MatchOperator.class);
+        FieldAttribute messageField = as(match.field(), FieldAttribute.class);
+        assertEquals("message", messageField.name());
+        QueryString qstr = as(and.right(), QueryString.class);
+        Literal qstrQuery = as(qstr.query(), Literal.class);
+        assertEquals(new BytesRef("message:disconnect"), qstrQuery.value());
+        EsRelation sampleRelation = as(sampleFilter.child(), EsRelation.class);
+        assertEquals("sample_data", sampleRelation.indexPattern());
+    }
+
+    /**
+     * Mixed predicate combining a numeric comparison on <code>@timestamp</code> (which exists in
+     * both branches) with a full-text predicate on <code>message</code> (which exists only in
+     * <code>sample_data</code>). The conjunction is pushed past the UnionAll; because the TS
+     * branch cannot satisfy <code>message:"connect"</code>, it is pruned and only the sample_data
+     * leg survives, carrying both predicates above its EsRelation.
+     */
+    public void testPushDownMixedFilterAndFullTextFunctionPastUnionAllWithTsSubquery() {
+        assumeTrue("Requires subquery with TS source support", EsqlCapabilities.Cap.SUBQUERY_WITH_TS.isEnabled());
+
+        var plan = planSubquery("""
+            FROM sample_data, (TS k8s | WHERE @timestamp > "2025-10-07")
+            | WHERE @timestamp > "2024-01-01" AND message:"connect"
+            """);
+
+        Limit limit = as(plan, Limit.class);
+        UnionAll unionAll = as(limit.child(), UnionAll.class);
+        assertEquals(1, unionAll.children().size());
+
+        Project sampleProject = as(unionAll.children().get(0), Project.class);
+        Eval sampleEval = as(sampleProject.child(), Eval.class);
+        Filter sampleFilter = as(sampleEval.child(), Filter.class);
+        And and = as(sampleFilter.condition(), And.class);
+        GreaterThan gt = as(and.left(), GreaterThan.class);
+        assertEquals("@timestamp", as(gt.left(), FieldAttribute.class).name());
+        MatchOperator match = as(and.right(), MatchOperator.class);
+        assertEquals("message", as(match.field(), FieldAttribute.class).name());
+        EsRelation sampleRelation = as(sampleFilter.child(), EsRelation.class);
+        assertEquals("sample_data", sampleRelation.indexPattern());
+    }
+
     /*
      *Limit[1000[INTEGER],false,false]
      * \_UnionAll[[_meta_field{r}#45, emp_no{r}#46, first_name{r}#47, gender{r}#48, hire_date{r}#49, job{r}#50, job.raw{r}#51,
