@@ -440,6 +440,8 @@ public class LogicalPlanBuilder extends ExpressionBuilder {
     public LogicalPlan visitSubquerySourceCommand(EsqlBaseParser.SubquerySourceCommandContext ctx) {
         if (ctx.fromCommand() != null) {
             return visitFromCommand(ctx.fromCommand());
+        } else if (ctx.externalCommand() != null) {
+            return visitExternalCommand(ctx.externalCommand());
         } else {
             return visitRowCommand(ctx.rowCommand());
         }

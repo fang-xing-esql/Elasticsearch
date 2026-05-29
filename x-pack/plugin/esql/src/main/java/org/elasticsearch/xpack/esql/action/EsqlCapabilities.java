@@ -1318,6 +1318,21 @@ public class EsqlCapabilities {
         SUBQUERY_IN_FROM_COMMAND_INLINE_STATS_PRUNING,
 
         /**
+         * Support {@code EXTERNAL "<uri>"} as the source command inside a subquery in the FROM clause,
+         * e.g. {@code FROM employees, (EXTERNAL "{{employees}}" | WHERE salary > 50000)}. Lets a subquery
+         * read from an ad-hoc external data source (Parquet/CSV on S3, HTTP, GCS, Azure, local) the same
+         * way it reads from an index via {@code (FROM <index>)}. Gated together with
+         * {@link #EXTERNAL_COMMAND}: this capability requires both the subquery-in-FROM machinery and the
+         * EXTERNAL command, which is itself behind the external datasources feature flag.
+         *
+         * <p>Note: registered datasets accessed via {@code FROM <dataset-name>} already participate in
+         * subqueries through the regular {@code fromCommand} grammar — see {@link #DATASET_IN_FROM_COMMAND}.
+         * This capability covers only the inline URI form, where a separate {@code externalCommand} is the
+         * subquery source.
+         */
+        SUBQUERY_IN_FROM_COMMAND_WITH_EXTERNAL_DATA_SOURCE(DataSourceMetadata.ESQL_EXTERNAL_DATASOURCES_FEATURE_FLAG.isEnabled()),
+
+        /**
          * Support IN non-correlated subqueries in WHERE command.
          * TODO: drop the {@code Build.current().isSnapshot()} gate (and the matching
          * {@code {this.isDevVersion()}?} predicates in InExpression.g4 / EsqlBaseParser.g4)

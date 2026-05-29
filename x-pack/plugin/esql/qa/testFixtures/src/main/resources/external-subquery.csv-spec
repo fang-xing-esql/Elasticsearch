@@ -1,0 +1,272 @@
+// Subqueries inside a FROM command whose source is an inline EXTERNAL data source, e.g.
+//   FROM employees, (EXTERNAL "{{employees}}" | WHERE salary > 50000)
+//
+// Picked up by AbstractExternalSourceSpecTestCase subclasses (ParquetFormatSpecIT, OrcFormatSpecIT,
+// CsvFormatSpecIT, NdJsonFormatSpecIT, ...) via the `/external-*.csv-spec` glob — each test fires
+// once per storage backend (S3/HTTP/GCS/Azure/LOCAL) and once per configured format/codec.
+//
+// Every test gates on `subquery_in_from_command_with_external_data_source`: until the grammar adds
+// `externalCommand` to `subquerySourceCommand` (and the capability flips on), every test in this
+// file is skipped by the capabilities pre-check.
+
+subqueryExternalBasic
+required_capability: subquery_in_from_command
+required_capability: external_command
+required_capability: subquery_in_from_command_with_external_data_source
+
+FROM employees,
+     (EXTERNAL "{{employees}}")
+| WHERE emp_no >= 10091 AND emp_no < 10094
+| KEEP emp_no, languages
+| SORT emp_no
+;
+
+emp_no:integer | languages:integer
+10091          | 3
+10091          | 3
+10092          | 1
+10092          | 1
+10093          | 3
+10093          | 3
+;
+
+subqueryExternalOnly
+required_capability: subquery_in_from_command
+required_capability: external_command
+required_capability: subquery_in_from_command_with_external_data_source
+
+FROM (EXTERNAL "{{employees}}")
+| WHERE emp_no >= 10091 AND emp_no < 10094
+| KEEP emp_no, languages
+| SORT emp_no
+;
+
+emp_no:integer | languages:integer
+10091          | 3
+10092          | 1
+10093          | 3
+;
+
+subqueryExternalMultiple
+required_capability: subquery_in_from_command
+required_capability: external_command
+required_capability: subquery_in_from_command_with_external_data_source
+
+FROM (EXTERNAL "{{employees}}"),
+     (EXTERNAL "{{employees}}")
+| STATS cnt = COUNT(*)
+;
+
+cnt:long
+200
+;
+
+subqueryExternalCountStarInMainQuery
+required_capability: subquery_in_from_command
+required_capability: external_command
+required_capability: subquery_in_from_command_with_external_data_source
+required_capability: subquery_in_from_command_without_implicit_limit
+required_capability: subquery_in_from_command_prune_no_fields
+
+FROM employees, (EXTERNAL "{{employees}}")
+| STATS cnt = COUNT(*)
+;
+
+cnt:long
+200
+;
+
+subqueryExternalWithWhereInSubquery
+required_capability: subquery_in_from_command
+required_capability: external_command
+required_capability: subquery_in_from_command_with_external_data_source
+
+FROM (EXTERNAL "{{employees}}"
+      | WHERE salary > 70000
+      | KEEP emp_no, salary)
+| SORT salary DESC, emp_no
+;
+
+emp_no:integer | salary:integer
+10029          | 74999
+10045          | 74970
+10007          | 74572
+10027          | 73851
+10019          | 73717
+10099          | 73578
+10097          | 71165
+10033          | 70011
+;
+
+subqueryExternalWithEvalInSubquery
+required_capability: subquery_in_from_command
+required_capability: external_command
+required_capability: subquery_in_from_command_with_external_data_source
+
+FROM (EXTERNAL "{{employees}}"
+      | EVAL bonus = round(salary * 0.1, 1)
+      | KEEP emp_no, salary, bonus)
+| WHERE emp_no >= 10091 AND emp_no < 10094
+| SORT emp_no
+;
+
+emp_no:integer | salary:integer | bonus:double
+10091          | 38645          | 3864.5
+10092          | 25976          | 2597.6
+10093          | 45656          | 4565.6
+;
+
+subqueryExternalWithStatsInSubquery
+required_capability: subquery_in_from_command
+required_capability: external_command
+required_capability: subquery_in_from_command_with_external_data_source
+
+FROM (EXTERNAL "{{employees}}"
+      | STATS avg_salary = AVG(salary), cnt = COUNT(*) BY gender)
+| SORT gender
+;
+
+avg_salary:double    | cnt:long | gender:keyword
+50490.78787878788    | 33       | F
+46860.59649122807    | 57       | M
+48760.5              | 10       | null
+;
+
+subqueryExternalWithSortAndLimitInSubquery
+required_capability: subquery_in_from_command
+required_capability: external_command
+required_capability: subquery_in_from_command_with_external_data_source
+
+FROM (EXTERNAL "{{employees}}"
+      | SORT salary DESC
+      | LIMIT 3
+      | KEEP emp_no, salary)
+| SORT salary DESC
+;
+
+emp_no:integer | salary:integer
+10029          | 74999
+10045          | 74970
+10007          | 74572
+;
+
+subqueryExternalWithDissectInSubquery
+required_capability: subquery_in_from_command
+required_capability: external_command
+required_capability: subquery_in_from_command_with_external_data_source
+
+FROM (EXTERNAL "{{employees}}"
+      | EVAL full_name = CONCAT(first_name, " ", last_name)
+      | DISSECT full_name "%{fn} %{ln}"
+      | KEEP emp_no, fn)
+| WHERE emp_no >= 10001 AND emp_no <= 10003
+| SORT emp_no
+;
+
+emp_no:integer | fn:keyword
+10001          | Georgi
+10002          | Bezalel
+10003          | Parto
+;
+
+subqueryExternalWithMvExpandInSubquery
+required_capability: subquery_in_from_command
+required_capability: external_command
+required_capability: subquery_in_from_command_with_external_data_source
+
+FROM (EXTERNAL "{{employees}}"
+      | MV_EXPAND job_positions
+      | KEEP emp_no, job_positions)
+| WHERE emp_no == 10001
+| SORT job_positions
+;
+
+emp_no:integer | job_positions:keyword
+10001          | Accountant
+10001          | Senior Python Developer
+;
+
+subqueryExternalStatsAfterSubquery
+required_capability: subquery_in_from_command
+required_capability: external_command
+required_capability: subquery_in_from_command_with_external_data_source
+
+FROM (EXTERNAL "{{employees}}")
+| STATS cnt = COUNT(*) BY gender
+| SORT gender
+;
+
+cnt:long | gender:keyword
+33       | F
+57       | M
+10       | null
+;
+
+subqueryExternalWhereStatsAfterSubquery
+required_capability: subquery_in_from_command
+required_capability: external_command
+required_capability: subquery_in_from_command_with_external_data_source
+
+FROM (EXTERNAL "{{employees}}"),
+     (EXTERNAL "{{employees}}")
+| WHERE gender == "F"
+| STATS cnt = COUNT(*), avg_salary = AVG(salary)
+;
+
+cnt:long | avg_salary:double
+66       | 50490.78787878788
+;
+
+subqueryExternalWithBooks
+required_capability: subquery_in_from_command
+required_capability: external_command
+required_capability: subquery_in_from_command_with_external_data_source
+
+FROM (EXTERNAL "{{books}}"
+      | WHERE book_no == "5327"
+      | KEEP book_no, title)
+;
+
+book_no:keyword | title:keyword
+5327            | War and Peace
+;
+
+subqueryExternalCombineWithEsIndex
+required_capability: subquery_in_from_command
+required_capability: external_command
+required_capability: subquery_in_from_command_with_external_data_source
+
+FROM sample_data,
+     (EXTERNAL "{{employees}}"
+      | WHERE emp_no >= 10091 AND emp_no < 10094
+      | KEEP emp_no, languages)
+| WHERE (emp_no >= 10091 AND emp_no < 10094) OR emp_no IS NULL
+| SORT emp_no, client_ip
+| KEEP emp_no, languages, client_ip
+;
+
+emp_no:integer | languages:integer | client_ip:ip
+10091          | 3                 | null
+10092          | 1                 | null
+10093          | 3                 | null
+null           | null              | 172.21.0.5
+null           | null              | 172.21.2.113
+null           | null              | 172.21.2.162
+null           | null              | 172.21.3.15
+null           | null              | 172.21.3.15
+null           | null              | 172.21.3.15
+null           | null              | 172.21.3.15
+;
+
+subqueryExternalMultifileSplit
+required_capability: subquery_in_from_command
+required_capability: external_command
+required_capability: subquery_in_from_command_with_external_data_source
+
+FROM (EXTERNAL "{{employees_multifile_split}}"
+      | STATS cnt = COUNT(*))
+;
+
+cnt:long
+100
+;

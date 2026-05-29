@@ -79,9 +79,21 @@ public class ExternalDistributedSpecIT extends AbstractExternalSourceSpecTestCas
         return CLUSTER_INSTANCE.getHttpAddresses();
     }
 
+    /**
+     * The multi-node project's parquet fixtures only include codec-compressed multi-file splits
+     * (multifile_split-gzip / multifile_split-zstd), not a plain uncompressed multifile_split/.
+     * Point {@code {{employees_multifile_split}}} at the gzip variant so the external multi-file-split
+     * spec (subqueryExternalMultifileSplit) resolves to existing fixtures; the parquet reader handles
+     * the internal GZIP codec transparently, so a COUNT(*) is unaffected by the compression.
+     */
+    @Override
+    protected String multifileSplitDir() {
+        return "multifile_split-gzip";
+    }
+
     @ParametersFactory(argumentFormatting = "csv-spec:%2$s.%3$s [%7$s/%8$s]")
     public static List<Object[]> readScriptSpec() throws Exception {
-        List<Object[]> backendTests = readExternalSpecTests("/external-basic.csv-spec");
+        List<Object[]> backendTests = readExternalSpecTests("/external-basic.csv-spec", "/external-subquery.csv-spec");
         List<Object[]> parameterizedTests = new ArrayList<>();
         for (Object[] backendTest : backendTests) {
             for (String mode : DISTRIBUTION_MODES) {

@@ -96,7 +96,18 @@ public class ParquetRsFormatSpecIT extends AbstractExternalSourceSpecTestCase {
         "nestedWhereEquals",
         "nestedWhereIsNull",
         "nestedStatsMinMax",
-        "nestedFilterAndProjectMixed"
+        "nestedFilterAndProjectMixed",
+        // Same parquet-rs schema limitation as above: the multivalued [job_positions] column is reported
+        // as "element" in the schema. These FROM-subquery specs project the external source's full schema
+        // (a union with an ES index, or a union of two EXTERNAL sources, so the external side must expose
+        // all of its columns to align), which references [job_positions] and trips the parquet-rs reader.
+        // The Java reader passes all of these; re-enable once parquet-rs reports multivalued columns by name.
+        "subqueryExternalBasic",
+        "subqueryExternalMultiple",
+        "subqueryExternalCountStarInMainQuery",
+        "subqueryExternalWhereStatsAfterSubquery",
+        // Directly references [job_positions] via MV_EXPAND, which parquet-rs reports as "element".
+        "subqueryExternalWithMvExpandInSubquery"
     );
 
     @Override

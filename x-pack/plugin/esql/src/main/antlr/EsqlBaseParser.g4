@@ -130,6 +130,7 @@ subquery
 subquerySourceCommand
     : fromCommand
     | {this.isDevVersion()}? rowCommand
+    | {this.isExternalDataSourcesEnabled()}? externalCommand
     ;
 
 indexPattern
