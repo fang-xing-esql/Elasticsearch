@@ -1359,6 +1359,11 @@ public class EsqlCapabilities {
         SUBQUERY_WITH_TS(Build.current().isSnapshot()),
 
         /**
+         * Support external data source in subquery from command
+         */
+        SUBQUERY_WITH_EXTERNAL_DATA_SOURCE(DatasetMetadata.ESQL_EXTERNAL_DATASOURCES_FEATURE_FLAG.isEnabled()),
+
+        /**
          * Support for views in cluster state (and REST API).
          */
         VIEWS_IN_CLUSTER_STATE,
