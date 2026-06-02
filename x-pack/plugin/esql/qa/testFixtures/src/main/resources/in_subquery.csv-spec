@@ -3327,3 +3327,433 @@ emp_no:integer | first_name:keyword
 10002          | Bezalel
 10003          | Parto
 ;
+
+unmappedFieldOnLHSOfInSubquery
+required_capability: where_in_subquery_without_view
+required_capability: optional_fields_nullify_tech_preview
+
+SET unmapped_fields="nullify"\;
+FROM employees
+| EVAL foo_int = foo::INTEGER
+| WHERE foo_int IN (FROM employees | KEEP emp_no)
+| STATS cnt = COUNT(*)
+;
+
+cnt:long
+0
+;
+
+unmappedFieldOnLHSOfNotInSubquery
+required_capability: where_in_subquery_without_view
+required_capability: optional_fields_nullify_tech_preview
+
+SET unmapped_fields="nullify"\;
+FROM employees
+| EVAL foo_int = foo::INTEGER
+| WHERE foo_int NOT IN (FROM employees | KEEP emp_no)
+| STATS cnt = COUNT(*)
+;
+
+cnt:long
+0
+;
+
+unmappedFieldInsideInSubquery
+required_capability: where_in_subquery_without_view
+required_capability: optional_fields_nullify_tech_preview
+
+SET unmapped_fields="nullify"\;
+FROM employees
+| WHERE emp_no IN (FROM employees | EVAL x = foo::INTEGER | KEEP x)
+| STATS cnt = COUNT(*)
+;
+
+cnt:long
+0
+;
+
+unmappedFieldInsideNotInSubquery
+required_capability: where_in_subquery_without_view
+required_capability: optional_fields_nullify_tech_preview
+
+SET unmapped_fields="nullify"\;
+FROM employees
+| WHERE emp_no NOT IN (FROM employees | EVAL x = foo::INTEGER | KEEP x)
+| STATS cnt = COUNT(*)
+;
+
+cnt:long
+0
+;
+
+unmappedFieldOnBothSidesOfInSubquery
+required_capability: where_in_subquery_without_view
+required_capability: optional_fields_nullify_tech_preview
+
+SET unmapped_fields="nullify"\;
+FROM employees
+| EVAL foo_int = foo::INTEGER
+| WHERE foo_int IN (FROM employees | EVAL x = foo::INTEGER | KEEP x)
+| STATS cnt = COUNT(*)
+;
+
+cnt:long
+0
+;
+
+unmappedFieldOnBothSidesOfNotInSubquery
+required_capability: where_in_subquery_without_view
+required_capability: optional_fields_nullify_tech_preview
+
+SET unmapped_fields="nullify"\;
+FROM employees
+| EVAL foo_int = foo::INTEGER
+| WHERE foo_int NOT IN (FROM employees | EVAL x = foo::INTEGER | KEEP x)
+| STATS cnt = COUNT(*)
+;
+
+cnt:long
+0
+;
+
+unmappedFieldCoalescedInsideInSubquery
+required_capability: where_in_subquery_without_view
+required_capability: optional_fields_nullify_tech_preview
+
+SET unmapped_fields="nullify"\;
+FROM employees
+| WHERE emp_no IN (FROM employees | EVAL x = COALESCE(foo::INTEGER, emp_no) | KEEP x)
+| STATS cnt = COUNT(*)
+;
+
+cnt:long
+100
+;
+
+unmappedFieldFilterIsNullInsideInSubquery
+required_capability: where_in_subquery_without_view
+required_capability: optional_fields_nullify_tech_preview
+
+SET unmapped_fields="nullify"\;
+FROM employees
+| WHERE emp_no IN (FROM employees | WHERE foo IS NULL | KEEP emp_no)
+| STATS cnt = COUNT(*)
+;
+
+cnt:long
+100
+;
+
+unmappedFieldFilterIsNotNullInsideInSubquery
+required_capability: where_in_subquery_without_view
+required_capability: optional_fields_nullify_tech_preview
+
+SET unmapped_fields="nullify"\;
+FROM employees
+| WHERE emp_no IN (FROM employees | WHERE foo IS NOT NULL | KEEP emp_no)
+| STATS cnt = COUNT(*)
+;
+
+cnt:long
+0
+;
+
+unmappedFieldOnLHSOfInSubqueryDisjunctive
+required_capability: where_in_subquery_without_view
+required_capability: optional_fields_nullify_tech_preview
+
+SET unmapped_fields="nullify"\;
+FROM employees
+| EVAL foo_int = foo::INTEGER
+| WHERE foo_int IN (FROM employees | KEEP emp_no) OR emp_no < 10004
+| SORT emp_no
+| KEEP emp_no, first_name
+;
+
+emp_no:integer | first_name:keyword
+10001          | Georgi
+10002          | Bezalel
+10003          | Parto
+;
+
+unmappedFieldOnLHSOfNotInSubqueryConjunctive
+required_capability: where_in_subquery_without_view
+required_capability: optional_fields_nullify_tech_preview
+
+SET unmapped_fields="nullify"\;
+FROM employees
+| EVAL foo_int = foo::INTEGER
+| WHERE foo_int NOT IN (FROM employees | KEEP emp_no) AND emp_no < 10004
+| STATS cnt = COUNT(*)
+;
+
+cnt:long
+0
+;
+
+unmappedFieldFromMaxStatsInsideInSubquery
+required_capability: where_in_subquery_without_view
+required_capability: optional_fields_nullify_tech_preview
+
+SET unmapped_fields="nullify"\;
+FROM employees
+| WHERE emp_no IN (FROM employees | STATS m = MAX(foo::INTEGER) | KEEP m)
+| STATS cnt = COUNT(*)
+;
+
+cnt:long
+0
+;
+
+unmappedFieldNestedInsideInSubquery
+required_capability: where_in_subquery_without_view
+required_capability: optional_fields_nullify_tech_preview
+
+SET unmapped_fields="nullify"\;
+FROM employees
+| WHERE emp_no IN (
+    FROM employees
+    | WHERE emp_no IN (FROM employees | WHERE foo IS NULL | KEEP emp_no)
+    | KEEP emp_no
+  )
+| STATS cnt = COUNT(*)
+;
+
+cnt:long
+100
+;
+
+unmappedFieldOnBothSidesInSubqueryLoad
+required_capability: where_in_subquery_without_view
+required_capability: optional_fields_v5
+
+SET unmapped_fields="load"\;
+FROM partial_mapping_sample_data
+| EVAL um = unmapped_message
+| WHERE um IN (FROM partial_mapping_sample_data | EVAL um = unmapped_message | KEEP um)
+| STATS cnt = COUNT(*)
+;
+
+cnt:long
+7
+;
+
+unmappedFieldOnBothSidesNotInSubqueryLoad
+required_capability: where_in_subquery_without_view
+required_capability: optional_fields_v5
+
+SET unmapped_fields="load"\;
+FROM partial_mapping_sample_data
+| EVAL um = unmapped_message
+| WHERE um NOT IN (FROM partial_mapping_sample_data | EVAL um = unmapped_message | KEEP um)
+| STATS cnt = COUNT(*)
+;
+
+cnt:long
+0
+;
+
+unmappedFieldInInSubqueryAsFilterLoad
+required_capability: where_in_subquery_without_view
+required_capability: optional_fields_v5
+
+SET unmapped_fields="load"\;
+FROM partial_mapping_sample_data
+| WHERE @timestamp IN (FROM partial_mapping_sample_data | WHERE unmapped_message == "Disconnection error" | KEEP @timestamp)
+| STATS cnt = COUNT(*)
+;
+
+cnt:long
+3
+;
+
+unmappedFieldInNotInSubqueryAsFilterLoad
+required_capability: where_in_subquery_without_view
+required_capability: optional_fields_v5
+
+SET unmapped_fields="load"\;
+FROM partial_mapping_sample_data
+| WHERE @timestamp NOT IN (FROM partial_mapping_sample_data | WHERE unmapped_message == "Disconnection error" | KEEP @timestamp)
+| STATS cnt = COUNT(*)
+;
+
+cnt:long
+4
+;
+
+unmappedFieldIsNullInInSubqueryLoad
+required_capability: where_in_subquery_without_view
+required_capability: optional_fields_v5
+
+SET unmapped_fields="load"\;
+FROM partial_mapping_sample_data
+| WHERE @timestamp IN (FROM partial_mapping_sample_data | WHERE unmapped_message IS NULL | KEEP @timestamp)
+| STATS cnt = COUNT(*)
+;
+
+cnt:long
+0
+;
+
+unmappedFieldIsNotNullInInSubqueryLoad
+required_capability: where_in_subquery_without_view
+required_capability: optional_fields_v5
+
+SET unmapped_fields="load"\;
+FROM partial_mapping_sample_data
+| WHERE @timestamp IN (FROM partial_mapping_sample_data | WHERE unmapped_message IS NOT NULL | KEEP @timestamp)
+| STATS cnt = COUNT(*)
+;
+
+cnt:long
+7
+;
+
+unmappedFieldWithInSubqueryDisjunctiveLoad
+required_capability: where_in_subquery_without_view
+required_capability: optional_fields_v5
+
+SET unmapped_fields="load"\;
+FROM partial_mapping_sample_data
+| EVAL um = unmapped_message
+| WHERE um IN (FROM partial_mapping_sample_data | WHERE message == "42" | EVAL um = unmapped_message | KEEP um)
+     OR @timestamp == "2024-10-23T12:15:03.360Z"
+| KEEP @timestamp, message, um
+| SORT @timestamp
+;
+
+@timestamp:datetime      | message:keyword        | um:keyword
+2024-10-23T12:15:03.360Z | Connected to 10.1.0.3! | Disconnected from 10.1.0.3
+2024-10-23T13:33:34.937Z | 42                     | 43
+;
+
+unmappedFieldWithNotInSubqueryConjunctiveLoad
+required_capability: where_in_subquery_without_view
+required_capability: optional_fields_v5
+
+SET unmapped_fields="load"\;
+FROM partial_mapping_sample_data
+| EVAL um = unmapped_message
+| WHERE um NOT IN (FROM partial_mapping_sample_data | WHERE message == "42" | EVAL um = unmapped_message | KEEP um)
+    AND @timestamp >= "2024-10-23T13:00:00.000Z"
+| STATS cnt = COUNT(*)
+;
+
+cnt:long
+4
+;
+
+unmappedFieldWithAggInSubqueryLoad
+required_capability: where_in_subquery_without_view
+required_capability: optional_fields_v5
+
+SET unmapped_fields="load"\;
+FROM partial_mapping_sample_data
+| EVAL d = unmapped_event_duration::long
+| WHERE d IN (FROM partial_mapping_sample_data | STATS m = MAX(unmapped_event_duration::long) | KEEP m)
+| STATS cnt = COUNT(*)
+;
+
+cnt:long
+1
+;
+
+unmappedFieldWithCoalescedInInSubqueryLoad
+required_capability: where_in_subquery_without_view
+required_capability: optional_fields_v5
+
+SET unmapped_fields="load"\;
+FROM partial_mapping_sample_data
+| WHERE @timestamp IN (FROM partial_mapping_sample_data | EVAL x = COALESCE(unmapped_message, "fallback") | WHERE x == "43" | KEEP @timestamp)
+| STATS cnt = COUNT(*)
+;
+
+cnt:long
+1
+;
+
+unmappedFieldNestedInSubqueryLoad
+required_capability: where_in_subquery_without_view
+required_capability: optional_fields_v5
+
+SET unmapped_fields="load"\;
+FROM partial_mapping_sample_data
+| WHERE @timestamp IN (
+    FROM partial_mapping_sample_data
+    | WHERE @timestamp IN (FROM partial_mapping_sample_data | WHERE unmapped_message LIKE "Disconnect*" | KEEP @timestamp)
+    | KEEP @timestamp
+  )
+| STATS cnt = COUNT(*)
+;
+
+cnt:long
+6
+;
+
+unmappedFieldExplicitCastingSortInInSubqueryLoad
+required_capability: where_in_subquery_without_view
+required_capability: optional_fields_v5
+
+SET unmapped_fields="load"\;
+FROM partial_mapping_sample_data
+| WHERE @timestamp IN (
+    FROM partial_mapping_sample_data
+    | EVAL d = unmapped_event_duration::long
+    | SORT d DESC
+    | LIMIT 3
+    | KEEP @timestamp
+  )
+| KEEP @timestamp, unmapped_event_duration
+| SORT @timestamp DESC
+;
+
+@timestamp:datetime      | unmapped_event_duration:keyword
+2024-10-23T13:53:55.832Z | 5033756
+2024-10-23T13:52:55.015Z | 8268154
+2024-10-23T12:15:03.360Z | 3450234
+;
+
+partiallyUnmappedFieldInTwoIndicesLoad
+required_capability: where_in_subquery_without_view
+required_capability: optional_fields_v5
+
+SET unmapped_fields="load"\;
+FROM sample_data, no_mapping_sample_data METADATA _index
+| WHERE message IN (FROM sample_data, no_mapping_sample_data | KEEP message)
+| STATS c = COUNT(*) BY _index
+| SORT _index
+;
+
+c:long | _index:keyword
+7      | no_mapping_sample_data
+7      | sample_data
+;
+
+partiallyUnmappedFieldAsFilterInInSubqueryLoad
+required_capability: where_in_subquery_without_view
+required_capability: optional_fields_v5
+
+SET unmapped_fields="load"\;
+FROM sample_data, no_mapping_sample_data METADATA _index
+| WHERE message IN (FROM no_mapping_sample_data | WHERE unmapped_message == "Disconnection error" | KEEP message)
+| STATS c = COUNT(*) BY _index
+| SORT _index
+;
+
+c:long | _index:keyword
+3      | no_mapping_sample_data
+;
+
+nonExistingFieldInInSubqueryLoad
+required_capability: where_in_subquery_without_view
+required_capability: optional_fields_v5
+
+SET unmapped_fields="load"\;
+FROM partial_mapping_sample_data
+| WHERE @timestamp IN (FROM partial_mapping_sample_data | WHERE foo IS NOT NULL | KEEP @timestamp)
+| STATS cnt = COUNT(*)
+;
+
+cnt:long
+0
+;
