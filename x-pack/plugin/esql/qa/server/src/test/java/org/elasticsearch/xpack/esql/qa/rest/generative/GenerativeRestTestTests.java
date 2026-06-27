@@ -72,6 +72,26 @@ public class GenerativeRestTestTests extends ESTestCase {
         assertTrue(GenerativeRestTest.isFullTextAfterSubqueryInFromBug(error, query));
     }
 
+    /**
+     * A subquery branch that ends with a {@code SORT} (pinned by a following {@code LIMIT}/{@code DEDUP}, which fuse the
+     * {@code SORT} into a {@code TopN}/{@code TopNBy} carrying the {@code SORT}'s source text) makes the product reject a
+     * full-text function in the outer {@code WHERE} with "cannot be used after SORT". Reproduced by
+     * {@code GenerativeIT {feature:SUBQUERIES\}} on seed {@code 6DF16F9F17374414}.
+     */
+    public void testFullTextAfterSubqueryMatchesSortMessage() {
+        String query = "FROM (FROM languages | SORT language_name | LIMIT 5), alerts | WHERE kql(\"language_name: English\")";
+        String error = "verification_exception: line 1:36: [KQL] function cannot be used after SORT";
+
+        assertTrue(GenerativeRestTest.isFullTextAfterSubqueryInFromBug(error, query));
+    }
+
+    public void testFullTextAfterSortRequiresSubqueryInQuery() {
+        String query = "FROM languages | SORT language_name | LIMIT 5 | WHERE kql(\"language_name: English\")";
+        String error = "verification_exception: line 1:36: [KQL] function cannot be used after SORT";
+
+        assertFalse(GenerativeRestTest.isFullTextAfterSubqueryInFromBug(error, query));
+    }
+
     public void testFullTextAfterSubqueryRequiresSubqueryInQuery() {
         String query = "FROM logs | LOOKUP JOIN message_types_lookup ON message | WHERE qstr(\"text:hello\")";
         String error = "verification_exception: line 1:34: [QSTR] function cannot be used after LOOKUP";
