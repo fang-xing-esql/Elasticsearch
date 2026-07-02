@@ -1401,13 +1401,13 @@ public class EsqlCapabilities {
          * IN subquery inside the view definition(especially nested views), it is out of the scope of this capability.
          * Add a new capability, so that integration tests don't run on nodes that only have WHERE_IN_SUBQUERY capability.
          */
-        WHERE_IN_SUBQUERY_WITHOUT_VIEW(WHERE_IN_SUBQUERY.isEnabled()),
+        WHERE_IN_SUBQUERY_WITHOUT_VIEW,
 
         /**
          * Support IN non-correlated subqueries in WHERE command with View. The views can be referenced by IN subqueries, and the view
          * definition can contain IN subqueries.
          */
-        WHERE_IN_SUBQUERY_WITH_VIEW(WHERE_IN_SUBQUERY_WITHOUT_VIEW.isEnabled()),
+        WHERE_IN_SUBQUERY_WITH_VIEW,
 
         /**
          * Support ROW as a source command inside subquery in the from command.
@@ -1423,7 +1423,7 @@ public class EsqlCapabilities {
          * Fixed {@code TranslateTimeSeriesWithout} and {@code TranslateTimeSeriesAggregate} to associate time-series attributes with the
          * correct time-series index when a join presents.
          */
-        WHERE_IN_SUBQUERY_WITH_TS(SUBQUERY_WITH_TS.isEnabled() && WHERE_IN_SUBQUERY_WITHOUT_VIEW.isEnabled()),
+        WHERE_IN_SUBQUERY_WITH_TS,
         /**
          * Support for views in cluster state (and REST API).
          */
