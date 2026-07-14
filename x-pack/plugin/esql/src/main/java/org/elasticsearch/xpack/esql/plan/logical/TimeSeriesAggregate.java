@@ -28,6 +28,7 @@ import org.elasticsearch.xpack.esql.expression.function.aggregate.Count;
 import org.elasticsearch.xpack.esql.expression.function.aggregate.Sparkline;
 import org.elasticsearch.xpack.esql.expression.function.aggregate.TimeSeriesAggregateFunction;
 import org.elasticsearch.xpack.esql.expression.function.grouping.Bucket;
+import org.elasticsearch.xpack.esql.plan.logical.join.AbstractSubqueryJoin;
 import org.elasticsearch.xpack.esql.plan.logical.join.LookupJoin;
 
 import java.io.IOException;
@@ -222,7 +223,37 @@ public class TimeSeriesAggregate extends Aggregate implements TimestampAware {
             && origin == other.origin;
     }
 
+    /**
+     * Returns true if {@code plan} or any node reachable via the main data pipeline contains a {@link UnionAll}.
+     * The right side of an {@link AbstractSubqueryJoin} (the independent subquery) is excluded because a
+     * {@link UnionAll} there only affects the join lookup, not the time-series data stream.
+     */
+    private static boolean hasUnionAllInDataPath(LogicalPlan plan) {
+        if (plan instanceof UnionAll) {
+            return true;
+        }
+        if (plan instanceof AbstractSubqueryJoin join) {
+            return hasUnionAllInDataPath(join.left());
+        }
+        for (LogicalPlan child : plan.children()) {
+            if (hasUnionAllInDataPath(child)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public void verify(Failures failures) {
+        if (hasUnionAllInDataPath(child())) {
+            failures.add(
+                fail(
+                    this,
+                    "time-series aggregation [{}] cannot be applied over a union of data sources; "
+                        + "apply the time-series aggregation inside each subquery instead",
+                    sourceText()
+                )
+            );
+        }
         if (origin != Origin.PROMQL_COMMAND) {
             // We forbid grouping by a metric field itself. Metric fields are allowed only inside aggregate functions.
             groupings().forEach(g -> g.forEachDown(e -> {

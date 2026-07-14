@@ -2224,3 +2224,54 @@ emp_no:integer | first_name:keyword
 10002          | Bezalel
 10005          | Kyoichi
 ;
+
+tsLastOverTimeAboveInlineStatsUnion
+
+FROM (TS k8s), (FROM addresses
+                | RENAME city.country.name AS country
+                | EVAL country = CASE(country == "United States of America", "United States", country)
+                | STATS count=COUNT() BY country)
+| STATS bytes = last_over_time(event) BY time_bucket = bucket(@timestamp, 1 day)
+| SORT time_bucket
+;
+
+bytes:keyword | time_bucket:date
+null          | 2024-05-10T00:00:00.000Z
+null          | null
+;
+
+tsRateWithCommaSeparatedIndexAndNonTsIndex
+
+TS k8s, employees
+| STATS max_cost=max(rate(network.total_cost)) BY cluster
+| SORT cluster
+;
+
+max_cost:double     | cluster:keyword
+0.15230635335073978 | prod
+0.16151685393258428 | qa
+0.10506019563581641 | staging
+;
+
+tsLastOverTimeWithNonTsIndexOutputsTimeseries
+required_capability: ts_command_v0
+required_capability: metrics_group_by_all
+required_capability: metrics_group_by_all_with_ts_dimensions
+
+TS k8s, employees
+| STATS bytes = last_over_time(event) BY time_bucket = bucket(@timestamp, 1 day)
+| SORT time_bucket
+;
+ignoreOrder:true
+
+bytes:keyword | _timeseries:keyword                                                 | time_bucket:date
+null          | "{""cluster"":""prod"",""pod"":""one"",""region"":[""eu"",""us""]}"   | 2024-05-10T00:00:00.000Z
+null          | "{""cluster"":""prod"",""pod"":""two"",""region"":[""eu"",""us""]}"   | 2024-05-10T00:00:00.000Z
+null          | "{""cluster"":""prod"",""pod"":""three"",""region"":[""eu"",""us""]}" | 2024-05-10T00:00:00.000Z
+null          | "{""cluster"":""qa"",""pod"":""one""}"                                | 2024-05-10T00:00:00.000Z
+null          | "{""cluster"":""qa"",""pod"":""two""}"                                | 2024-05-10T00:00:00.000Z
+null          | "{""cluster"":""qa"",""pod"":""three""}"                              | 2024-05-10T00:00:00.000Z
+null          | "{""cluster"":""staging"",""pod"":""one"",""region"":""us""}"         | 2024-05-10T00:00:00.000Z
+null          | "{""cluster"":""staging"",""pod"":""two"",""region"":""us""}"         | 2024-05-10T00:00:00.000Z
+null          | "{""cluster"":""staging"",""pod"":""three"",""region"":""us""}"       | 2024-05-10T00:00:00.000Z
+;

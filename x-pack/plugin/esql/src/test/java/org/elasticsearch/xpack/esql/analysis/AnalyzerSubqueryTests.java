@@ -71,6 +71,7 @@ import static org.elasticsearch.xpack.esql.core.type.DataType.KEYWORD;
 import static org.elasticsearch.xpack.esql.core.type.DataType.LONG;
 import static org.elasticsearch.xpack.esql.core.type.DataType.UNSUPPORTED;
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.is;
 
@@ -1775,6 +1776,160 @@ public class AnalyzerSubqueryTests extends ESTestCase {
         NamedExpression match = project.projections().stream().filter(p -> name.equals(p.name())).findFirst().orElseThrow();
         NamedExpression typed = as(match, kind);
         assertEquals(LONG, typed.dataType());
+    }
+
+    /**
+     * {@code FROM (TS k8s), (FROM sample_data) | STATS} with a time-series aggregate function must
+     * fail with a verification error rather than an internal {@code IllegalStateException}.
+     * {@code TranslateTimeSeriesAggregate} cannot split the TSA when its child contains a {@link UnionAll}
+     * because the {@code _tsid} attribute ID from the inner EsRelation diverges from the one assigned
+     * by {@code ResolveUnionTypesInUnionAll}, producing missing-reference failures at optimization time.
+     * The {@code VerifyTimeSeries} rule in the Analyzer catches the pattern early and turns it into a
+     * proper 400 error.
+     */
+    public void testTimeSeriesAggregateOverUnionWithStandardSourceSubquery() {
+        analyzer().addK8s().addSampleData().error("""
+            FROM (TS k8s), (FROM sample_data)
+            | STATS x = last_over_time(event) BY time_bucket = bucket(@timestamp, 1 day)
+            """, equalTo("""
+            Found 1 problem
+            line 2:3: time-series aggregation [STATS x = last_over_time(event) BY time_bucket = \
+            bucket(@timestamp, 1 day)] cannot be applied over a union of data sources; \
+            apply the time-series aggregation inside each subquery instead"""));
+    }
+
+    /**
+     * Bare-index-name variant: {@code FROM (TS k8s), sample_data | STATS}. The parser still produces a
+     * {@link UnionAll} when mixing subqueries and bare index names in {@code FROM}, so the same
+     * {@code VerifyTimeSeries} guard applies.
+     */
+    public void testTimeSeriesAggregateOverUnionWithBareStandardSource() {
+        analyzer().addK8s().addSampleData().error("""
+            FROM (TS k8s), sample_data
+            | STATS x = last_over_time(event) BY time_bucket = bucket(@timestamp, 1 day)
+            """, equalTo("""
+            Found 1 problem
+            line 2:3: time-series aggregation [STATS x = last_over_time(event) BY time_bucket = \
+            bucket(@timestamp, 1 day)] cannot be applied over a union of data sources; \
+            apply the time-series aggregation inside each subquery instead"""));
+    }
+
+    /**
+     * Two TS sources in a {@code FROM} union: {@code FROM (TS k8s), (TS k8s) | STATS}. Even when both
+     * branches are time-series, {@code TranslateTimeSeriesAggregate} still fails because
+     * {@code ResolveUnionTypesInUnionAll} creates a fresh merged {@code _tsid} attribute whose ID differs
+     * from either branch's raw EsRelation attribute.
+     */
+    public void testTimeSeriesAggregateOverUnionWithTwoTsSources() {
+        analyzer().addK8s().error("""
+            FROM (TS k8s), (TS k8s)
+            | STATS x = last_over_time(event) BY time_bucket = bucket(@timestamp, 1 day)
+            """, equalTo("""
+            Found 1 problem
+            line 2:3: time-series aggregation [STATS x = last_over_time(event) BY time_bucket = \
+            bucket(@timestamp, 1 day)] cannot be applied over a union of data sources; \
+            apply the time-series aggregation inside each subquery instead"""));
+    }
+
+    /**
+     * Using a time-series aggregate function ({@code last_over_time}) outside the {@code TS} command
+     * must fail: the parser produces a regular {@code Aggregate} (not a {@code TimeSeriesAggregate})
+     * because {@code FROM} does not set the time-series flag, and {@code Aggregate.verify()} rejects
+     * time-series aggregate functions in that context.
+     */
+    public void testTimeSeriesAggregateFunctionOutsideTsCommand() {
+        analyzer().addK8s().error("""
+            FROM k8s
+            | STATS x = last_over_time(event) BY time_bucket = bucket(@timestamp, 1 day)
+            """, equalTo("""
+            Found 1 problem
+            line 2:13: time_series aggregate[last_over_time(event)] can only be used with the TS command"""));
+    }
+
+    /**
+     * {@code FROM (TS k8s), (FROM sample_data) | STATS max(rate(...))} — the {@code TS} subquery
+     * and a standard-mode subquery form a {@link UnionAll}, which the {@code VerifyTimeSeries} rule
+     * catches and turns into a 400 error.
+     */
+    public void testTimeSeriesAggregateWithRateOverUnionWithStandardSourceSubquery() {
+        analyzer().addK8s().addSampleData().error("""
+            FROM (TS k8s), (FROM sample_data)
+            | STATS max_cost = max(rate(network.total_cost)) BY cluster
+            """, equalTo("""
+            Found 1 problem
+            line 2:3: time-series aggregation [STATS max_cost = max(rate(network.total_cost)) BY cluster] \
+            cannot be applied over a union of data sources; \
+            apply the time-series aggregation inside each subquery instead"""));
+    }
+
+    /**
+     * Using {@code rate()} outside the {@code TS} command (bare {@code FROM}) must fail because
+     * {@code rate} is a time-series aggregate function and the parser produces a regular
+     * {@code Aggregate} whose {@code verify()} check rejects it.
+     */
+    public void testRateAggregateFunctionOutsideTsCommand() {
+        analyzer().addK8s().error("""
+            FROM k8s
+            | STATS max_cost = max(rate(network.total_cost)) BY cluster
+            """, equalTo("""
+            Found 1 problem
+            line 2:24: time_series aggregate[rate(network.total_cost)] can only be used with the TS command"""));
+    }
+
+    /**
+     * {@code FROM (TS view_k8s_early_window), (FROM sample_data) | STATS} — a TS view in one
+     * subquery alongside a standard-mode source forms a {@code UnionAll}, which the
+     * {@code TimeSeriesAggregate} guard catches just as it would for a bare TS index.
+     */
+    public void testTimeSeriesAggregateOverUnionWithTsViewSubqueryAndStandardSource() {
+        analyzer().addK8s()
+            .addSampleData()
+            .addView("view_k8s_early_window", "TS k8s | WHERE @timestamp <= \"2024-05-10T00:01:00.000Z\"")
+            .error("""
+                FROM (TS view_k8s_early_window), (FROM sample_data)
+                | STATS x = last_over_time(event) BY time_bucket = bucket(@timestamp, 1 day)
+                """, equalTo("""
+                Found 1 problem
+                line 2:3: time-series aggregation [STATS x = last_over_time(event) BY time_bucket = \
+                bucket(@timestamp, 1 day)] cannot be applied over a union of data sources; \
+                apply the time-series aggregation inside each subquery instead"""));
+    }
+
+    /**
+     * {@code FROM (TS k8s), (FROM view_k8s_max_bytes_by_cluster) | STATS} — a pre-aggregated TS view
+     * used as the standard-mode branch of the union. The outer FROM still produces a {@code UnionAll}
+     * that the {@code TimeSeriesAggregate} guard rejects.
+     */
+    public void testTimeSeriesAggregateOverUnionWithTsSourceAndPreAggregatedViewSubquery() {
+        analyzer().addK8s()
+            .addView("view_k8s_max_bytes_by_cluster", "TS k8s | STATS max_bytes=max(to_long(network.total_bytes_in)) BY cluster")
+            .error("""
+                FROM (TS k8s), (FROM view_k8s_max_bytes_by_cluster)
+                | STATS x = last_over_time(event) BY time_bucket = bucket(@timestamp, 1 day)
+                """, equalTo("""
+                Found 1 problem
+                line 2:3: time-series aggregation [STATS x = last_over_time(event) BY time_bucket = \
+                bucket(@timestamp, 1 day)] cannot be applied over a union of data sources; \
+                apply the time-series aggregation inside each subquery instead"""));
+    }
+
+    /**
+     * Comma-separated views in the {@code TS} command: view resolution expands them into a
+     * {@code ViewUnionAll} (which extends {@code UnionAll}), so the {@code TimeSeriesAggregate}
+     * guard fires even though there is no explicit {@code FROM} union in the query.
+     */
+    public void testTimeSeriesAggregateWithCommaSeparatedTsViews() {
+        analyzer().addK8s()
+            .addView("view_k8s_early_window", "TS k8s | WHERE @timestamp <= \"2024-05-10T00:01:00.000Z\"")
+            .addView("view_k8s_max_bytes_by_cluster", "TS k8s | STATS max_bytes=max(to_long(network.total_bytes_in)) BY cluster")
+            .error("""
+                TS view_k8s_early_window, view_k8s_max_bytes_by_cluster
+                | STATS x = last_over_time(event) BY time_bucket = bucket(@timestamp, 1 day)
+                """, equalTo("""
+                Found 1 problem
+                line 2:3: time-series aggregation [STATS x = last_over_time(event) BY time_bucket = \
+                bucket(@timestamp, 1 day)] cannot be applied over a union of data sources; \
+                apply the time-series aggregation inside each subquery instead"""));
     }
 
     private static void assertProjectionHasSyntheticTimestampLong(Project project) {
