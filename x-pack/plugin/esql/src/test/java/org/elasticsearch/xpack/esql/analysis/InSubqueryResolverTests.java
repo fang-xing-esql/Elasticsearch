@@ -24,7 +24,9 @@ import org.elasticsearch.xpack.esql.plan.logical.Aggregate;
 import org.elasticsearch.xpack.esql.plan.logical.Eval;
 import org.elasticsearch.xpack.esql.plan.logical.Filter;
 import org.elasticsearch.xpack.esql.plan.logical.Keep;
+import org.elasticsearch.xpack.esql.plan.logical.LimitBy;
 import org.elasticsearch.xpack.esql.plan.logical.LogicalPlan;
+import org.elasticsearch.xpack.esql.plan.logical.OrderBy;
 import org.elasticsearch.xpack.esql.plan.logical.UnresolvedRelation;
 import org.elasticsearch.xpack.esql.plan.logical.join.AntiJoin;
 import org.elasticsearch.xpack.esql.plan.logical.join.JoinTypes;
@@ -47,8 +49,8 @@ import static org.hamcrest.Matchers.containsString;
  *       mark attribute that the rewritten {@code WHERE} condition references, so SQL
  *       three-valued logic flows through the surrounding boolean expression naturally.</li>
  * </ul>
- * The resolver also rejects {@link InSubquery} in unsupported positions (EVAL, SORT, STATS BY,
- * function arguments, IS NOT NULL, etc.).
+ * The resolver also rejects {@link InSubquery} in unsupported positions (function arguments,
+ * IS NOT NULL, etc.).
  */
 public class InSubqueryResolverTests extends ESTestCase {
 
@@ -733,48 +735,256 @@ public class InSubqueryResolverTests extends ESTestCase {
 
     // ---- negative: IN subquery in EVAL ----
 
-    public void testRejectsInSubqueryInEval() {
-        assertResolveError("FROM main | EVAL z = x IN (FROM sub)", "line 1:22: IN subquery is not supported in [EVAL z = x IN (FROM sub)]");
+    // ---- positive: IN subquery in EVAL → MarkJoin below Eval ----
+
+    /**
+     * {@code EVAL z = x IN (FROM sub)} rewrites the Alias child so that the {@link InSubquery}
+     * is replaced by a synthetic mark attribute, with a {@link MarkJoin} stacked below the
+     * {@link Eval}:
+     * <pre>
+     * Eval[fields=[Alias("z", $$mark)]]
+     * └── MarkJoin[left=x, right=UnresolvedRelation[sub], mark=$$mark]
+     *    └── UnresolvedRelation[main]
+     * </pre>
+     */
+    public void testInSubqueryInEval() {
+        LogicalPlan plan = resolve("FROM main | EVAL z = x IN (FROM sub)");
+        Eval eval = as(plan, Eval.class);
+        assertEquals(1, eval.fields().size());
+        MarkJoin markJoin = as(eval.child(), MarkJoin.class);
+        assertEquals(JoinTypes.MARK, markJoin.config().type());
+        assertEquals(1, markJoin.config().leftFields().size());
+        assertEquals("x", markJoin.config().leftFields().get(0).name());
+        assertTrue(markJoin.config().rightFields().isEmpty());
+        UnresolvedRelation main = as(markJoin.left(), UnresolvedRelation.class);
+        assertEquals("main", main.indexPattern().indexPattern());
+        UnresolvedRelation sub = as(markJoin.right(), UnresolvedRelation.class);
+        assertEquals("sub", sub.indexPattern().indexPattern());
+        // The eval field should be an Alias whose child is the mark attribute
+        Alias alias = eval.fields().get(0);
+        assertEquals(markJoin.markAttribute(), alias.child());
     }
 
-    public void testRejectsNotInSubqueryInEval() {
-        assertResolveError(
-            "FROM main | EVAL z = x NOT IN (FROM sub)",
-            "line 1:22: IN subquery is not supported in [EVAL z = x NOT IN (FROM sub)]"
-        );
+    /**
+     * {@code EVAL z = x NOT IN (FROM sub)} wraps the grouping {@link InSubquery}
+     * in a {@link Not} before being rewritten. The resulting alias child is {@code NOT($$mark)}.
+     */
+    public void testNotInSubqueryInEval() {
+        LogicalPlan plan = resolve("FROM main | EVAL z = x NOT IN (FROM sub)");
+        Eval eval = as(plan, Eval.class);
+        assertEquals(1, eval.fields().size());
+        MarkJoin markJoin = as(eval.child(), MarkJoin.class);
+        assertEquals(JoinTypes.MARK, markJoin.config().type());
+        assertEquals("x", markJoin.config().leftFields().get(0).name());
+        UnresolvedRelation main = as(markJoin.left(), UnresolvedRelation.class);
+        assertEquals("main", main.indexPattern().indexPattern());
     }
 
-    // ---- negative: IN subquery in SORT ----
-
-    public void testRejectsInSubqueryInSort() {
-        assertResolveError("FROM main | SORT x IN (FROM sub)", "line 1:18: IN subquery is not supported in [SORT x IN (FROM sub)]");
+    /**
+     * {@code EVAL a = x IN (FROM sub1), b = y IN (FROM sub2)} with two independent InSubquery
+     * nodes rewrites both aliases, stacking two MarkJoins below the Eval. The outermost join
+     * corresponds to the last alias (aliases are processed left-to-right and each join is pushed
+     * below the previous result):
+     * <pre>
+     * Eval[fields=[Alias("a", $$mark1), Alias("b", $$mark2)]]
+     * └── MarkJoin2[left=y, right=UnresolvedRelation[sub2], mark=$$mark2]
+     *    └── MarkJoin1[left=x, right=UnresolvedRelation[sub1], mark=$$mark1]
+     *       └── UnresolvedRelation[main]
+     * </pre>
+     */
+    public void testTwoInSubqueriesInEval() {
+        LogicalPlan plan = resolve("FROM main | EVAL a = x IN (FROM sub1), b = y IN (FROM sub2)");
+        Eval eval = as(plan, Eval.class);
+        assertEquals(2, eval.fields().size());
+        // Outer join corresponds to the second alias (y IN sub2)
+        MarkJoin outerJoin = as(eval.child(), MarkJoin.class);
+        assertEquals(JoinTypes.MARK, outerJoin.config().type());
+        assertEquals("y", outerJoin.config().leftFields().get(0).name());
+        UnresolvedRelation outerSub = as(outerJoin.right(), UnresolvedRelation.class);
+        assertEquals("sub2", outerSub.indexPattern().indexPattern());
+        // Inner join corresponds to the first alias (x IN sub1)
+        MarkJoin innerJoin = as(outerJoin.left(), MarkJoin.class);
+        assertEquals(JoinTypes.MARK, innerJoin.config().type());
+        assertEquals("x", innerJoin.config().leftFields().get(0).name());
+        UnresolvedRelation innerSub = as(innerJoin.right(), UnresolvedRelation.class);
+        assertEquals("sub1", innerSub.indexPattern().indexPattern());
+        UnresolvedRelation main = as(innerJoin.left(), UnresolvedRelation.class);
+        assertEquals("main", main.indexPattern().indexPattern());
+        // Each alias child is the corresponding mark attribute
+        Alias aliasA = eval.fields().get(0);
+        assertEquals(innerJoin.markAttribute(), aliasA.child());
+        Alias aliasB = eval.fields().get(1);
+        assertEquals(outerJoin.markAttribute(), aliasB.child());
     }
 
-    // ---- negative: IN subquery in STATS BY ----
-
-    public void testRejectsInSubqueryInStatsBy() {
-        assertResolveError(
-            "FROM main | STATS c = COUNT(*) BY x IN (FROM sub)",
-            "line 1:35: IN subquery is not supported in [STATS c = COUNT(*) BY x IN (FROM sub)]"
-        );
+    /**
+     * {@code EVAL z = CASE(x IN (FROM sub), true, false)} — InSubquery inside a CASE expression
+     * inside EVAL. Because EVAL uses {@code rewriteAllInSubqueries} (not the conservative
+     * WHERE traversal), it descends into CASE result/else positions too, so the InSubquery is
+     * rewritten into a MarkJoin regardless of which child position it appears in.
+     */
+    public void testInSubqueryInCaseInsideEval() {
+        LogicalPlan plan = resolve("FROM main | EVAL z = CASE(x IN (FROM sub), true, false)");
+        Eval eval = as(plan, Eval.class);
+        assertEquals(1, eval.fields().size());
+        MarkJoin markJoin = as(eval.child(), MarkJoin.class);
+        assertEquals(JoinTypes.MARK, markJoin.config().type());
+        assertEquals("x", markJoin.config().leftFields().get(0).name());
+        UnresolvedRelation sub = as(markJoin.right(), UnresolvedRelation.class);
+        assertEquals("sub", sub.indexPattern().indexPattern());
+        // No InSubquery should survive in the eval fields
+        eval.fields().forEach(a -> a.forEachDown(InSubquery.class, inSub -> fail("InSubquery survived in eval: " + inSub)));
     }
 
-    // ---- negative: IN subquery in STATS WHERE filter ----
+    // ---- positive: IN subquery in SORT → MarkJoin below OrderBy ----
 
-    public void testRejectsInSubqueryInStatsWhereFilter() {
-        assertResolveError(
-            "FROM main | STATS c = COUNT(*) WHERE x IN (FROM sub)",
-            "line 1:38: IN subquery is not supported in [STATS c = COUNT(*) WHERE x IN (FROM sub)]"
-        );
+    /**
+     * {@code SORT x IN (FROM sub)} rewrites the order expression so that the {@link InSubquery}
+     * is replaced by a synthetic mark attribute, with a {@link MarkJoin} stacked below the
+     * {@link OrderBy}:
+     * <pre>
+     * OrderBy[orders=[Order($$mark, ASC, FIRST)]]
+     * └── MarkJoin[left=x, right=UnresolvedRelation[sub], mark=$$mark]
+     *    └── UnresolvedRelation[main]
+     * </pre>
+     */
+    public void testInSubqueryInSort() {
+        LogicalPlan plan = resolve("FROM main | SORT x IN (FROM sub)");
+        OrderBy orderBy = as(plan, OrderBy.class);
+        assertEquals(1, orderBy.order().size());
+        MarkJoin markJoin = as(orderBy.child(), MarkJoin.class);
+        assertEquals(JoinTypes.MARK, markJoin.config().type());
+        assertEquals(1, markJoin.config().leftFields().size());
+        assertEquals("x", markJoin.config().leftFields().get(0).name());
+        assertTrue(markJoin.config().rightFields().isEmpty());
+        UnresolvedRelation main = as(markJoin.left(), UnresolvedRelation.class);
+        assertEquals("main", main.indexPattern().indexPattern());
+        UnresolvedRelation sub = as(markJoin.right(), UnresolvedRelation.class);
+        assertEquals("sub", sub.indexPattern().indexPattern());
+        // The order expression should be the mark attribute
+        assertEquals(markJoin.markAttribute(), orderBy.order().get(0).child());
     }
 
-    // ---- negative: IN subquery in LIMIT BY ----
+    /**
+     * {@code SORT x IN (FROM sub1) DESC, y IN (FROM sub2) ASC} rewrites both order expressions,
+     * stacking two MarkJoins below the OrderBy.
+     */
+    public void testTwoInSubqueriesInSort() {
+        LogicalPlan plan = resolve("FROM main | SORT x IN (FROM sub1) DESC, y IN (FROM sub2) ASC");
+        OrderBy orderBy = as(plan, OrderBy.class);
+        assertEquals(2, orderBy.order().size());
+        MarkJoin outerJoin = as(orderBy.child(), MarkJoin.class);
+        assertEquals(JoinTypes.MARK, outerJoin.config().type());
+        assertEquals("y", outerJoin.config().leftFields().get(0).name());
+        MarkJoin innerJoin = as(outerJoin.left(), MarkJoin.class);
+        assertEquals(JoinTypes.MARK, innerJoin.config().type());
+        assertEquals("x", innerJoin.config().leftFields().get(0).name());
+        UnresolvedRelation main = as(innerJoin.left(), UnresolvedRelation.class);
+        assertEquals("main", main.indexPattern().indexPattern());
+        // No InSubquery should survive in the order expressions
+        orderBy.order().forEach(o -> o.forEachDown(InSubquery.class, s -> fail("InSubquery survived in order: " + s)));
+    }
 
-    public void testRejectsInSubqueryInLimitBy() {
-        assertResolveError(
-            "FROM main | SORT a | LIMIT 10 BY x IN (FROM sub)",
-            "line 1:34: IN subquery is not supported in [LIMIT 10 BY x IN (FROM sub)]"
-        );
+    // ---- positive: IN subquery in STATS BY → MarkJoin below Aggregate ----
+
+    /**
+     * {@code STATS c = COUNT(*) BY x IN (FROM sub)} rewrites the grouping expression so that the
+     * {@link InSubquery} is replaced by a synthetic mark attribute, with a {@link MarkJoin} stacked
+     * below the {@link Aggregate}:
+     * <pre>
+     * Aggregate[groupings=[Alias("x IN (FROM sub)", $$mark)]]
+     * └── MarkJoin[left=x, right=UnresolvedRelation[sub], mark=$$mark]
+     *    └── UnresolvedRelation[main]
+     * </pre>
+     */
+    public void testInSubqueryInStatsBy() {
+        LogicalPlan plan = resolve("FROM main | STATS c = COUNT(*) BY x IN (FROM sub)");
+        Aggregate agg = as(plan, Aggregate.class);
+        assertEquals(1, agg.groupings().size());
+        MarkJoin markJoin = as(agg.child(), MarkJoin.class);
+        assertEquals(JoinTypes.MARK, markJoin.config().type());
+        assertEquals(1, markJoin.config().leftFields().size());
+        assertEquals("x", markJoin.config().leftFields().get(0).name());
+        assertTrue(markJoin.config().rightFields().isEmpty());
+        UnresolvedRelation main = as(markJoin.left(), UnresolvedRelation.class);
+        assertEquals("main", main.indexPattern().indexPattern());
+        UnresolvedRelation sub = as(markJoin.right(), UnresolvedRelation.class);
+        assertEquals("sub", sub.indexPattern().indexPattern());
+        // The grouping should be an Alias whose child is the mark attribute
+        Alias groupingAlias = as(agg.groupings().get(0), Alias.class);
+        assertEquals(markJoin.markAttribute(), groupingAlias.child());
+    }
+
+    /**
+     * {@code STATS c = COUNT(*) BY x NOT IN (FROM sub)} wraps the grouping {@link InSubquery}
+     * in a {@link org.elasticsearch.xpack.esql.expression.predicate.logical.Not} before being
+     * rewritten. The resulting grouping child is {@code NOT($$mark)}, not the raw mark attribute.
+     */
+    public void testNotInSubqueryInStatsBy() {
+        LogicalPlan plan = resolve("FROM main | STATS c = COUNT(*) BY x NOT IN (FROM sub)");
+        Aggregate agg = as(plan, Aggregate.class);
+        assertEquals(1, agg.groupings().size());
+        MarkJoin markJoin = as(agg.child(), MarkJoin.class);
+        assertEquals(JoinTypes.MARK, markJoin.config().type());
+        assertEquals("x", markJoin.config().leftFields().get(0).name());
+        UnresolvedRelation main = as(markJoin.left(), UnresolvedRelation.class);
+        assertEquals("main", main.indexPattern().indexPattern());
+    }
+
+    // ---- positive: IN subquery in STATS WHERE filter → MarkJoin below Aggregate ----
+
+    /**
+     * {@code STATS c = COUNT(*) WHERE x IN (FROM sub)} rewrites the {@code FilteredExpression}
+     * filter so that the {@link InSubquery} is replaced by a synthetic mark attribute, with a
+     * {@link MarkJoin} stacked below the {@link Aggregate}:
+     * <pre>
+     * Aggregate[aggregates=[Alias("c", FilteredExpression(COUNT(*), $$mark))]]
+     * └── MarkJoin[left=x, right=UnresolvedRelation[sub], mark=$$mark]
+     *    └── UnresolvedRelation[main]
+     * </pre>
+     */
+    public void testInSubqueryInStatsWhereFilter() {
+        LogicalPlan plan = resolve("FROM main | STATS c = COUNT(*) WHERE x IN (FROM sub)");
+        Aggregate agg = as(plan, Aggregate.class);
+        MarkJoin markJoin = as(agg.child(), MarkJoin.class);
+        assertEquals(JoinTypes.MARK, markJoin.config().type());
+        assertEquals(1, markJoin.config().leftFields().size());
+        assertEquals("x", markJoin.config().leftFields().get(0).name());
+        assertTrue(markJoin.config().rightFields().isEmpty());
+        UnresolvedRelation main = as(markJoin.left(), UnresolvedRelation.class);
+        assertEquals("main", main.indexPattern().indexPattern());
+        UnresolvedRelation sub = as(markJoin.right(), UnresolvedRelation.class);
+        assertEquals("sub", sub.indexPattern().indexPattern());
+        // No InSubquery should survive in the aggregate expressions
+        agg.aggregates().forEach(a -> a.forEachDown(InSubquery.class, inSub -> fail("InSubquery survived in aggregate: " + inSub)));
+    }
+
+    // ---- positive: IN subquery in LIMIT BY → MarkJoin below LimitBy ----
+
+    /**
+     * {@code SORT a | LIMIT 10 BY x IN (FROM sub)} rewrites the grouping expression so that the
+     * {@link InSubquery} is replaced by a synthetic mark attribute, with a {@link MarkJoin}
+     * stacked below the {@link LimitBy}:
+     * <pre>
+     * LimitBy[limitPerGroup=10, groupings=[$$mark]]
+     * └── MarkJoin[left=x, right=UnresolvedRelation[sub], mark=$$mark]
+     *    └── OrderBy[...]
+     *       └── UnresolvedRelation[main]
+     * </pre>
+     */
+    public void testInSubqueryInLimitBy() {
+        LogicalPlan plan = resolve("FROM main | SORT a | LIMIT 10 BY x IN (FROM sub)");
+        LimitBy limitBy = as(plan, LimitBy.class);
+        assertEquals(1, limitBy.groupings().size());
+        MarkJoin markJoin = as(limitBy.child(), MarkJoin.class);
+        assertEquals(JoinTypes.MARK, markJoin.config().type());
+        assertEquals(1, markJoin.config().leftFields().size());
+        assertEquals("x", markJoin.config().leftFields().get(0).name());
+        assertTrue(markJoin.config().rightFields().isEmpty());
+        UnresolvedRelation sub = as(markJoin.right(), UnresolvedRelation.class);
+        assertEquals("sub", sub.indexPattern().indexPattern());
+        // The grouping should be the mark attribute
+        assertEquals(markJoin.markAttribute(), limitBy.groupings().get(0));
     }
 
     // ---- negative: IN subquery as function argument in WHERE ----

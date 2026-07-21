@@ -974,6 +974,94 @@ public class AnalyzerInSubqueryGoldenTests extends GoldenTestCase {
             """);
     }
 
+    // -- EVAL IN subquery golden tests --
+
+    public void testInSubqueryInEval() {
+        assumeTrue(
+            "Requires IN subquery in other processing commands support",
+            EsqlCapabilities.Cap.IN_SUBQUERY_OTHER_PROCESSING_COMMANDS.isEnabled()
+        );
+        runGoldenTest("""
+            FROM employees
+            | EVAL is_top3 = emp_no IN (FROM employees | SORT emp_no ASC | LIMIT 3 | KEEP emp_no)
+            """, STAGES);
+    }
+
+    public void testNotInSubqueryInEval() {
+        assumeTrue(
+            "Requires IN subquery in other processing commands support",
+            EsqlCapabilities.Cap.IN_SUBQUERY_OTHER_PROCESSING_COMMANDS.isEnabled()
+        );
+        runGoldenTest("""
+            FROM employees
+            | EVAL not_top3 = emp_no NOT IN (FROM employees | SORT emp_no ASC | LIMIT 3 | KEEP emp_no)
+            """, STAGES);
+    }
+
+    // -- SORT IN subquery golden tests --
+
+    public void testInSubqueryInSort() {
+        assumeTrue(
+            "Requires IN subquery in other processing commands support",
+            EsqlCapabilities.Cap.IN_SUBQUERY_OTHER_PROCESSING_COMMANDS.isEnabled()
+        );
+        runGoldenTest("""
+            FROM employees
+            | SORT emp_no IN (FROM employees | SORT emp_no ASC | LIMIT 3 | KEEP emp_no) DESC, emp_no ASC
+            """, STAGES);
+    }
+
+    public void testNotInSubqueryInSort() {
+        assumeTrue(
+            "Requires IN subquery in other processing commands support",
+            EsqlCapabilities.Cap.IN_SUBQUERY_OTHER_PROCESSING_COMMANDS.isEnabled()
+        );
+        runGoldenTest("""
+            FROM employees
+            | SORT emp_no NOT IN (FROM employees | SORT emp_no ASC | LIMIT 3 | KEEP emp_no) DESC, emp_no ASC
+            """, STAGES);
+    }
+
+    // -- STATS WHERE IN subquery golden tests --
+
+    public void testInSubqueryInStatsWhere() {
+        assumeTrue(
+            "Requires IN subquery in other processing commands support",
+            EsqlCapabilities.Cap.IN_SUBQUERY_OTHER_PROCESSING_COMMANDS.isEnabled()
+        );
+        runGoldenTest("""
+            FROM employees
+            | STATS c = COUNT(*) WHERE emp_no IN (FROM employees | SORT emp_no ASC | LIMIT 3 | KEEP emp_no)
+            """, STAGES);
+    }
+
+    // -- STATS BY IN subquery golden tests --
+
+    public void testInSubqueryInStatsBy() {
+        assumeTrue(
+            "Requires IN subquery in other processing commands support",
+            EsqlCapabilities.Cap.IN_SUBQUERY_OTHER_PROCESSING_COMMANDS.isEnabled()
+        );
+        runGoldenTest("""
+            FROM employees
+            | STATS c = COUNT(*) BY is_top3 = emp_no IN (FROM employees | SORT emp_no ASC | LIMIT 3 | KEEP emp_no)
+            """, STAGES);
+    }
+
+    // -- LIMIT BY IN subquery golden tests --
+
+    public void testInSubqueryInLimitBy() {
+        assumeTrue(
+            "Requires IN subquery in other processing commands support",
+            EsqlCapabilities.Cap.IN_SUBQUERY_OTHER_PROCESSING_COMMANDS.isEnabled()
+        );
+        runGoldenTest("""
+            FROM employees
+            | SORT emp_no ASC
+            | LIMIT 2 BY emp_no IN (FROM employees | SORT emp_no ASC | LIMIT 3 | KEEP emp_no)
+            """, STAGES);
+    }
+
     // -- helpers --
 
     /**

@@ -269,4 +269,61 @@ public class LogicalPlanOptimizerInSubqueryGoldenTests extends GoldenTestCase {
             )
         );
     }
+
+    public void testStatsWhereInSubquery() {
+        assumeTrue(
+            "Requires IN subquery in other processing commands support",
+            EsqlCapabilities.Cap.IN_SUBQUERY_OTHER_PROCESSING_COMMANDS.isEnabled()
+        );
+        runGoldenTest("""
+            FROM employees
+            | STATS c = COUNT(*) WHERE emp_no IN (FROM employees | SORT emp_no ASC | LIMIT 3 | KEEP emp_no)
+            """, STAGES);
+    }
+
+    public void testStatsByInSubquery() {
+        assumeTrue(
+            "Requires IN subquery in other processing commands support",
+            EsqlCapabilities.Cap.IN_SUBQUERY_OTHER_PROCESSING_COMMANDS.isEnabled()
+        );
+        runGoldenTest("""
+            FROM employees
+            | STATS c = COUNT(*) BY is_top3 = emp_no IN (FROM employees | SORT emp_no ASC | LIMIT 3 | KEEP emp_no)
+            """, STAGES);
+    }
+
+    public void testEvalInSubquery() {
+        assumeTrue(
+            "Requires IN subquery in other processing commands support",
+            EsqlCapabilities.Cap.IN_SUBQUERY_OTHER_PROCESSING_COMMANDS.isEnabled()
+        );
+        runGoldenTest("""
+            FROM employees
+            | EVAL is_top3 = emp_no IN (FROM employees | SORT emp_no ASC | LIMIT 3 | KEEP emp_no)
+            """, STAGES);
+    }
+
+    public void testSortInSubquery() {
+        assumeTrue(
+            "Requires IN subquery in other processing commands support",
+            EsqlCapabilities.Cap.IN_SUBQUERY_OTHER_PROCESSING_COMMANDS.isEnabled()
+        );
+        runGoldenTest("""
+            FROM employees
+            | SORT emp_no IN (FROM employees | SORT emp_no ASC | LIMIT 3 | KEEP emp_no) DESC, emp_no ASC
+            """, STAGES);
+    }
+
+    public void testLimitByInSubquery() {
+        assumeTrue(
+            "Requires IN subquery in other processing commands support",
+            EsqlCapabilities.Cap.IN_SUBQUERY_OTHER_PROCESSING_COMMANDS.isEnabled()
+        );
+        runGoldenTest("""
+            FROM employees
+            | SORT emp_no ASC
+            | LIMIT 100
+            | LIMIT 2 BY emp_no IN (FROM employees | SORT emp_no ASC | LIMIT 3 | KEEP emp_no)
+            """, STAGES);
+    }
 }

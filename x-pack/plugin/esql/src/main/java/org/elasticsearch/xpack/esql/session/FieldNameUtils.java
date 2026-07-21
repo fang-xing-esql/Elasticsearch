@@ -38,6 +38,7 @@ import org.elasticsearch.xpack.esql.plan.logical.Fork;
 import org.elasticsearch.xpack.esql.plan.logical.InlineStats;
 import org.elasticsearch.xpack.esql.plan.logical.Keep;
 import org.elasticsearch.xpack.esql.plan.logical.Limit;
+import org.elasticsearch.xpack.esql.plan.logical.LimitBy;
 import org.elasticsearch.xpack.esql.plan.logical.LogicalPlan;
 import org.elasticsearch.xpack.esql.plan.logical.MetricsInfo;
 import org.elasticsearch.xpack.esql.plan.logical.MvExpand;
@@ -425,6 +426,7 @@ public class FieldNameUtils {
      */
     private static boolean couldOverrideAliases(LogicalPlan p) {
         return (p instanceof Aggregate
+            || p instanceof AbstractSubqueryJoin  // SemiJoin/AntiJoin/MarkJoin never produce user-visible aliases
             || p instanceof Completion
             || p instanceof Drop
             || p instanceof Eval
@@ -433,6 +435,7 @@ public class FieldNameUtils {
             || p instanceof InlineStats
             || p instanceof Keep
             || p instanceof Limit
+            || p instanceof LimitBy
             || p instanceof MvExpand
             || p instanceof OrderBy
             || p instanceof Project

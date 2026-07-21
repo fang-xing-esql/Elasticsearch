@@ -15,14 +15,21 @@ import org.elasticsearch.xpack.esql.approximation.ApproximationVerifier;
 import org.elasticsearch.xpack.esql.core.type.DataType;
 import org.elasticsearch.xpack.esql.core.type.EsField;
 import org.elasticsearch.xpack.esql.core.type.InvalidMappedField;
+import org.elasticsearch.xpack.esql.expression.predicate.operator.comparison.InSubquery;
 import org.elasticsearch.xpack.esql.index.EsIndex;
 import org.elasticsearch.xpack.esql.index.IndexResolution;
+import org.elasticsearch.xpack.esql.plan.logical.Aggregate;
 import org.elasticsearch.xpack.esql.plan.logical.EsRelation;
+import org.elasticsearch.xpack.esql.plan.logical.Eval;
+import org.elasticsearch.xpack.esql.plan.logical.InlineStats;
 import org.elasticsearch.xpack.esql.plan.logical.Limit;
+import org.elasticsearch.xpack.esql.plan.logical.LimitBy;
 import org.elasticsearch.xpack.esql.plan.logical.LogicalPlan;
+import org.elasticsearch.xpack.esql.plan.logical.OrderBy;
 import org.elasticsearch.xpack.esql.plan.logical.Project;
 import org.elasticsearch.xpack.esql.plan.logical.join.AntiJoin;
 import org.elasticsearch.xpack.esql.plan.logical.join.JoinTypes;
+import org.elasticsearch.xpack.esql.plan.logical.join.MarkJoin;
 import org.elasticsearch.xpack.esql.plan.logical.join.SemiJoin;
 import org.hamcrest.Matcher;
 import org.junit.Before;
@@ -40,7 +47,7 @@ import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.nullValue;
 
 /**
- * Unit tests for IN/NOT IN subquery analysis that don't fit the golden-test model: the negative (rejection / error) cases.
+ * Unit tests for IN/NOT IN subquery analysis that don't fit the golden-test model.
  */
 public class AnalyzerInSubqueryTests extends ESTestCase {
 
@@ -98,108 +105,170 @@ public class AnalyzerInSubqueryTests extends ESTestCase {
     }
 
     /**
-     * Verifies that an IN subquery in STATS WHERE filter is rejected.
+     * Verifies that an IN subquery in STATS WHERE filter is resolved: the InSubquery is replaced by a MarkJoin
+     * stacked below the Aggregate.
      */
-    public void testRejectsInSubqueryInStatsWhereFilter() {
-        errorInSubquery("""
+    public void testInSubqueryInStatsWhereFilter() {
+        LogicalPlan plan = analyzeInSubquery("""
             FROM employees
             | STATS cnt = COUNT(*) WHERE emp_no IN (FROM employees | KEEP emp_no)
-            """, containsString("IN subquery is not supported in [STATS cnt = COUNT(*) WHERE emp_no IN (FROM employees | KEEP emp_no)]"));
+            """);
+        Limit limit = as(plan, Limit.class);
+        Aggregate agg = as(limit.child(), Aggregate.class);
+        MarkJoin markJoin = as(agg.child(), MarkJoin.class);
+        assertThat(markJoin.config().type(), equalTo(JoinTypes.MARK));
+        assertThat(markJoin.config().leftFields().size(), equalTo(1));
+        assertThat(markJoin.config().leftFields().get(0).name(), equalTo("emp_no"));
+        EsRelation leftRelation = as(markJoin.left(), EsRelation.class);
+        assertEquals("employees", leftRelation.indexPattern());
+        Project rightProject = as(markJoin.right(), Project.class);
+        EsRelation rightRelation = as(rightProject.child(), EsRelation.class);
+        assertEquals("employees", rightRelation.indexPattern());
     }
 
     /**
-     * Verifies that a NOT IN subquery in STATS WHERE filter is rejected.
+     * Verifies that a NOT IN subquery in STATS WHERE filter is resolved: the NotInSubquery is replaced by a MarkJoin.
      */
-    public void testRejectsNotInSubqueryInStatsWhereFilter() {
-        errorInSubquery(
-            """
-                FROM employees
-                | STATS cnt = COUNT(*) WHERE emp_no NOT IN (FROM employees | KEEP emp_no)
-                """,
-            containsString("IN subquery is not supported in [STATS cnt = COUNT(*) WHERE emp_no NOT IN (FROM employees | KEEP emp_no)]")
+    public void testNotInSubqueryInStatsWhereFilter() {
+        LogicalPlan plan = analyzeInSubquery("""
+            FROM employees
+            | STATS cnt = COUNT(*) WHERE emp_no NOT IN (FROM employees | KEEP emp_no)
+            """);
+        Limit limit = as(plan, Limit.class);
+        Aggregate agg = as(limit.child(), Aggregate.class);
+        MarkJoin markJoin = as(agg.child(), MarkJoin.class);
+        assertThat(markJoin.config().type(), equalTo(JoinTypes.MARK));
+        assertThat(markJoin.config().leftFields().size(), equalTo(1));
+        assertThat(markJoin.config().leftFields().get(0).name(), equalTo("emp_no"));
+        EsRelation leftRelation = as(markJoin.left(), EsRelation.class);
+        assertEquals("employees", leftRelation.indexPattern());
+    }
+
+    /**
+     * Verifies that IN subquery in STATS WHERE with BY grouping is resolved: the InSubquery in the filter is replaced
+     * by a MarkJoin while the explicit grouping key is preserved.
+     */
+    public void testInSubqueryInStatsWhereFilterWithGrouping() {
+        LogicalPlan plan = analyzeInSubquery("""
+            FROM employees
+            | STATS cnt = COUNT(*) WHERE emp_no IN (FROM employees | KEEP emp_no) BY languages
+            """);
+        Limit limit = as(plan, Limit.class);
+        Aggregate agg = as(limit.child(), Aggregate.class);
+        assertFalse("STATS ... BY languages should have a non-empty grouping list", agg.groupings().isEmpty());
+        MarkJoin markJoin = as(agg.child(), MarkJoin.class);
+        assertThat(markJoin.config().type(), equalTo(JoinTypes.MARK));
+        assertThat(markJoin.config().leftFields().get(0).name(), equalTo("emp_no"));
+        EsRelation leftRelation = as(markJoin.left(), EsRelation.class);
+        assertEquals("employees", leftRelation.indexPattern());
+    }
+
+    // -- positive: IN subquery in INLINESTATS → MarkJoin below inner Aggregate --
+
+    /**
+     * Verifies that an IN subquery in INLINESTATS WHERE filter is resolved: the InSubquery is
+     * replaced by a MarkJoin stacked below the inner Aggregate.
+     */
+    public void testInSubqueryInInlineStatsWhereFilter() {
+        assumeTrue(
+            "IN_SUBQUERY_OTHER_PROCESSING_COMMANDS required",
+            EsqlCapabilities.Cap.IN_SUBQUERY_OTHER_PROCESSING_COMMANDS.isEnabled()
         );
+        LogicalPlan plan = analyzeInSubquery("""
+            FROM employees
+            | INLINESTATS cnt = COUNT(*) WHERE emp_no IN (FROM employees | KEEP emp_no)
+            """);
+        plan.forEachDown(InlineStats.class, ils -> {
+            Aggregate agg = ils.aggregate();
+            agg.aggregates()
+                .forEach(a -> a.forEachDown(InSubquery.class, inSub -> fail("InSubquery survived in InlineStats aggregate: " + inSub)));
+            MarkJoin markJoin = as(agg.child(), MarkJoin.class);
+            assertThat(markJoin.config().type(), equalTo(JoinTypes.MARK));
+            assertThat(markJoin.config().leftFields().size(), equalTo(1));
+            assertThat(markJoin.config().leftFields().get(0).name(), equalTo("emp_no"));
+            EsRelation leftRelation = as(markJoin.left(), EsRelation.class);
+            assertEquals("employees", leftRelation.indexPattern());
+        });
+        assertTrue("Expected MarkJoin in plan", plan.anyMatch(p -> p instanceof MarkJoin));
     }
 
     /**
-     * Verifies that IN subquery in STATS WHERE with BY grouping is rejected.
+     * Verifies that a NOT IN subquery in INLINESTATS WHERE filter is resolved.
      */
-    public void testRejectsInSubqueryInStatsWhereFilterWithGrouping() {
-        errorInSubquery(
-            """
-                FROM employees
-                | STATS cnt = COUNT(*) WHERE emp_no IN (FROM employees | KEEP emp_no) BY languages
-                """,
-            containsString(
-                "IN subquery is not supported in [STATS cnt = COUNT(*) WHERE emp_no IN (FROM employees | KEEP emp_no) BY languages]"
-            )
+    public void testNotInSubqueryInInlineStatsWhereFilter() {
+        assumeTrue(
+            "IN_SUBQUERY_OTHER_PROCESSING_COMMANDS required",
+            EsqlCapabilities.Cap.IN_SUBQUERY_OTHER_PROCESSING_COMMANDS.isEnabled()
         );
-    }
-
-    // -- negative: IN subquery in INLINESTATS --
-
-    /**
-     * Verifies that an IN subquery in INLINESTATS WHERE filter is rejected.
-     */
-    public void testRejectsInSubqueryInInlineStatsWhereFilter() {
-        errorInSubquery(
-            """
-                FROM employees
-                | INLINESTATS cnt = COUNT(*) WHERE emp_no IN (FROM employees | KEEP emp_no)
-                """,
-            containsString("IN subquery is not supported in [INLINESTATS cnt = COUNT(*) WHERE emp_no IN (FROM employees | KEEP emp_no)]")
+        LogicalPlan plan = analyzeInSubquery("""
+            FROM employees
+            | INLINESTATS cnt = COUNT(*) WHERE emp_no NOT IN (FROM employees | KEEP emp_no)
+            """);
+        plan.forEachDown(
+            InlineStats.class,
+            ils -> ils.aggregate()
+                .aggregates()
+                .forEach(a -> a.forEachDown(InSubquery.class, inSub -> fail("InSubquery survived in InlineStats aggregate: " + inSub)))
         );
+        assertTrue("Expected MarkJoin in plan", plan.anyMatch(p -> p instanceof MarkJoin));
     }
 
     /**
-     * Verifies that a NOT IN subquery in INLINESTATS WHERE filter is rejected.
+     * Verifies that IN subquery in INLINESTATS WHERE with BY grouping is resolved: the InSubquery
+     * in the filter is replaced by a MarkJoin while the explicit grouping key is preserved.
      */
-    public void testRejectsNotInSubqueryInInlineStatsWhereFilter() {
-        errorInSubquery(
-            """
-                FROM employees
-                | INLINESTATS cnt = COUNT(*) WHERE emp_no NOT IN (FROM employees | KEEP emp_no)
-                """,
-            containsString(
-                "IN subquery is not supported in [INLINESTATS cnt = COUNT(*) WHERE emp_no NOT IN (FROM employees | KEEP emp_no)]"
-            )
+    public void testInSubqueryInInlineStatsWhereFilterWithGrouping() {
+        assumeTrue(
+            "IN_SUBQUERY_OTHER_PROCESSING_COMMANDS required",
+            EsqlCapabilities.Cap.IN_SUBQUERY_OTHER_PROCESSING_COMMANDS.isEnabled()
         );
+        LogicalPlan plan = analyzeInSubquery("""
+            FROM employees
+            | INLINESTATS cnt = COUNT(*) WHERE emp_no IN (FROM employees | KEEP emp_no) BY languages
+            """);
+        plan.forEachDown(InlineStats.class, ils -> {
+            Aggregate agg = ils.aggregate();
+            assertFalse("INLINESTATS ... BY languages should have a non-empty grouping list", agg.groupings().isEmpty());
+            MarkJoin markJoin = as(agg.child(), MarkJoin.class);
+            assertThat(markJoin.config().type(), equalTo(JoinTypes.MARK));
+            assertThat(markJoin.config().leftFields().get(0).name(), equalTo("emp_no"));
+            EsRelation leftRelation = as(markJoin.left(), EsRelation.class);
+            assertEquals("employees", leftRelation.indexPattern());
+        });
+        assertTrue("Expected MarkJoin in plan", plan.anyMatch(p -> p instanceof MarkJoin));
     }
 
-    /**
-     * Verifies that IN subquery in INLINESTATS WHERE with BY grouping is rejected.
-     */
-    public void testRejectsInSubqueryInInlineStatsWhereFilterWithGrouping() {
-        errorInSubquery(
-            """
-                FROM employees
-                | INLINESTATS cnt = COUNT(*) WHERE emp_no IN (FROM employees | KEEP emp_no) BY languages
-                """,
-            containsString(
-                "IN subquery is not supported in [INLINESTATS cnt = COUNT(*) WHERE emp_no IN (FROM employees | KEEP emp_no) BY languages]"
-            )
-        );
-    }
-
-    // -- negative: IN subquery in EVAL --
+    // -- positive: IN subquery in EVAL → MarkJoin below Eval --
 
     /**
-     * Verifies that an IN subquery inside EVAL is rejected.
+     * Verifies that an IN subquery inside EVAL is resolved: the InSubquery is replaced by a
+     * synthetic mark attribute with a MarkJoin stacked below the Eval.
      */
-    public void testRejectsInSubqueryInEval() {
-        errorInSubquery("""
+    public void testInSubqueryInEval() {
+        LogicalPlan plan = analyzeInSubquery("""
             FROM employees
             | EVAL x = emp_no IN (FROM employees | KEEP emp_no)
-            """, containsString("IN subquery is not supported in [EVAL x = emp_no IN (FROM employees | KEEP emp_no)]"));
+            """);
+        plan.forEachDown(
+            Eval.class,
+            eval -> eval.fields().forEach(f -> f.forEachDown(InSubquery.class, inSub -> fail("InSubquery survived in Eval: " + inSub)))
+        );
+        assertTrue("Expected MarkJoin in plan", plan.anyMatch(p -> p instanceof MarkJoin));
     }
 
     /**
-     * Verifies that a NOT IN subquery inside EVAL is rejected.
+     * Verifies that a NOT IN subquery inside EVAL is resolved.
      */
-    public void testRejectsNotInSubqueryInEval() {
-        errorInSubquery("""
+    public void testNotInSubqueryInEval() {
+        LogicalPlan plan = analyzeInSubquery("""
             FROM employees
             | EVAL x = emp_no NOT IN (FROM employees | KEEP emp_no)
-            """, containsString("IN subquery is not supported in [EVAL x = emp_no NOT IN (FROM employees | KEEP emp_no)]"));
+            """);
+        plan.forEachDown(
+            Eval.class,
+            eval -> eval.fields().forEach(f -> f.forEachDown(InSubquery.class, inSub -> fail("InSubquery survived in Eval: " + inSub)))
+        );
+        assertTrue("Expected MarkJoin in plan", plan.anyMatch(p -> p instanceof MarkJoin));
     }
 
     // -- approximation incompatibility tests --
@@ -529,96 +598,149 @@ public class AnalyzerInSubqueryTests extends ESTestCase {
             """, containsString("Column [emp_no] has conflicting data types in subqueries: [integer, long]"));
     }
 
-    // -- IN subquery in processing commands (rejected by analyzer) --
+    // -- positive: IN subquery in SORT → MarkJoin below OrderBy --
 
     /**
-     * Verifies that an IN subquery inside SORT is rejected.
+     * Verifies that an IN subquery inside SORT is resolved: the InSubquery is replaced by a
+     * synthetic mark attribute with a MarkJoin stacked below the OrderBy.
      */
-    public void testRejectsInSubqueryInSort() {
-        errorInSubquery("""
+    public void testInSubqueryInSort() {
+        LogicalPlan plan = analyzeInSubquery("""
             FROM employees
             | SORT emp_no IN (FROM employees | KEEP emp_no)
-            """, containsString("IN subquery is not supported in [SORT emp_no IN (FROM employees | KEEP emp_no)]"));
+            """);
+        plan.forEachDown(
+            OrderBy.class,
+            orderBy -> orderBy.order()
+                .forEach(o -> o.forEachDown(InSubquery.class, inSub -> fail("InSubquery survived in OrderBy: " + inSub)))
+        );
+        assertTrue("Expected MarkJoin in plan", plan.anyMatch(p -> p instanceof MarkJoin));
     }
 
     /**
-     * Verifies that a NOT IN subquery inside SORT is rejected.
+     * Verifies that a NOT IN subquery inside SORT is resolved.
      */
-    public void testRejectsNotInSubqueryInSort() {
-        errorInSubquery("""
+    public void testNotInSubqueryInSort() {
+        LogicalPlan plan = analyzeInSubquery("""
             FROM employees
             | SORT emp_no NOT IN (FROM employees | KEEP emp_no)
-            """, containsString("IN subquery is not supported in [SORT emp_no NOT IN (FROM employees | KEEP emp_no)]"));
+            """);
+        plan.forEachDown(
+            OrderBy.class,
+            orderBy -> orderBy.order()
+                .forEach(o -> o.forEachDown(InSubquery.class, inSub -> fail("InSubquery survived in OrderBy: " + inSub)))
+        );
+        assertTrue("Expected MarkJoin in plan", plan.anyMatch(p -> p instanceof MarkJoin));
     }
 
     /**
-     * Verifies that an IN subquery in STATS BY clause is rejected.
+     * Verifies that an IN subquery in STATS BY clause is resolved: the grouping InSubquery is replaced by a synthetic
+     * mark attribute with a MarkJoin stacked below the Aggregate.
      */
-    public void testRejectsInSubqueryInStatsBy() {
-        errorInSubquery("""
+    public void testInSubqueryInStatsBy() {
+        LogicalPlan plan = analyzeInSubquery("""
             FROM employees
             | STATS cnt = COUNT(*) BY emp_no IN (FROM employees | KEEP emp_no)
-            """, containsString("IN subquery is not supported in [STATS cnt = COUNT(*) BY emp_no IN (FROM employees | KEEP emp_no)]"));
+            """);
+        Limit limit = as(plan, Limit.class);
+        Aggregate agg = as(limit.child(), Aggregate.class);
+        assertEquals(1, agg.groupings().size());
+        MarkJoin markJoin = as(agg.child(), MarkJoin.class);
+        assertThat(markJoin.config().type(), equalTo(JoinTypes.MARK));
+        assertThat(markJoin.config().leftFields().size(), equalTo(1));
+        assertThat(markJoin.config().leftFields().get(0).name(), equalTo("emp_no"));
+        EsRelation leftRelation = as(markJoin.left(), EsRelation.class);
+        assertEquals("employees", leftRelation.indexPattern());
+        Project rightProject = as(markJoin.right(), Project.class);
+        EsRelation rightRelation = as(rightProject.child(), EsRelation.class);
+        assertEquals("employees", rightRelation.indexPattern());
     }
 
     /**
-     * Verifies that a NOT IN subquery in STATS BY clause is rejected.
+     * Verifies that a NOT IN subquery in STATS BY clause is resolved: the grouping NotInSubquery is replaced by a
+     * synthetic mark attribute (negated) with a MarkJoin stacked below the Aggregate.
      */
-    public void testRejectsNotInSubqueryInStatsBy() {
-        errorInSubquery("""
+    public void testNotInSubqueryInStatsBy() {
+        LogicalPlan plan = analyzeInSubquery("""
             FROM employees
             | STATS cnt = COUNT(*) BY emp_no NOT IN (FROM employees | KEEP emp_no)
-            """, containsString("IN subquery is not supported in [STATS cnt = COUNT(*) BY emp_no NOT IN (FROM employees | KEEP emp_no)]"));
+            """);
+        Limit limit = as(plan, Limit.class);
+        Aggregate agg = as(limit.child(), Aggregate.class);
+        assertEquals(1, agg.groupings().size());
+        MarkJoin markJoin = as(agg.child(), MarkJoin.class);
+        assertThat(markJoin.config().type(), equalTo(JoinTypes.MARK));
+        assertThat(markJoin.config().leftFields().size(), equalTo(1));
+        assertThat(markJoin.config().leftFields().get(0).name(), equalTo("emp_no"));
+        EsRelation leftRelation = as(markJoin.left(), EsRelation.class);
+        assertEquals("employees", leftRelation.indexPattern());
     }
 
     /**
-     * Verifies that an IN subquery in LIMIT BY clause is rejected.
+     * Verifies that an IN subquery in LIMIT BY clause is resolved: the InSubquery is replaced by a
+     * synthetic mark attribute with a MarkJoin stacked below the LimitBy.
      */
-    public void testRejectsInSubqueryInLimitBy() {
-        errorInSubquery("""
+    public void testInSubqueryInLimitBy() {
+        LogicalPlan plan = analyzeInSubquery("""
             FROM employees
             | SORT emp_no
             | LIMIT 10 BY emp_no IN (FROM employees | KEEP emp_no)
-            """, containsString("IN subquery is not supported in [LIMIT 10 BY emp_no IN (FROM employees | KEEP emp_no)]"));
+            """);
+        plan.forEachDown(
+            LimitBy.class,
+            limitBy -> limitBy.groupings()
+                .forEach(g -> g.forEachDown(InSubquery.class, inSub -> fail("InSubquery survived in LimitBy: " + inSub)))
+        );
+        assertTrue("Expected MarkJoin in plan", plan.anyMatch(p -> p instanceof MarkJoin));
     }
 
     /**
-     * Verifies that a NOT IN subquery in LIMIT BY clause is rejected.
+     * Verifies that a NOT IN subquery in LIMIT BY clause is resolved.
      */
-    public void testRejectsNotInSubqueryInLimitBy() {
-        errorInSubquery("""
+    public void testNotInSubqueryInLimitBy() {
+        LogicalPlan plan = analyzeInSubquery("""
             FROM employees
             | SORT emp_no
             | LIMIT 10 BY emp_no NOT IN (FROM employees | KEEP emp_no)
-            """, containsString("IN subquery is not supported in [LIMIT 10 BY emp_no NOT IN (FROM employees | KEEP emp_no)]"));
+            """);
+        plan.forEachDown(
+            LimitBy.class,
+            limitBy -> limitBy.groupings()
+                .forEach(g -> g.forEachDown(InSubquery.class, inSub -> fail("InSubquery survived in LimitBy: " + inSub)))
+        );
+        assertTrue("Expected MarkJoin in plan", plan.anyMatch(p -> p instanceof MarkJoin));
     }
 
     /**
-     * Verifies that an IN subquery inside EVAL with multiple fields (one being the IN subquery) is rejected.
+     * Verifies that an IN subquery in one of multiple EVAL fields is resolved: the InSubquery is
+     * replaced by a mark attribute, a MarkJoin is inserted below the Eval.
      */
-    public void testRejectsInSubqueryInEvalAmongMultipleFields() {
-        errorInSubquery(
-            """
-                FROM employees
-                | EVAL a = 1, is_match = emp_no IN (FROM employees | KEEP emp_no), b = salary
-                """,
-            containsString("IN subquery is not supported in [EVAL a = 1, is_match = emp_no IN (FROM employees | KEEP emp_no), b = salary]")
+    public void testInSubqueryInEvalAmongMultipleFields() {
+        LogicalPlan plan = analyzeInSubquery("""
+            FROM employees
+            | EVAL a = 1, is_match = emp_no IN (FROM employees | KEEP emp_no), b = salary
+            """);
+        plan.forEachDown(
+            Eval.class,
+            eval -> eval.fields().forEach(f -> f.forEachDown(InSubquery.class, inSub -> fail("InSubquery survived in Eval: " + inSub)))
         );
+        assertTrue("Expected MarkJoin in plan", plan.anyMatch(p -> p instanceof MarkJoin));
     }
 
     /**
-     * Verifies that an IN subquery as a function argument inside EVAL is rejected.
-     * The InSubquery inside COALESCE is unresolved, and the verifier reports
-     * that IN/NOT IN subquery is not supported in Eval.
+     * Verifies that an IN subquery nested as a function argument inside EVAL is resolved:
+     * the InSubquery is replaced by a mark attribute inside the function call.
      */
-    public void testRejectsInSubqueryAsFunctionArgInEval() {
-        errorInSubquery(
-            """
-                FROM employees
-                | EVAL result = COALESCE(emp_no IN (FROM employees | KEEP emp_no), false)
-                """,
-            containsString("IN subquery is not supported in [EVAL result = COALESCE(emp_no IN (FROM employees | KEEP emp_no), false)]")
+    public void testInSubqueryAsFunctionArgInEval() {
+        LogicalPlan plan = analyzeInSubquery("""
+            FROM employees
+            | EVAL result = COALESCE(emp_no IN (FROM employees | KEEP emp_no), false)
+            """);
+        plan.forEachDown(
+            Eval.class,
+            eval -> eval.fields().forEach(f -> f.forEachDown(InSubquery.class, inSub -> fail("InSubquery survived in Eval: " + inSub)))
         );
+        assertTrue("Expected MarkJoin in plan", plan.anyMatch(p -> p instanceof MarkJoin));
     }
 
     // -- IN subquery nested in WHERE expressions --

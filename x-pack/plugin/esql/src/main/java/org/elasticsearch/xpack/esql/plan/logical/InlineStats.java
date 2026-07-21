@@ -102,7 +102,16 @@ public class InlineStats extends UnaryPlan
     @Override
     public List<Attribute> output() {
         if (this.lazyOutput == null) {
-            this.lazyOutput = mergeOutputAttributes(aggregate.output(), aggregate.child().output());
+            // Exclude synthetic attributes (e.g. MarkJoin mark attributes introduced by IN subquery
+            // resolution) from the child's pass-through columns. Those attributes are produced below
+            // the inner Aggregate for use during aggregation and must not surface in user output.
+            List<Attribute> nonSyntheticChildOutput = new ArrayList<>();
+            for (Attribute a : aggregate.child().output()) {
+                if (a.synthetic() == false) {
+                    nonSyntheticChildOutput.add(a);
+                }
+            }
+            this.lazyOutput = mergeOutputAttributes(aggregate.output(), nonSyntheticChildOutput);
         }
         return lazyOutput;
     }

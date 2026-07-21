@@ -1,0 +1,4 @@
+FROM employees
+| SORT emp_no ASC
+| LIMIT 100
+| LIMIT 2 BY emp_no IN (FROM employees | SORT emp_no ASC | LIMIT 3 | KEEP emp_no)

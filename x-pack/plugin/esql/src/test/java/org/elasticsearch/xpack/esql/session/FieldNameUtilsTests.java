@@ -3382,8 +3382,9 @@ public class FieldNameUtilsTests extends ESTestCase {
 
     public void testNestedInSubqueries() {
         assumeTrue("IN_SUBQUERY required", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY_WITHOUT_VIEW.isEnabled());
-        // Nested IN subquery: the inner subquery references salary, the outer references emp_no and first_name
-        // The inner subquery's STATS alias (max_sal) is also visible in the plan tree after InSubqueryResolver
+        // Nested IN subquery: the inner subquery references salary and languages from the index; the outer
+        // references emp_no and first_name. max_sal is a STATS-computed alias, not an index field, so it
+        // must not appear in the collected field names.
         assertFieldNames(
             """
                 FROM employees
@@ -3393,19 +3394,7 @@ public class FieldNameUtilsTests extends ESTestCase {
                     | KEEP emp_no
                   )
                 | KEEP emp_no, first_name""",
-            Set.of(
-                "_index",
-                "emp_no",
-                "emp_no.*",
-                "first_name",
-                "first_name.*",
-                "salary",
-                "salary.*",
-                "languages",
-                "languages.*",
-                "max_sal",
-                "max_sal.*"
-            )
+            Set.of("_index", "emp_no", "emp_no.*", "first_name", "first_name.*", "salary", "salary.*", "languages", "languages.*")
         );
     }
 
@@ -3463,6 +3452,126 @@ public class FieldNameUtilsTests extends ESTestCase {
             | KEEP emp_no, first_name
             | LIMIT 5
             """, Set.of("_index", "emp_no", "emp_no.*", "first_name", "first_name.*", "hire_date", "hire_date.*"));
+    }
+
+    // IN subquery in processing commands other than WHERE (EVAL, SORT, STATS WHERE, STATS BY, LIMIT BY)
+
+    public void testEvalInSubqueryWithKeep() {
+        assumeTrue(
+            "IN_SUBQUERY_OTHER_PROCESSING_COMMANDS required",
+            EsqlCapabilities.Cap.IN_SUBQUERY_OTHER_PROCESSING_COMMANDS.isEnabled()
+        );
+        assertFieldNames(
+            "FROM employees | EVAL is_top3 = emp_no IN (FROM employees | SORT emp_no ASC | LIMIT 3 | KEEP emp_no) | KEEP emp_no, first_name",
+            Set.of("_index", "emp_no", "emp_no.*", "first_name", "first_name.*")
+        );
+    }
+
+    public void testEvalInSubqueryWithoutKeep() {
+        assumeTrue(
+            "IN_SUBQUERY_OTHER_PROCESSING_COMMANDS required",
+            EsqlCapabilities.Cap.IN_SUBQUERY_OTHER_PROCESSING_COMMANDS.isEnabled()
+        );
+        // No KEEP/STATS in main query → all fields needed
+        assertFieldNames(
+            "FROM employees | EVAL is_top3 = emp_no IN (FROM employees | SORT emp_no ASC | LIMIT 3 | KEEP emp_no)",
+            ALL_FIELDS
+        );
+    }
+
+    public void testSortInSubqueryWithKeep() {
+        assumeTrue(
+            "IN_SUBQUERY_OTHER_PROCESSING_COMMANDS required",
+            EsqlCapabilities.Cap.IN_SUBQUERY_OTHER_PROCESSING_COMMANDS.isEnabled()
+        );
+        assertFieldNames(
+            "FROM employees | SORT emp_no IN (FROM employees | SORT emp_no ASC | LIMIT 3 | KEEP emp_no) DESC, emp_no ASC | LIMIT 3 | KEEP emp_no, first_name",
+            Set.of("_index", "emp_no", "emp_no.*", "first_name", "first_name.*")
+        );
+    }
+
+    public void testSortInSubqueryWithoutKeep() {
+        assumeTrue(
+            "IN_SUBQUERY_OTHER_PROCESSING_COMMANDS required",
+            EsqlCapabilities.Cap.IN_SUBQUERY_OTHER_PROCESSING_COMMANDS.isEnabled()
+        );
+        // No KEEP/STATS in main query → all fields needed
+        assertFieldNames(
+            "FROM employees | SORT emp_no IN (FROM employees | SORT emp_no ASC | LIMIT 3 | KEEP emp_no) DESC, emp_no ASC | LIMIT 3",
+            ALL_FIELDS
+        );
+    }
+
+    public void testStatsWhereInSubquery() {
+        assumeTrue(
+            "IN_SUBQUERY_OTHER_PROCESSING_COMMANDS required",
+            EsqlCapabilities.Cap.IN_SUBQUERY_OTHER_PROCESSING_COMMANDS.isEnabled()
+        );
+        // STATS reduces the output to just the aggregated columns; only emp_no (the join key) is needed from the index
+        assertFieldNames(
+            "FROM employees | STATS c = COUNT(*) WHERE emp_no IN (FROM employees | SORT emp_no ASC | LIMIT 3 | KEEP emp_no)",
+            Set.of("_index", "emp_no", "emp_no.*")
+        );
+    }
+
+    public void testStatsByInSubquery() {
+        assumeTrue(
+            "IN_SUBQUERY_OTHER_PROCESSING_COMMANDS required",
+            EsqlCapabilities.Cap.IN_SUBQUERY_OTHER_PROCESSING_COMMANDS.isEnabled()
+        );
+        // STATS reduces the output; the grouping key is the mark attribute which resolves to emp_no from the join
+        assertFieldNames(
+            "FROM employees | STATS c = COUNT(*) BY is_top3 = emp_no IN (FROM employees | SORT emp_no ASC | LIMIT 3 | KEEP emp_no)",
+            Set.of("_index", "emp_no", "emp_no.*")
+        );
+    }
+
+    public void testLimitByInSubqueryWithKeep() {
+        assumeTrue(
+            "IN_SUBQUERY_OTHER_PROCESSING_COMMANDS required",
+            EsqlCapabilities.Cap.IN_SUBQUERY_OTHER_PROCESSING_COMMANDS.isEnabled()
+        );
+        assertFieldNames(
+            "FROM employees | SORT emp_no ASC | LIMIT 100 | LIMIT 2 BY emp_no IN (FROM employees | SORT emp_no ASC | LIMIT 3 | KEEP emp_no) | KEEP emp_no, first_name",
+            Set.of("_index", "emp_no", "emp_no.*", "first_name", "first_name.*")
+        );
+    }
+
+    public void testLimitByInSubqueryWithoutKeep() {
+        assumeTrue(
+            "IN_SUBQUERY_OTHER_PROCESSING_COMMANDS required",
+            EsqlCapabilities.Cap.IN_SUBQUERY_OTHER_PROCESSING_COMMANDS.isEnabled()
+        );
+        // No KEEP/STATS in main query → all fields needed
+        assertFieldNames(
+            "FROM employees | SORT emp_no ASC | LIMIT 100 | LIMIT 2 BY emp_no IN (FROM employees | SORT emp_no ASC | LIMIT 3 | KEEP emp_no)",
+            ALL_FIELDS
+        );
+    }
+
+    public void testInlineStatsWhereInSubqueryWithKeep() {
+        assumeTrue(
+            "IN_SUBQUERY_OTHER_PROCESSING_COMMANDS required",
+            EsqlCapabilities.Cap.IN_SUBQUERY_OTHER_PROCESSING_COMMANDS.isEnabled()
+        );
+        // INLINE STATS passes all columns through; KEEP narrows the output to emp_no + cnt (aggregate).
+        // The synthetic mark attribute must not appear in field names.
+        assertFieldNames(
+            "FROM employees | INLINE STATS cnt = COUNT(*) WHERE emp_no IN (FROM employees | SORT emp_no ASC | LIMIT 3 | KEEP emp_no) | KEEP emp_no, cnt",
+            Set.of("_index", "emp_no", "emp_no.*")
+        );
+    }
+
+    public void testInlineStatsByInSubqueryWithKeep() {
+        assumeTrue(
+            "IN_SUBQUERY_OTHER_PROCESSING_COMMANDS required",
+            EsqlCapabilities.Cap.IN_SUBQUERY_OTHER_PROCESSING_COMMANDS.isEnabled()
+        );
+        // INLINE STATS BY passes all columns through; KEEP narrows output. The synthetic mark attribute must not appear in field names.
+        assertFieldNames(
+            "FROM employees | INLINE STATS c = COUNT(*) BY is_top3 = emp_no IN (FROM employees | SORT emp_no ASC | LIMIT 3 | KEEP emp_no) | KEEP emp_no, is_top3, c",
+            Set.of("_index", "emp_no", "emp_no.*")
+        );
     }
 
     /**

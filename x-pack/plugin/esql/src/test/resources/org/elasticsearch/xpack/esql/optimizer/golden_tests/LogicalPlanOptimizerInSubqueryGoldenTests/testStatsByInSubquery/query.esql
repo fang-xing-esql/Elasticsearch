@@ -1,0 +1,2 @@
+FROM employees
+| STATS c = COUNT(*) BY is_top3 = emp_no IN (FROM employees | SORT emp_no ASC | LIMIT 3 | KEEP emp_no)

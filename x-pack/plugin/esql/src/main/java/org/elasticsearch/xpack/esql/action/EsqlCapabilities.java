@@ -1488,6 +1488,16 @@ public class EsqlCapabilities {
          * correct time-series index when a join presents.
          */
         WHERE_IN_SUBQUERY_WITH_TS,
+
+        /**
+         * Support IN non-correlated subqueries in processing commands other than {@code WHERE}:
+         * {@code EVAL}, {@code SORT}, {@code LIMIT BY}, {@code STATS} (both as an aggregate
+         * filter {@code STATS agg() WHERE x IN (subquery)} and as a grouping key
+         * {@code STATS ... BY x IN (subquery)}), and {@code INLINESTATS} (both as a per-aggregate
+         * filter {@code INLINESTATS agg() WHERE x IN (subquery)} and as a grouping key
+         * {@code INLINESTATS ... BY x IN (subquery)}).
+         */
+        IN_SUBQUERY_OTHER_PROCESSING_COMMANDS,
         /**
          * Support for views in cluster state (and REST API).
          */
