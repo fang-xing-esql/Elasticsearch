@@ -19,8 +19,6 @@ import org.elasticsearch.xpack.esql.plan.logical.Limit;
 import org.elasticsearch.xpack.esql.plan.logical.LogicalPlan;
 import org.elasticsearch.xpack.esql.plan.logical.Project;
 import org.elasticsearch.xpack.esql.plan.logical.Row;
-import org.elasticsearch.xpack.esql.plan.logical.Subquery;
-import org.elasticsearch.xpack.esql.plan.logical.UnionAll;
 import org.elasticsearch.xpack.esql.plan.logical.ViewUnionAll;
 import org.elasticsearch.xpack.esql.plan.logical.local.EmptyLocalSupplier;
 import org.elasticsearch.xpack.esql.plan.logical.local.LocalRelation;
@@ -103,16 +101,12 @@ public class PruneEmptyForkBranchesTests extends AbstractLogicalPlanOptimizerTes
             | LIMIT 10
             """);
 
-        var limit = as(plan, Limit.class);
-        var unionAll = as(limit.child(), UnionAll.class);
-
-        // the second subquery is removed
-        assertEquals(1, unionAll.children().size());
-
-        var project = as(unionAll.children().get(0), Project.class);
-        var subquery = as(project.child(), Subquery.class);
-        var eval = as(subquery.child(), Eval.class);
-        assertThat(eval.child(), instanceOf(EsRelation.class));
+        // The UnionAll is flattened as there is only one child left. The Project preserves the UnionAll output attributes expected by
+        // the parent plan.
+        var project = as(plan, Project.class);
+        var eval = as(project.child(), Eval.class);
+        var limit = as(eval.child(), Limit.class);
+        assertThat(limit.child(), instanceOf(EsRelation.class));
     }
 
     public void testAllEmptySubqueries() {

@@ -636,14 +636,12 @@ public class PushDownFilterAndLimitIntoUnionAllTests extends AbstractLogicalPlan
             | WHERE x is not null and y > 0 and emp_no > 0
             """);
 
-        Limit limit = as(plan, Limit.class);
-        UnionAll unionAll = as(limit.child(), UnionAll.class);
-        // the first child is pruned, since it becomes an empty LocalRelation since the filter cannot be applied
-        assertEquals(1, unionAll.children().size());
-
-        Project child2 = as(unionAll.children().get(0), Project.class);
+        // The first child is pruned because its filter cannot be applied. The singleton UnionAll is flattened,
+        // leaving a Project that preserves the output attributes expected above it.
+        Project child2 = as(plan, Project.class);
         Subquery subquery = as(child2.child(), Subquery.class);
-        Filter childFilter = as(subquery.child(), Filter.class);
+        Limit limit = as(subquery.child(), Limit.class);
+        Filter childFilter = as(limit.child(), Filter.class);
         GreaterThan greaterThan = as(childFilter.condition(), GreaterThan.class);
         ReferenceAttribute y = as(greaterThan.left(), ReferenceAttribute.class);
         assertEquals("y", y.name());
@@ -1063,19 +1061,16 @@ public class PushDownFilterAndLimitIntoUnionAllTests extends AbstractLogicalPlan
             | WHERE match(language_name, "text")
             """);
 
-        // Limit[1000[INTEGER],false,false]
-        Limit limit = as(plan, Limit.class);
-        UnionAll unionAll = as(limit.child(), UnionAll.class);
-        // First child is pruned: LocalRelation with EMPTY data since filter on language_name can't be applied to test index
-        assertEquals(1, unionAll.children().size());
-        // Second child: languages subquery with MATCH filter pushed down
-        Project child2 = as(unionAll.children().getFirst(), Project.class);
+        // The first child is pruned because the filter on language_name cannot be applied to the test index. The
+        // singleton UnionAll is flattened, leaving the languages branch and a Project that preserves its output attributes.
+        Project child2 = as(plan, Project.class);
         Eval eval2 = as(child2.child(), Eval.class);
         List<Alias> aliases = eval2.fields();
         assertEquals(11, aliases.size());
 
         Subquery subquery = as(eval2.child(), Subquery.class);
-        Filter filter = as(subquery.child(), Filter.class);
+        Limit limit = as(subquery.child(), Limit.class);
+        Filter filter = as(limit.child(), Filter.class);
         Match match = as(filter.condition(), Match.class);
         FieldAttribute languageName = as(match.field(), FieldAttribute.class);
         assertEquals("language_name", languageName.name());
@@ -1113,15 +1108,10 @@ public class PushDownFilterAndLimitIntoUnionAllTests extends AbstractLogicalPlan
 
         Project project = as(plan, Project.class);
         TopN topN = as(project.child(), TopN.class);
-        UnionAll unionAll = as(topN.child(), UnionAll.class);
-
-        // the last child is pruned, since it becomes an empty LocalRelation since the filter cannot be applied
-        assertEquals(1, unionAll.children().size());
-
-        Project esqlProject = as(unionAll.children().get(0), Project.class);
-        Eval eval = as(esqlProject.child(), Eval.class);
+        // The languages branch is pruned because its filter cannot be applied, and the singleton UnionAll is flattened.
+        Eval eval = as(topN.child(), Eval.class);
         List<Alias> aliases = eval.fields();
-        assertEquals(2, aliases.size());
+        assertEquals(1, aliases.size());
         Limit limit = as(eval.child(), Limit.class);
         Filter filter = as(limit.child(), Filter.class);
         Knn knn = as(filter.condition(), Knn.class);
@@ -1255,12 +1245,10 @@ public class PushDownFilterAndLimitIntoUnionAllTests extends AbstractLogicalPlan
             | WHERE emp_no > 10
             """);
 
-        Limit limit = as(plan, Limit.class);
-        UnionAll unionAll = as(limit.child(), UnionAll.class);
-        assertEquals(1, unionAll.children().size());
-
-        Project child1 = as(unionAll.children().get(0), Project.class);
-        Filter indexFilter = as(child1.child(), Filter.class);
+        // The ROW branch is pruned and the singleton UnionAll is flattened.
+        Project child1 = as(plan, Project.class);
+        Limit limit = as(child1.child(), Limit.class);
+        Filter indexFilter = as(limit.child(), Filter.class);
         GreaterThan indexGt = as(indexFilter.condition(), GreaterThan.class);
         FieldAttribute indexEmpNo = as(indexGt.left(), FieldAttribute.class);
         assertEquals("emp_no", indexEmpNo.name());
@@ -1319,13 +1307,10 @@ public class PushDownFilterAndLimitIntoUnionAllTests extends AbstractLogicalPlan
             | WHERE first_name == "Bob"
             """);
 
-        Limit limit = as(plan, Limit.class);
-        UnionAll unionAll = as(limit.child(), UnionAll.class);
         // The ROW leg is pruned because its first_name is null and `null == "Bob"` is false.
-        assertEquals(1, unionAll.children().size());
-
-        Project child1 = as(unionAll.children().get(0), Project.class);
-        Filter filter = as(child1.child(), Filter.class);
+        Project child1 = as(plan, Project.class);
+        Limit limit = as(child1.child(), Limit.class);
+        Filter filter = as(limit.child(), Filter.class);
         as(filter.child(), EsRelation.class);
     }
 
@@ -1345,13 +1330,10 @@ public class PushDownFilterAndLimitIntoUnionAllTests extends AbstractLogicalPlan
             | WHERE first_name:"Bob"
             """);
 
-        Limit limit = as(plan, Limit.class);
-        UnionAll unionAll = as(limit.child(), UnionAll.class);
         // ROW leg is pruned — first_name is null in the ROW so the pushed-down match folds to false.
-        assertEquals(1, unionAll.children().size());
-
-        Project child1 = as(unionAll.children().get(0), Project.class);
-        Filter indexFilter = as(child1.child(), Filter.class);
+        Project child1 = as(plan, Project.class);
+        Limit limit = as(child1.child(), Limit.class);
+        Filter indexFilter = as(limit.child(), Filter.class);
         MatchOperator indexMatch = as(indexFilter.condition(), MatchOperator.class);
         FieldAttribute indexFirstName = as(indexMatch.field(), FieldAttribute.class);
         assertEquals("first_name", indexFirstName.name());
@@ -1424,13 +1406,10 @@ public class PushDownFilterAndLimitIntoUnionAllTests extends AbstractLogicalPlan
             | WHERE first_name:"first" OR match_phrase(last_name, "last")
             """);
 
-        Limit limit = as(plan, Limit.class);
-        UnionAll unionAll = as(limit.child(), UnionAll.class);
         // ROW leg is pruned — every disjunct matches against a null and folds to false.
-        assertEquals(1, unionAll.children().size());
-
-        Project child1 = as(unionAll.children().get(0), Project.class);
-        Filter indexFilter = as(child1.child(), Filter.class);
+        Project child1 = as(plan, Project.class);
+        Limit limit = as(child1.child(), Limit.class);
+        Filter indexFilter = as(limit.child(), Filter.class);
         Or or = as(indexFilter.condition(), Or.class);
         MatchOperator matchOperator = as(or.left(), MatchOperator.class);
         assertEquals("first_name", as(matchOperator.field(), FieldAttribute.class).name());
@@ -1457,13 +1436,10 @@ public class PushDownFilterAndLimitIntoUnionAllTests extends AbstractLogicalPlan
             | WHERE first_name:"Bob" AND emp_no > 10
             """);
 
-        Limit limit = as(plan, Limit.class);
-        UnionAll unionAll = as(limit.child(), UnionAll.class);
         // ROW leg pruned — `first_name:"Bob"` evaluates to false on the null-filled first_name.
-        assertEquals(1, unionAll.children().size());
-
-        Project child1 = as(unionAll.children().get(0), Project.class);
-        Filter indexFilter = as(child1.child(), Filter.class);
+        Project child1 = as(plan, Project.class);
+        Limit limit = as(child1.child(), Limit.class);
+        Filter indexFilter = as(limit.child(), Filter.class);
         And and = as(indexFilter.condition(), And.class);
         MatchOperator matchOperator = as(and.left(), MatchOperator.class);
         assertEquals("first_name", as(matchOperator.field(), FieldAttribute.class).name());
@@ -1737,13 +1713,10 @@ public class PushDownFilterAndLimitIntoUnionAllTests extends AbstractLogicalPlan
             | WHERE message:"connect"
             """);
 
-        Limit limit = as(plan, Limit.class);
-        UnionAll unionAll = as(limit.child(), UnionAll.class);
-        assertEquals(1, unionAll.children().size());
-
-        Project sampleProject = as(unionAll.children().get(0), Project.class);
+        Project sampleProject = as(plan, Project.class);
         Eval sampleEval = as(sampleProject.child(), Eval.class);
-        Filter sampleFilter = as(sampleEval.child(), Filter.class);
+        Limit limit = as(sampleEval.child(), Limit.class);
+        Filter sampleFilter = as(limit.child(), Filter.class);
         MatchOperator match = as(sampleFilter.condition(), MatchOperator.class);
         FieldAttribute messageField = as(match.field(), FieldAttribute.class);
         assertEquals("message", messageField.name());
@@ -1776,13 +1749,10 @@ public class PushDownFilterAndLimitIntoUnionAllTests extends AbstractLogicalPlan
             | WHERE message:"connect" AND qstr("message:disconnect")
             """);
 
-        Limit limit = as(plan, Limit.class);
-        UnionAll unionAll = as(limit.child(), UnionAll.class);
-        assertEquals(1, unionAll.children().size());
-
-        Project sampleProject = as(unionAll.children().get(0), Project.class);
+        Project sampleProject = as(plan, Project.class);
         Eval sampleEval = as(sampleProject.child(), Eval.class);
-        Filter sampleFilter = as(sampleEval.child(), Filter.class);
+        Limit limit = as(sampleEval.child(), Limit.class);
+        Filter sampleFilter = as(limit.child(), Filter.class);
         And and = as(sampleFilter.condition(), And.class);
         MatchOperator match = as(and.left(), MatchOperator.class);
         FieldAttribute messageField = as(match.field(), FieldAttribute.class);

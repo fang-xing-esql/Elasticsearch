@@ -425,6 +425,47 @@ public class SubqueryFailureIT extends AbstractEsqlIntegTestCase {
         }
     }
 
+    public void testInnermostFailureWithNestedSubqueries() {
+        assumeTrue("requires nested subquery support", EsqlCapabilities.Cap.NESTED_SUBQUERY_IN_FROM_COMMAND.isEnabled());
+        var query = """
+            FROM
+               ( FROM ok | WHERE id == 1 ),
+               ( FROM
+                    ( FROM ok | WHERE id == 2 ),
+                    ( FROM
+                         ( FROM fail | KEEP fail_me | LIMIT 10 ),
+                         ( FROM ok | WHERE id == 3 )
+                    ),
+                    ( FROM ok | WHERE id == 1 )
+               ),
+               ( FROM ok | WHERE id == 2 )
+            | LIMIT 100
+            """;
+        IllegalStateException e = expectThrows(
+            IllegalStateException.class,
+            () -> run(syncEsqlQueryRequest(query).pragmas(batchPragmas(1))).close()
+        );
+        assertThat(e.getMessage(), equalTo("Accessing failing field"));
+    }
+
+    public void testPartialResultsWithFailingShardInNestedSubquery() {
+        assumeTrue("requires nested subquery support", EsqlCapabilities.Cap.NESTED_SUBQUERY_IN_FROM_COMMAND.isEnabled());
+        var query = """
+            FROM
+               ( FROM ok | WHERE id == 1 ),
+               ( FROM
+                    ( FROM fail,ok | KEEP fail_me | LIMIT 100 ),
+                    ( FROM ok | WHERE id == 2 )
+               )
+            | LIMIT 100
+            """;
+        var request = syncEsqlQueryRequest(query);
+        request.allowPartialResults(true);
+        try (EsqlQueryResponse resp = run(request)) {
+            assertTrue(resp.isPartial());
+        }
+    }
+
     private static void assumeViewBranchingSupported() {
         assumeTrue("Requires views in cluster state", EsqlCapabilities.Cap.VIEWS_IN_CLUSTER_STATE.isEnabled());
         assumeTrue("Requires views with branching", EsqlCapabilities.Cap.VIEWS_WITH_BRANCHING.isEnabled());

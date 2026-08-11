@@ -3716,6 +3716,122 @@ public class FieldNameUtilsTests extends ESTestCase {
             """, Set.of("_index", "emp_no", "emp_no.*", "first_name", "first_name.*", "salary", "salary.*", "languages", "languages.*"));
     }
 
+    public void testNestedSubqueriesInFromCommand() {
+        assertFieldNames(
+            """
+                FROM
+                  employees,
+                  (FROM employees | WHERE emp_no == 1 | KEEP emp_no),
+                  (FROM (FROM employees | WHERE salary < 7000),
+                        (FROM employees | WHERE languages > 0)
+                  )
+                | KEEP x, y, z
+                """,
+            Set.of("_index", "emp_no", "emp_no.*", "salary", "salary.*", "languages", "languages.*", "x", "x.*", "y", "y.*", "z", "z.*")
+        );
+    }
+
+    public void testNestedFromSubqueryWithInSubqueryInMainQuery() {
+        assertFieldNames(
+            """
+                FROM
+                  employees,
+                  (FROM employees | WHERE emp_no == 1 | KEEP emp_no),
+                  (FROM (FROM employees | WHERE salary < 7000),
+                        (FROM employees | WHERE languages > 0)
+                  )
+                | WHERE emp_no IN (FROM employees | WHERE is_hired == true | KEEP emp_no)
+                | KEEP x, y, z
+                """,
+            Set.of(
+                "_index",
+                "emp_no",
+                "emp_no.*",
+                "salary",
+                "salary.*",
+                "languages",
+                "languages.*",
+                "is_hired",
+                "is_hired.*",
+                "x",
+                "x.*",
+                "y",
+                "y.*",
+                "z",
+                "z.*"
+            )
+        );
+    }
+
+    public void testNestedFromSubqueryWithInSubqueryInsideSubquery() {
+        assertFieldNames(
+            """
+                FROM
+                  (FROM (FROM employees | WHERE emp_no IN (FROM employees | WHERE salary > 1000 | KEEP x)),
+                        (FROM employees | WHERE gender == "M")
+                  ),
+                  (FROM employees | WHERE still_hired == true)
+                | KEEP first_name, last_name
+                """,
+            Set.of(
+                "_index",
+                "emp_no",
+                "emp_no.*",
+                "salary",
+                "salary.*",
+                "gender",
+                "gender.*",
+                "still_hired",
+                "still_hired.*",
+                "first_name",
+                "first_name.*",
+                "last_name",
+                "last_name.*",
+                "x",
+                "x.*"
+            )
+        );
+    }
+
+    /**
+     * A {@code KEEP} inside one union branch must not influence how a sibling branch resolves its fields. The second branch here is
+     * itself a union whose branches only filter: they select no columns, so the query needs every field of the index. If the first
+     * branch's {@code KEEP emp_no} reaches them they look column-constrained, field caps is asked for a narrow set, and the remaining
+     * columns come back unpopulated.
+     * <p>
+     * Deliberately no trailing {@code KEEP}: a column-reducing command at the top level applies to every branch and legitimately
+     * suppresses the all-fields decision, which would mask this.
+     */
+    public void testNestedSubqueryKeepInSiblingBranchStillProjectsAll() {
+        assertFieldNames("""
+            FROM (FROM employees | KEEP emp_no),
+                 (FROM (FROM employees | WHERE salary > 1),
+                       (FROM employees | WHERE salary > 2)
+                 )
+            """, ALL_FIELDS);
+    }
+
+    /**
+     * {@link #testNestedSubqueryKeepInSiblingBranchStillProjectsAll} with the branches swapped: the resolved field set must not depend
+     * on the order the branches are written in.
+     */
+    public void testNestedSubqueryKeepInSiblingBranchStillProjectsAllReordered() {
+        assertFieldNames("""
+            FROM (FROM (FROM employees | WHERE salary > 1),
+                       (FROM employees | WHERE salary > 2)
+                 ),
+                 (FROM employees | KEEP emp_no)
+            """, ALL_FIELDS);
+    }
+
+    /**
+     * The single-level counterpart of {@link #testNestedSubqueryKeepInSiblingBranchStillProjectsAll}, and the union equivalent of
+     * {@link #testForkBranchWithKeep2}: one branch selects columns, the other does not, so the query still needs all fields.
+     */
+    public void testFlatSubqueryUnionKeepBranchPlusBareBranchProjectsAll() {
+        assertFieldNames("FROM (FROM employees | KEEP emp_no), (FROM employees | WHERE salary > 1)", ALL_FIELDS);
+    }
+
     // EVAL IN subquery tests
 
     public void testInSubqueryInEval() {

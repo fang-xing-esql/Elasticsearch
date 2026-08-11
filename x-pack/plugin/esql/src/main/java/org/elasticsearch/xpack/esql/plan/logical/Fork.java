@@ -132,10 +132,11 @@ public class Fork extends LogicalPlan implements PostAnalysisPlanVerificationAwa
      *       a {@code LocalRelation} when every branch reduces to empty) or to let the
      *       analyzer's verifier surface the empty-Fork state via {@link #checkBranchCount}.</li>
      * </ul>
-     * Single-survivor collapse semantics — a {@link UnionAll}/{@link ViewUnionAll} with one
-     * branch left is equivalent to that branch — are not part of this primitive; callers that
-     * want that collapse do it explicitly (see {@code ViewCompaction.stripViewShadowRelations}).
-     * A {@link Fork} with a single branch is still a {@link Fork} per FORK syntax.
+     * Single-survivor collapse semantics are not part of this primitive. The logical optimizer's
+     * {@code FlattenNestedSubqueries} rule later removes a plain {@link UnionAll} with one branch;
+     * analyzer-specific callers can also collapse explicitly (see {@code ViewCompaction.stripViewShadowRelations}).
+     * A {@link ViewUnionAll} keeps its metadata-bearing wrapper, and a {@link Fork} with a single branch
+     * is still a {@link Fork} per FORK syntax.
      */
     public LogicalPlan pruneEmptyBranches(Predicate<LogicalPlan> isEmpty) {
         List<LogicalPlan> kept = new ArrayList<>(children().size());
