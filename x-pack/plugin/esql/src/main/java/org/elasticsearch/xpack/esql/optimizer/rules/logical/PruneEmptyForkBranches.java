@@ -28,8 +28,10 @@ public class PruneEmptyForkBranches extends OptimizerRules.OptimizerRule<Fork> {
     @Override
     protected LogicalPlan rule(Fork fork) {
         // Special case first: every branch is empty → collapse to an empty LocalRelation.
-        // pruneEmptyBranches's all-empty defensive no-op leaves the Fork untouched, which is
-        // why we have to detect this case ourselves before delegating.
+        // Still needed for a bare Fork and for ViewUnionAll, whose pruneEmptyBranches return a
+        // branchless node in the all-empty case and leave it to Fork.checkBranchCount to report.
+        // (UnionAll's override does collapse to a LocalRelation itself, so for a plain union this
+        // pre-check and the delegation below agree — it is not the only thing keeping that path alive.)
         if (fork.children().stream().allMatch(PruneEmptyForkBranches::isEmptyLocalRelation)) {
             return new LocalRelation(fork.source(), fork.output(), EmptyLocalSupplier.EMPTY);
         }

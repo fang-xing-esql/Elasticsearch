@@ -860,8 +860,10 @@ emp_no:integer | languages:integer
 // FROM source subquery) in queries that also reference index patterns via LOOKUP JOIN
 // or wrap the view in an outer `(FROM ...)` subquery. They cannot be expressed by
 // putting the view as a sibling of another subquery in the outer FROM clause because
-// that would leave a nested UnionAll after view expansion (rejected by the
-// "Nested subqueries are not supported" verification, see UnionAll#checkNestedUnionAlls).
+// view expansion would leave a nested ViewUnionAll there. A nested plain UnionAll is
+// supported now, but a nested ViewUnionAll is still rejected - with a message naming
+// the offending pattern rather than the old generic nested-subquery wording (see
+// UnionAll#checkNestedUnionAlls and #nestedUnionAllFailure).
 
 viewEmployeesRowSubqueryWithLookupJoin
 required_capability: subquery_in_from_command

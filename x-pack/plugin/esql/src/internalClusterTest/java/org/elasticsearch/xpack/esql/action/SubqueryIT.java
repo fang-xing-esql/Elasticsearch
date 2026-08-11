@@ -10,11 +10,14 @@ package org.elasticsearch.xpack.esql.action;
 import org.elasticsearch.action.index.IndexRequest;
 import org.elasticsearch.action.support.WriteRequest;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.compute.operator.DriverProfile;
 import org.elasticsearch.xpack.esql.plugin.QueryPragmas;
 import org.junit.Before;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertAcked;
 import static org.elasticsearch.xpack.esql.action.EsqlQueryRequest.syncEsqlQueryRequest;
@@ -383,6 +386,59 @@ public class SubqueryIT extends AbstractEsqlIntegTestCase {
                 List.of(6, "The quick brown fox jumps over the lazy dog")
             );
             assertValues(resp.values(), expectedValues);
+        }
+    }
+
+    public void testNestedSubqueriesAtDifferentParallelDegrees() {
+        assumeTrue("requires nested subquery support", EsqlCapabilities.Cap.NESTED_SUBQUERY_IN_FROM_COMMAND.isEnabled());
+        var query = """
+            FROM
+               ( FROM test | WHERE id == 1 ),
+               ( FROM
+                    ( FROM test | WHERE id == 2 ),
+                    ( FROM
+                         ( FROM test | WHERE id == 3 ),
+                         ( FROM test | WHERE id == 4 )
+                    )
+               ),
+               ( FROM test | WHERE id == 5 )
+            | KEEP id
+            | SORT id
+            """;
+        for (int degree : List.of(1, 2, 8)) {
+            var pragmas = new QueryPragmas(Settings.builder().put(QueryPragmas.BRANCH_PARALLEL_DEGREE.getKey(), degree).build());
+            try (var resp = run(syncEsqlQueryRequest(query).pragmas(pragmas))) {
+                assertColumnNames(resp.columns(), List.of("id"));
+                assertValues(resp.values(), List.of(List.of(1), List.of(2), List.of(3), List.of(4), List.of(5)));
+            }
+        }
+    }
+
+    public void testNestedSubqueryProfileUsesHierarchicalNames() {
+        assumeTrue("requires nested subquery support", EsqlCapabilities.Cap.NESTED_SUBQUERY_IN_FROM_COMMAND.isEnabled());
+        var query = """
+            FROM
+               ( FROM test | WHERE id == 1 ),
+               ( FROM
+                    ( FROM test | WHERE id == 2 ),
+                    ( FROM
+                         ( FROM test | WHERE id == 3 ),
+                         ( FROM test | WHERE id == 4 )
+                    )
+               )
+            | SORT id
+            | KEEP id
+            """;
+        try (var resp = run(syncEsqlQueryRequest(query).profile(true))) {
+            assertNotNull(resp.profile());
+            Set<String> descriptions = resp.profile().drivers().stream().map(DriverProfile::description).collect(Collectors.toSet());
+            assertTrue(descriptions.contains("main.final"));
+            assertTrue(descriptions.contains("subplan-0.final"));
+            assertTrue(descriptions.contains("subplan-1.merge"));
+            assertTrue(descriptions.contains("subplan-1.subplan-0.final"));
+            assertTrue(descriptions.contains("subplan-1.subplan-1.merge"));
+            assertTrue(descriptions.contains("subplan-1.subplan-1.subplan-0.final"));
+            assertTrue(descriptions.contains("subplan-1.subplan-1.subplan-1.final"));
         }
     }
 

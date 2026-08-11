@@ -337,27 +337,19 @@ public class PushDownFilterAndLimitIntoUnionAll extends OptimizerRules.Parameter
     }
 
     private static LogicalPlan appendLimitIfNeededForKnn(LogicalPlan subquery, LogicalOptimizerContext context) {
-        Holder<Integer> maxImplicitK = new Holder<>(null);
-
-        boolean foundLimitAfterKnn = subquery.forEachDownMayReturnEarly((plan, hasLimitAfterKnn) -> {
-            if (plan instanceof Limit && maxImplicitK.get() == null) { // found a limit before finding knn
-                hasLimitAfterKnn.set(true);
-                return;
+        // Same per-path search as appendLimitIfNeededForOrderBy, with "needs bounding" being a Knn that carries an implicitK rather
+        // than an OrderBy. Stopping at a nested UnionAll keeps one branch's Limit from suppressing another branch's Knn.
+        Integer k = null;
+        for (LogicalPlan first : subquery.collectFirstChildren(
+            p -> p instanceof Limit || p instanceof UnionAll || maxImplicitK(p) != null
+        )) {
+            Integer implicitK = maxImplicitK(first);
+            if (implicitK != null) {
+                k = k == null ? implicitK : Math.max(k, implicitK);
             }
+        }
 
-            // haven't found limit yet, look for knn in the plan
-            plan.forEachExpression(Knn.class, knn -> {
-                Integer k = knn.implicitK();
-                if (k != null) {
-                    Integer currentMax = maxImplicitK.get();
-                    maxImplicitK.set(currentMax == null ? k : Math.max(currentMax, k));
-                }
-            });
-        });
-
-        // there is knn with implicitK and there is no limit after knn, append a limit
-        Integer k = maxImplicitK.get();
-        if (k != null && foundLimitAfterKnn == false) {
+        if (k != null) {
             // check the implicit K against default and maximum implicit limit
             int maxImplicitLimit = context.configuration().resultTruncationMaxSize(false);
             return planWithLimit(subquery, Math.max(k, maxImplicitLimit));
@@ -365,27 +357,37 @@ public class PushDownFilterAndLimitIntoUnionAll extends OptimizerRules.Parameter
         return subquery;
     }
 
-    private static LogicalPlan appendLimitIfNeededForOrderBy(LogicalPlan subquery, LogicalOptimizerContext context) {
-        Holder<OrderBy> unboundedSort = new Holder<>(null);
-
-        boolean foundLimitAfterSort = subquery.forEachDownMayReturnEarly((plan, hasLimitAfterSort) -> {
-            if (plan instanceof Limit && unboundedSort.get() == null) { // found a limit before finding sort
-                hasLimitAfterSort.set(true);
-                return;
-            }
-
-            if (unboundedSort.get() != null) {
-                return; // already found unbounded sort, return early
-            }
-
-            if (plan instanceof OrderBy orderBy) {
-                unboundedSort.set(orderBy);
+    /**
+     * The largest {@code implicitK} of any {@code Knn} in this node's own expressions, or {@code null} if it holds none. Only the node
+     * is inspected, not its children, so callers control the traversal.
+     */
+    private static Integer maxImplicitK(LogicalPlan plan) {
+        Holder<Integer> maxImplicitK = new Holder<>(null);
+        plan.forEachExpression(Knn.class, knn -> {
+            Integer k = knn.implicitK();
+            if (k != null) {
+                Integer currentMax = maxImplicitK.get();
+                maxImplicitK.set(currentMax == null ? k : Math.max(currentMax, k));
             }
         });
+        return maxImplicitK.get();
+    }
 
-        // there is unbounded sort, append a limit right on top of the sort
-        if (unboundedSort.get() != null && foundLimitAfterSort == false) {
-            // append a limit with maximum implicit limit
+    private static LogicalPlan appendLimitIfNeededForOrderBy(LogicalPlan subquery, LogicalOptimizerContext context) {
+        // For each path down this branch, find the first node that settles the question: a Limit already bounds whatever is below it,
+        // an OrderBy below no Limit is the unbounded sort we have to bound, and a nested UnionAll ends our concern - its own branches
+        // are handled when the enclosing transformDown reaches it.
+        //
+        // collectFirstChildren stops descending at each match and explores every child independently. That matters: walking the whole
+        // subtree with one shared "found a limit" flag would let an unrelated branch of a nested union abort the search, making the
+        // outcome depend on the order the branches happen to be written in.
+        boolean hasUnboundedSort = subquery.collectFirstChildren(p -> p instanceof Limit || p instanceof OrderBy || p instanceof UnionAll)
+            .stream()
+            .anyMatch(OrderBy.class::isInstance);
+
+        if (hasUnboundedSort) {
+            // Bound this branch. The limit goes at the branch root rather than directly on the sort so that the existing pushdown
+            // rules can walk it past Project/Eval and under the Subquery, where it fuses with the sort into a TopN.
             int maxImplicitLimit = context.configuration().resultTruncationMaxSize(false);
             return planWithLimit(subquery, maxImplicitLimit);
         }
