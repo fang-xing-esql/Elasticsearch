@@ -211,7 +211,9 @@ public class ResolveUnmapped extends AnalyzerRules.ParameterizedAnalyzerRule<Log
 
     private static void collectMainSpineUnionBranchOutputNames(LogicalPlan plan, Set<String> names) {
         if (plan instanceof UnionAll ua) {
-            // Outermost union's direct branch outputs only; nested unions are rejected downstream by checkNestedUnionAlls.
+            // Outermost union's direct branch outputs only: a branch's root output already surfaces whatever any
+            // union nested inside it exposes, and names surfaced only inside a nested union but not by the branch
+            // itself do not resolve past the outer union anyway.
             for (LogicalPlan branch : ua.children()) {
                 names.addAll(Expressions.names(branch.output()));
             }

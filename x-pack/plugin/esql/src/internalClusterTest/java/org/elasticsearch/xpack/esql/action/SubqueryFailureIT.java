@@ -300,6 +300,29 @@ public class SubqueryFailureIT extends AbstractEsqlIntegTestCase {
         assertThat(e.getMessage(), equalTo("Accessing failing field"));
     }
 
+    public void testInnermostFailureWithQueuedNestedSiblings() {
+        assumeTrue("requires nested subquery support", EsqlCapabilities.Cap.NESTED_SUBQUERY_IN_FROM_COMMAND.isEnabled());
+        var query = """
+            FROM
+               ( FROM ok | WHERE id == 1 ),
+               ( FROM
+                    ( FROM ok | WHERE id == 2 ),
+                    ( FROM
+                         ( FROM fail | KEEP fail_me | LIMIT 10 ),
+                         ( FROM ok | WHERE id == 3 )
+                    ),
+                    ( FROM ok | WHERE id == 1 )
+               ),
+               ( FROM ok | WHERE id == 2 )
+            | LIMIT 100
+            """;
+        IllegalStateException e = expectThrows(
+            IllegalStateException.class,
+            () -> run(syncEsqlQueryRequest(query).pragmas(batchPragmas(1))).close()
+        );
+        assertThat(e.getMessage(), equalTo("Accessing failing field"));
+    }
+
     /**
      * One subquery reads from both fail and ok indices — the fail shard fails but the ok shard succeeds.
      * With allowPartialResults=true, the overall query succeeds and returns rows from all ok shards

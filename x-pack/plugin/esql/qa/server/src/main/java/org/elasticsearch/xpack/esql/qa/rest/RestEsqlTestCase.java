@@ -1373,27 +1373,24 @@ public abstract class RestEsqlTestCase extends ESRestTestCase {
     }
 
     public void testNestedSubqueries() throws IOException {
-        assumeTrue("subqueries in from command", EsqlCapabilities.Cap.SUBQUERY_IN_FROM_COMMAND.isEnabled());
+        assumeTrue("nested subqueries in from command", EsqlCapabilities.Cap.NESTED_SUBQUERY_IN_FROM_COMMAND.isEnabled());
 
         bulkLoadTestData(10);
 
-        ResponseException re = expectThrows(
-            ResponseException.class,
-            () -> runEsqlSync(
-                requestObjectBuilder().query(
-                    format(
-                        null,
-                        "from {}, (from {}, (from {} | where integer > 1) | where integer < 8) | stats count(*)",
-                        testIndexName(),
-                        testIndexName(),
-                        testIndexName()
-                    )
+        // main: 10 rows; middle subquery: 10 rows from the index plus 8 rows (integer 2..9) from the inner
+        // subquery, filtered by integer < 8 down to 8 + 6 rows; 10 + 14 = 24 in total
+        Map<String, Object> result = runEsql(
+            requestObjectBuilder().query(
+                format(
+                    null,
+                    "from {}, (from {}, (from {} | where integer > 1) | where integer < 8) | stats count(*)",
+                    testIndexName(),
+                    testIndexName(),
+                    testIndexName()
                 )
             )
         );
-        String error = re.getMessage().replaceAll("\\\\\n\s+\\\\", "");
-        assertThat(error, containsString("VerificationException"));
-        assertThat(error, containsString("Nested subqueries are not supported"));
+        assertResultMap(result, matchesList().item(matchesMap().entry("name", "count(*)").entry("type", "long")), List.of(List.of(24)));
     }
 
     public void testSubqueryWithFork() throws IOException {

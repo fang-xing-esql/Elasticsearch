@@ -22,6 +22,7 @@ import org.elasticsearch.transport.TransportService;
 import org.elasticsearch.xpack.core.LocalStateCompositeXPackPlugin;
 import org.elasticsearch.xpack.core.XPackPlugin;
 import org.elasticsearch.xpack.core.async.AsyncExecutionId;
+import org.elasticsearch.xpack.core.async.AsyncStopRequest;
 import org.elasticsearch.xpack.core.async.AsyncTaskIndexService;
 import org.elasticsearch.xpack.core.async.DeleteAsyncResultRequest;
 import org.elasticsearch.xpack.core.async.GetAsyncResultRequest;
@@ -219,6 +220,89 @@ public class AsyncEsqlQueryActionIT extends AbstractPausableIntegTestCase {
             assertThat(e.getMessage(), equalTo(id));
         } finally {
             scriptPermits.drainPermits();
+        }
+    }
+
+    public void testAsyncStopNestedSubqueryHonorsGlobalParallelism() throws Exception {
+        assumeTrue("requires nested subquery support", EsqlCapabilities.Cap.NESTED_SUBQUERY_IN_FROM_COMMAND.isEnabled());
+        scriptPermits.drainPermits();
+        scriptWaits.drainPermits();
+        var pragmas = new QueryPragmas(
+            Settings.builder()
+                .put("data_partitioning", "shard")
+                .put("page_size", pageSize())
+                .put(QueryPragmas.BRANCH_PARALLEL_DEGREE.getKey(), 2)
+                .build()
+        );
+        var request = asyncEsqlQueryRequest("""
+            FROM
+               ( FROM
+                    ( FROM test | STATS total = SUM(pause_me) ),
+                    ( FROM test | STATS total = SUM(pause_me) )
+               ),
+               ( FROM
+                    ( FROM test | STATS total = SUM(pause_me) ),
+                    ( FROM test | STATS total = SUM(pause_me) )
+               )
+            """).pragmas(pragmas).waitForCompletionTimeout(TimeValue.timeValueNanos(1)).keepOnCompletion(true).keepAlive(randomKeepAlive());
+
+        try (var initialResponse = client().execute(EsqlQueryAction.INSTANCE, request).actionGet(60, TimeUnit.SECONDS)) {
+            assertThat(initialResponse.isRunning(), is(true));
+            assertThat(initialResponse.asyncExecutionId(), isPresent());
+            assertTrue("the first nested leaf must reach the pausable field", scriptWaits.tryAcquire(30, TimeUnit.SECONDS));
+            assertTrue("the second nested leaf must reach the pausable field", scriptWaits.tryAcquire(30, TimeUnit.SECONDS));
+            assertFalse(
+                "branch_parallel_degree=2 must keep the other nested leaves queued",
+                scriptWaits.tryAcquire(200, TimeUnit.MILLISECONDS)
+            );
+
+            var stopFuture = client().execute(EsqlAsyncStopAction.INSTANCE, new AsyncStopRequest(initialResponse.asyncExecutionId().get()));
+            scriptPermits.release(numberOfDocs() * 4);
+            try (var stoppedResponse = stopFuture.actionGet(60, TimeUnit.SECONDS)) {
+                assertThat(stoppedResponse.isRunning(), is(false));
+                assertThat(stoppedResponse.isPartial(), is(true));
+            }
+        } finally {
+            scriptPermits.drainPermits();
+            scriptWaits.drainPermits();
+        }
+    }
+
+    public void testAsyncCancellationDrainsQueuedNestedSubqueries() throws Exception {
+        assumeTrue("requires nested subquery support", EsqlCapabilities.Cap.NESTED_SUBQUERY_IN_FROM_COMMAND.isEnabled());
+        scriptPermits.drainPermits();
+        scriptWaits.drainPermits();
+        var pragmas = new QueryPragmas(
+            Settings.builder()
+                .put("data_partitioning", "shard")
+                .put("page_size", pageSize())
+                .put(QueryPragmas.BRANCH_PARALLEL_DEGREE.getKey(), 1)
+                .build()
+        );
+        var request = asyncEsqlQueryRequest("""
+            FROM
+               ( FROM test | STATS total = SUM(pause_me) ),
+               ( FROM
+                    ( FROM test | STATS total = SUM(pause_me) ),
+                    ( FROM test | STATS total = SUM(pause_me) )
+               )
+            """).pragmas(pragmas).waitForCompletionTimeout(TimeValue.timeValueNanos(1)).keepOnCompletion(true).keepAlive(randomKeepAlive());
+
+        try (var initialResponse = client().execute(EsqlQueryAction.INSTANCE, request).actionGet(60, TimeUnit.SECONDS)) {
+            assertThat(initialResponse.isRunning(), is(true));
+            assertThat(initialResponse.asyncExecutionId(), isPresent());
+            assertTrue("a nested leaf must reach the pausable field", scriptWaits.tryAcquire(30, TimeUnit.SECONDS));
+
+            var deleteFuture = client().execute(
+                TransportDeleteAsyncResultAction.TYPE,
+                new DeleteAsyncResultRequest(initialResponse.asyncExecutionId().get())
+            );
+            scriptPermits.release(numberOfDocs() * 3);
+            assertThat(deleteFuture.actionGet(timeValueSeconds(60)).isAcknowledged(), equalTo(true));
+            assertThat(getEsqlQueryTasks(), empty());
+        } finally {
+            scriptPermits.drainPermits();
+            scriptWaits.drainPermits();
         }
     }
 

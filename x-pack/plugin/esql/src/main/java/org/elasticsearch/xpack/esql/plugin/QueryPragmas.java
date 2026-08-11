@@ -120,8 +120,8 @@ public final class QueryPragmas implements Writeable {
     public static final Setting<Integer> IN_SUBQUERY_HASH_JOIN_THRESHOLD = Setting.intSetting("in_subquery_hash_join_threshold", -1, -1);
 
     /**
-     * The number of branches to execute in parallel. This is a safeguard to avoid overloading the cluster with too many parallel branches.
-     * This applies to forks and subqueries.
+     * The query-wide maximum number of leaf fork or subquery branches to execute concurrently. Coordinator segments that merge nested
+     * branches do not count toward the limit.
      */
     public static final Setting<Integer> BRANCH_PARALLEL_DEGREE = Setting.intSetting("branch_parallel_degree", 2, 1);
 

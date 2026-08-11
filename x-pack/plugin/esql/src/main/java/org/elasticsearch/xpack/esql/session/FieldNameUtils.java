@@ -175,9 +175,9 @@ public class FieldNameUtils {
                         && lastFork != fork
                         && fork instanceof UnionAll == false
                         && lastFork instanceof UnionAll == false) {
-                        // UnionAll is a special case of FORK, fork inside subquery or fork after subquery or nested subqueries can
-                        // be flattened and supported by LogicalPlanOptimizer and ComputeService in the future, defer this assertion
-                        // LogicalPlanOptimizer verifier. Add the check here to avoid assertion on subqueries nested with fork.
+                        // UnionAll is a special case of FORK and is excluded here: nested subqueries (UnionAll within
+                        // UnionAll) are supported and handled recursively by this processor, while fork inside subquery
+                        // and fork after subquery are rejected later by the Analyzer/LogicalPlanOptimizer verifiers.
                         // TODO consider deferring the nested fork check to Analyzer verifier or LogicalPlanOptimizer verifier.
                         //
                         // Note: lastFork == fork is excluded here because an AbstractSubqueryJoin handler inside a fork branch saves

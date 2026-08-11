@@ -738,7 +738,7 @@ public class ComputeService {
 
         ExchangeSourceHandler mainExchangeSource = new ExchangeSourceHandler(queryPragmas.exchangeBufferSize(), searchExecutor);
 
-        exchangeService.addExchangeSourceHandler(mainSessionId, mainExchangeSource);
+        exchangeService.addExchangeSourceHandler(sessionId, mainExchangeSource);
         var finalListener = ActionListener.runBefore(listener, () -> exchangeService.removeExchangeSourceHandler(sessionId));
         var computeContext = new ComputeContext(
             mainSessionId,
@@ -754,29 +754,20 @@ public class ComputeService {
         );
 
         Runnable cancelQueryOnFailure = cancelQueryOnFailure(rootTask);
+        int branchParallelDegree = queryPragmas.branchParallelDegree();
+        var leafLimiter = new SubPlanConcurrencyLimiter<LeafSubPlan>(
+            branchParallelDegree,
+            searchExecutor,
+            LeafSubPlan::execute,
+            LeafSubPlan::skip,
+            LeafSubPlan::fail
+        );
+        rootTask.addListener(() -> leafLimiter.fail(rootTask.getTaskCancelledException()));
 
         try (ComputeListener localListener = new ComputeListener(cancelQueryOnFailure, finalListener.map(profiles -> {
             execInfo.markEndQuery();
             return new Result(mainPlan.output(), collectedPages, null, configuration, profiles, execInfo);
         }))) {
-            runCompute(
-                rootTask,
-                computeContext,
-                mainPlan,
-                plannerSettings.get(),
-                LocalPhysicalOptimization.ENABLED,
-                planTimeProfile,
-                localListener.acquireCompute()
-            );
-            int branchParallelDegree = queryPragmas.branchParallelDegree();
-            if (LOGGER.isDebugEnabled()) {
-                LOGGER.debug(
-                    "executing [{}] subplans in parallel degree of [{}] with initial cluster statuses [{}]",
-                    subplans.size(),
-                    branchParallelDegree,
-                    initialClusterStatuses
-                );
-            }
             SubPlansExecutor subPlansExecutor = new SubPlansExecutor(
                 subplans,
                 localListener,
@@ -788,8 +779,35 @@ public class ComputeService {
                 execInfo,
                 queryPragmas,
                 mainExchangeSource,
-                initialClusterStatuses
+                initialClusterStatuses,
+                leafLimiter,
+                null
             );
+            ActionListener<DriverCompletionInfo> mainPlanListener = localListener.acquireCompute();
+            runCompute(
+                rootTask,
+                computeContext,
+                mainPlan,
+                plannerSettings.get(),
+                LocalPhysicalOptimization.ENABLED,
+                planTimeProfile,
+                ActionListener.wrap(completionInfo -> {
+                    leafLimiter.finish();
+                    mainPlanListener.onResponse(completionInfo);
+                }, e -> {
+                    leafLimiter.fail(e);
+                    mainExchangeSource.finishEarly(true, ActionListener.noop());
+                    mainPlanListener.onFailure(e);
+                })
+            );
+            if (LOGGER.isDebugEnabled()) {
+                LOGGER.debug(
+                    "executing [{}] subplans in parallel degree of [{}] with initial cluster statuses [{}]",
+                    subplans.size(),
+                    branchParallelDegree,
+                    initialClusterStatuses
+                );
+            }
             subPlansExecutor.execute(branchParallelDegree);
         }
     }
@@ -811,6 +829,8 @@ public class ComputeService {
         final QueryPragmas queryPragmas;
         final ExchangeSourceHandler mainExchangeSource;
         final Map<String, EsqlExecutionInfo.Cluster.Status> initialClusterStatuses;
+        final SubPlanConcurrencyLimiter<LeafSubPlan> leafLimiter;
+        final String profilePrefix;
         final AtomicInteger nextId = new AtomicInteger();
         final AtomicInteger completedSubPlanCount = new AtomicInteger();
         final Releasable emptySinkRef;
@@ -826,7 +846,9 @@ public class ComputeService {
             EsqlExecutionInfo execInfo,
             QueryPragmas queryPragmas,
             ExchangeSourceHandler mainExchangeSource,
-            Map<String, EsqlExecutionInfo.Cluster.Status> initialClusterStatuses
+            Map<String, EsqlExecutionInfo.Cluster.Status> initialClusterStatuses,
+            SubPlanConcurrencyLimiter<LeafSubPlan> leafLimiter,
+            String profilePrefix
         ) {
             this.subplans = subplans;
             // Pre-acquire all subplan listeners upfront so that the ComputeListener's ref count
@@ -845,6 +867,8 @@ public class ComputeService {
             this.queryPragmas = queryPragmas;
             this.mainExchangeSource = mainExchangeSource;
             this.initialClusterStatuses = initialClusterStatuses;
+            this.leafLimiter = leafLimiter;
+            this.profilePrefix = profilePrefix;
             this.emptySinkRef = Releasables.releaseOnce(mainExchangeSource.addEmptySink());
         }
 
@@ -859,44 +883,49 @@ public class ComputeService {
             if (subPlanIndex >= subplans.size()) {
                 return;
             }
+            var subPlanListener = subPlanListeners.get(subPlanIndex);
+            Exception failure = leafLimiter.failure();
+            if (failure != null) {
+                subPlanListener.onFailure(failure);
+                onSubPlanCompleted();
+                return;
+            }
             if (LOGGER.isDebugEnabled()) {
                 LOGGER.debug("executing subplan [{}]", subPlanIndex);
             }
             var subplan = subplans.get(subPlanIndex);
-            var childSessionId = newChildSession(sessionId);
-            ExchangeSinkHandler exchangeSink = exchangeService.createSinkHandler(childSessionId, queryPragmas.exchangeBufferSize());
-            mainExchangeSource.addRemoteSink(exchangeSink::fetchPageAsync, true, () -> {}, 1, ActionListener.noop());
-            var subPlanListener = subPlanListeners.get(subPlanIndex);
-            executePlan(
-                childSessionId,
-                rootTask,
-                flags,
-                subplan,
-                configuration,
-                foldContext,
-                execInfo,
-                "subplan-" + subPlanIndex,
-                ActionListener.wrap(result -> {
-                    if (LOGGER.isDebugEnabled()) {
-                        LOGGER.debug("subplan [{}] finished successfully", subPlanIndex);
-                    }
-                    exchangeSink.addCompletionListener(
-                        ActionListener.running(() -> { exchangeService.finishSinkHandler(childSessionId, null); })
+            String subPlanProfile = profilePrefix == null ? "subplan-" + subPlanIndex : profilePrefix + ".subplan-" + subPlanIndex;
+            String childSessionId = newChildSession(sessionId);
+            ExchangeSinkHandler exchangeSink = null;
+            try {
+                exchangeSink = exchangeService.createSinkHandler(childSessionId, queryPragmas.exchangeBufferSize());
+                mainExchangeSource.addRemoteSink(exchangeSink::fetchPageAsync, true, () -> {}, 1, ActionListener.noop());
+                // A sub plan may itself contain nested MergeExecs (from nested subqueries); those are broken apart
+                // and executed recursively, with a dedicated exchange source feeding this sub plan's segment.
+                Tuple<List<PhysicalPlan>, PhysicalPlan> nested = PlannerUtils.breakPlanIntoSubPlansAndMainPlan(subplan);
+                if (nested.v1().isEmpty() == false) {
+                    executeSubPlanWithNestedSubPlans(
+                        subPlanIndex,
+                        subPlanProfile,
+                        nested.v2(),
+                        nested.v1(),
+                        childSessionId,
+                        exchangeSink,
+                        subPlanListener
                     );
-                    subPlanListener.onResponse(result.completionInfo());
-                    onSubPlanCompleted();
-                }, e -> {
-                    if (LOGGER.isDebugEnabled()) {
-                        LOGGER.debug("subplan [{}] finished with an error [{}]", subPlanIndex, e.getMessage());
-                    }
+                    return;
+                }
+                leafLimiter.submit(
+                    new LeafSubPlan(this, subPlanIndex, subPlanProfile, subplan, childSessionId, exchangeSink, subPlanListener)
+                );
+            } catch (Exception e) {
+                if (exchangeSink != null) {
                     exchangeService.finishSinkHandler(childSessionId, e);
-                    subPlanListener.onFailure(e);
-                    onSubPlanCompleted();
-                }),
-                () -> exchangeSink.createExchangeSink(() -> {}),
-                initialClusterStatuses,
-                configuration.profile() ? new PlanTimeProfile() : null
-            );
+                }
+                subPlanListener.onFailure(e);
+                leafLimiter.fail(e);
+                onSubPlanCompleted();
+            }
         }
 
         void onSubPlanCompleted() {
@@ -906,6 +935,197 @@ public class ComputeService {
                 emptySinkRef.close();
             } else {
                 tryExecuteNextSubPlan();
+            }
+        }
+
+        /**
+         * Executes a sub plan that itself contains nested {@code MergeExec}s (from nested subqueries). Mirrors the
+         * top-level flow in {@link ComputeService#execute}: the segment plan — the part of the sub plan above the
+         * nested merge points — runs on the coordinator, consuming a dedicated exchange source fed by the nested
+         * sub plans and producing into this sub plan's {@code exchangeSink} like any other sub plan. The nested sub
+         * plans are run by a nested {@link SubPlansExecutor}, recursing further if they contain nested merges
+         * themselves. The nested executor is created (and its empty sink registered) before the segment plan starts
+         * so the segment's exchange source cannot finish before the nested sub plans attach their sinks.
+         */
+        private void executeSubPlanWithNestedSubPlans(
+            int subPlanIndex,
+            String subPlanProfile,
+            PhysicalPlan segmentPlan,
+            List<PhysicalPlan> nestedSubplans,
+            String childSessionId,
+            ExchangeSinkHandler exchangeSink,
+            ActionListener<DriverCompletionInfo> subPlanListener
+        ) {
+            var nestedSessionId = newChildSession(sessionId);
+            ExchangeSourceHandler nestedExchangeSource = new ExchangeSourceHandler(queryPragmas.exchangeBufferSize(), searchExecutor);
+            exchangeService.addExchangeSourceHandler(nestedSessionId, nestedExchangeSource);
+            if (LOGGER.isDebugEnabled()) {
+                LOGGER.debug("executing subplan [{}] with [{}] nested subplans", subPlanIndex, nestedSubplans.size());
+            }
+            ActionListener<DriverCompletionInfo> completionListener = ActionListener.runBefore(ActionListener.wrap(completionInfo -> {
+                exchangeSink.addCompletionListener(
+                    ActionListener.running(() -> { exchangeService.finishSinkHandler(childSessionId, null); })
+                );
+                subPlanListener.onResponse(completionInfo);
+                onSubPlanCompleted();
+            }, e -> {
+                leafLimiter.fail(e);
+                nestedExchangeSource.finishEarly(true, ActionListener.noop());
+                exchangeService.finishSinkHandler(childSessionId, e);
+                subPlanListener.onFailure(e);
+                onSubPlanCompleted();
+            }), () -> exchangeService.removeExchangeSourceHandler(nestedSessionId));
+            try (var nestedComputeListener = new ComputeListener(cancelQueryOnFailure(rootTask), completionListener)) {
+                // Create the nested executor before running the segment plan: its constructor registers an empty
+                // sink on the nested exchange source, keeping the source open until all nested sub plans attach.
+                SubPlansExecutor nestedExecutor = new SubPlansExecutor(
+                    nestedSubplans,
+                    nestedComputeListener,
+                    sessionId,
+                    rootTask,
+                    flags,
+                    configuration,
+                    foldContext,
+                    execInfo,
+                    queryPragmas,
+                    nestedExchangeSource,
+                    initialClusterStatuses,
+                    leafLimiter,
+                    subPlanProfile
+                );
+                var computeContext = new ComputeContext(
+                    nestedSessionId,
+                    profileDescription(subPlanProfile, "merge"),
+                    LOCAL_CLUSTER,
+                    flags,
+                    EmptyIndexedByShardId.instance(),
+                    configuration,
+                    foldContext,
+                    nestedExchangeSource::createExchangeSource,
+                    () -> exchangeSink.createExchangeSink(() -> {}),
+                    false
+                );
+                runCompute(
+                    rootTask,
+                    computeContext,
+                    segmentPlan,
+                    plannerSettings.get(),
+                    LocalPhysicalOptimization.ENABLED,
+                    configuration.profile() ? new PlanTimeProfile() : null,
+                    nestedComputeListener.acquireCompute()
+                );
+                nestedExecutor.execute(queryPragmas.branchParallelDegree());
+            }
+        }
+    }
+
+    private final class LeafSubPlan {
+        private final SubPlansExecutor owner;
+        private final int subPlanIndex;
+        private final String profile;
+        private final PhysicalPlan plan;
+        private final String childSessionId;
+        private final ExchangeSinkHandler exchangeSink;
+        private final ActionListener<DriverCompletionInfo> subPlanListener;
+        private final AtomicBoolean completed = new AtomicBoolean();
+
+        private LeafSubPlan(
+            SubPlansExecutor owner,
+            int subPlanIndex,
+            String profile,
+            PhysicalPlan plan,
+            String childSessionId,
+            ExchangeSinkHandler exchangeSink,
+            ActionListener<DriverCompletionInfo> subPlanListener
+        ) {
+            this.owner = owner;
+            this.subPlanIndex = subPlanIndex;
+            this.profile = profile;
+            this.plan = plan;
+            this.childSessionId = childSessionId;
+            this.exchangeSink = exchangeSink;
+            this.subPlanListener = subPlanListener;
+        }
+
+        private void execute(ActionListener<Void> completionListener) {
+            executePlan(
+                childSessionId,
+                owner.rootTask,
+                owner.flags,
+                plan,
+                owner.configuration,
+                owner.foldContext,
+                owner.execInfo,
+                profile,
+                ActionListener.wrap(
+                    result -> complete(result.completionInfo(), null, completionListener),
+                    e -> complete(null, e, completionListener)
+                ),
+                () -> exchangeSink.createExchangeSink(() -> {}),
+                owner.initialClusterStatuses,
+                owner.configuration.profile() ? new PlanTimeProfile() : null
+            );
+        }
+
+        private void skip() {
+            if (completed.compareAndSet(false, true) == false) {
+                return;
+            }
+            try {
+                ExchangeSink sink = exchangeSink.createExchangeSink(() -> {});
+                sink.finish();
+                exchangeSink.addCompletionListener(ActionListener.running(() -> exchangeService.finishSinkHandler(childSessionId, null)));
+                subPlanListener.onResponse(DriverCompletionInfo.EMPTY);
+            } catch (Exception e) {
+                exchangeService.finishSinkHandler(childSessionId, e);
+                subPlanListener.onFailure(e);
+            } finally {
+                owner.onSubPlanCompleted();
+            }
+        }
+
+        private void fail(Exception failure) {
+            if (completed.compareAndSet(false, true) == false) {
+                return;
+            }
+            try {
+                exchangeService.finishSinkHandler(childSessionId, failure);
+                subPlanListener.onFailure(failure);
+            } finally {
+                owner.onSubPlanCompleted();
+            }
+        }
+
+        private void complete(DriverCompletionInfo completionInfo, Exception failure, ActionListener<Void> concurrencyListener) {
+            if (completed.compareAndSet(false, true) == false) {
+                return;
+            }
+            try {
+                if (failure == null) {
+                    if (LOGGER.isDebugEnabled()) {
+                        LOGGER.debug("subplan [{}] finished successfully", subPlanIndex);
+                    }
+                    exchangeSink.addCompletionListener(
+                        ActionListener.running(() -> exchangeService.finishSinkHandler(childSessionId, null))
+                    );
+                    subPlanListener.onResponse(completionInfo);
+                } else {
+                    if (LOGGER.isDebugEnabled()) {
+                        LOGGER.debug("subplan [{}] finished with an error [{}]", subPlanIndex, failure.getMessage());
+                    }
+                    exchangeService.finishSinkHandler(childSessionId, failure);
+                    subPlanListener.onFailure(failure);
+                }
+            } finally {
+                try {
+                    if (failure == null) {
+                        concurrencyListener.onResponse(null);
+                    } else {
+                        concurrencyListener.onFailure(failure);
+                    }
+                } finally {
+                    owner.onSubPlanCompleted();
+                }
             }
         }
     }
