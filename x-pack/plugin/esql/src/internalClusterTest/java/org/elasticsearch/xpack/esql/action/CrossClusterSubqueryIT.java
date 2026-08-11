@@ -810,11 +810,20 @@ public class CrossClusterSubqueryIT extends AbstractCrossClusterTestCase impleme
     }
 
     public void testNestedSubqueries() {
-        // nested subqueries are not supported yet
-        VerificationException ex = expectThrows(VerificationException.class, () -> runQuery("""
+        assumeTrue("requires nested subquery support", EsqlCapabilities.Cap.NESTED_SUBQUERY_IN_FROM_COMMAND.isEnabled());
+        // the subquery's own FROM contains a further subquery: outer union = local logs + subquery,
+        // inner union = cluster-a logs + subquery over remote-b logs
+        try (EsqlQueryResponse resp = runQuery("""
             FROM logs-*,(FROM c*:logs-*, (FROM r*:logs-*))
-            """, randomBoolean()));
-        assertThat(ex.getMessage(), containsString("Nested subqueries are not supported"));
+            | STATS c = count(*), s = sum(v) BY tag
+            | SORT tag
+            """, randomBoolean())) {
+            List<List<Object>> values = getValuesList(resp);
+            // local logs-1 has 10 rows with v in [0,9] (sum 45); each remote logs-2 has 10 rows with v = i*i (sum 285)
+            assertThat(values, hasSize(2));
+            assertThat(values.get(0), equalTo(List.of(10L, 45L, "local")));
+            assertThat(values.get(1), equalTo(List.of(20L, 570L, "remote")));
+        }
     }
 
     public void testSubqueryWithFork() {

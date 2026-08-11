@@ -867,6 +867,13 @@ public class ComputeService {
             ExchangeSinkHandler exchangeSink = exchangeService.createSinkHandler(childSessionId, queryPragmas.exchangeBufferSize());
             mainExchangeSource.addRemoteSink(exchangeSink::fetchPageAsync, true, () -> {}, 1, ActionListener.noop());
             var subPlanListener = subPlanListeners.get(subPlanIndex);
+            // A sub plan may itself contain nested MergeExecs (from nested subqueries); those are broken apart
+            // and executed recursively, with a dedicated exchange source feeding this sub plan's segment.
+            Tuple<List<PhysicalPlan>, PhysicalPlan> nested = PlannerUtils.breakPlanIntoSubPlansAndMainPlan(subplan);
+            if (nested.v1().isEmpty() == false) {
+                executeSubPlanWithNestedSubPlans(subPlanIndex, nested.v2(), nested.v1(), childSessionId, exchangeSink, subPlanListener);
+                return;
+            }
             executePlan(
                 childSessionId,
                 rootTask,
@@ -906,6 +913,81 @@ public class ComputeService {
                 emptySinkRef.close();
             } else {
                 tryExecuteNextSubPlan();
+            }
+        }
+
+        /**
+         * Executes a sub plan that itself contains nested {@code MergeExec}s (from nested subqueries). Mirrors the
+         * top-level flow in {@link ComputeService#execute}: the segment plan — the part of the sub plan above the
+         * nested merge points — runs on the coordinator, consuming a dedicated exchange source fed by the nested
+         * sub plans and producing into this sub plan's {@code exchangeSink} like any other sub plan. The nested sub
+         * plans are run by a nested {@link SubPlansExecutor}, recursing further if they contain nested merges
+         * themselves. The nested executor is created (and its empty sink registered) before the segment plan starts
+         * so the segment's exchange source cannot finish before the nested sub plans attach their sinks.
+         */
+        private void executeSubPlanWithNestedSubPlans(
+            int subPlanIndex,
+            PhysicalPlan segmentPlan,
+            List<PhysicalPlan> nestedSubplans,
+            String childSessionId,
+            ExchangeSinkHandler exchangeSink,
+            ActionListener<DriverCompletionInfo> subPlanListener
+        ) {
+            var nestedSessionId = newChildSession(sessionId);
+            ExchangeSourceHandler nestedExchangeSource = new ExchangeSourceHandler(queryPragmas.exchangeBufferSize(), searchExecutor);
+            exchangeService.addExchangeSourceHandler(nestedSessionId, nestedExchangeSource);
+            if (LOGGER.isDebugEnabled()) {
+                LOGGER.debug("executing subplan [{}] with [{}] nested subplans", subPlanIndex, nestedSubplans.size());
+            }
+            ActionListener<DriverCompletionInfo> completionListener = ActionListener.runBefore(ActionListener.wrap(completionInfo -> {
+                exchangeSink.addCompletionListener(
+                    ActionListener.running(() -> { exchangeService.finishSinkHandler(childSessionId, null); })
+                );
+                subPlanListener.onResponse(completionInfo);
+                onSubPlanCompleted();
+            }, e -> {
+                exchangeService.finishSinkHandler(childSessionId, e);
+                subPlanListener.onFailure(e);
+                onSubPlanCompleted();
+            }), () -> exchangeService.removeExchangeSourceHandler(nestedSessionId));
+            try (var nestedComputeListener = new ComputeListener(cancelQueryOnFailure(rootTask), completionListener)) {
+                // Create the nested executor before running the segment plan: its constructor registers an empty
+                // sink on the nested exchange source, keeping the source open until all nested sub plans attach.
+                SubPlansExecutor nestedExecutor = new SubPlansExecutor(
+                    nestedSubplans,
+                    nestedComputeListener,
+                    sessionId,
+                    rootTask,
+                    flags,
+                    configuration,
+                    foldContext,
+                    execInfo,
+                    queryPragmas,
+                    nestedExchangeSource,
+                    initialClusterStatuses
+                );
+                var computeContext = new ComputeContext(
+                    nestedSessionId,
+                    profileDescription("subplan-" + subPlanIndex, "merge"),
+                    LOCAL_CLUSTER,
+                    flags,
+                    EmptyIndexedByShardId.instance(),
+                    configuration,
+                    foldContext,
+                    nestedExchangeSource::createExchangeSource,
+                    () -> exchangeSink.createExchangeSink(() -> {}),
+                    false
+                );
+                runCompute(
+                    rootTask,
+                    computeContext,
+                    segmentPlan,
+                    plannerSettings.get(),
+                    LocalPhysicalOptimization.ENABLED,
+                    configuration.profile() ? new PlanTimeProfile() : null,
+                    nestedComputeListener.acquireCompute()
+                );
+                nestedExecutor.execute(queryPragmas.branchParallelDegree());
             }
         }
     }

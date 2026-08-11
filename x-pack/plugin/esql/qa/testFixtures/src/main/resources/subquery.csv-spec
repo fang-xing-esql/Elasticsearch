@@ -1882,3 +1882,156 @@ FROM sample_data, (FROM sample_data_ts_long)
 y:long
 1698063303360
 ;
+
+// Nested subqueries: a subquery whose own FROM contains further subqueries or multiple index patterns
+
+nestedSubquery
+required_capability: subquery_in_from_command
+required_capability: nested_subquery_in_from_command
+
+FROM employees, (FROM employees, (FROM sample_data))
+| WHERE (emp_no >= 10091 AND emp_no < 10094) OR emp_no IS NULL
+| SORT emp_no, client_ip
+| KEEP emp_no, languages, client_ip
+;
+
+emp_no:integer | languages:integer | client_ip:ip
+10091          | 3                 | null
+10091          | 3                 | null
+10092          | 1                 | null
+10092          | 1                 | null
+10093          | 3                 | null
+10093          | 3                 | null
+null           | null              | 172.21.0.5
+null           | null              | 172.21.2.113
+null           | null              | 172.21.2.162
+null           | null              | 172.21.3.15
+null           | null              | 172.21.3.15
+null           | null              | 172.21.3.15
+null           | null              | 172.21.3.15
+;
+
+nestedSubqueryWithStats
+required_capability: subquery_in_from_command
+required_capability: nested_subquery_in_from_command
+
+FROM employees, (FROM employees, (FROM sample_data))
+| STATS c = COUNT(*)
+;
+
+c:long
+207
+;
+
+nestedSubqueryThreeLevels
+required_capability: subquery_in_from_command
+required_capability: nested_subquery_in_from_command
+
+FROM employees, (FROM employees, (FROM employees, (FROM sample_data)))
+| STATS c = COUNT(*)
+;
+
+c:long
+307
+;
+
+nestedSubqueryWithStatsByGroup
+required_capability: subquery_in_from_command
+required_capability: nested_subquery_in_from_command
+
+FROM employees, (FROM employees, (FROM sample_data))
+| STATS c = COUNT(*) BY missing_emp_no = emp_no IS NULL
+| SORT missing_emp_no
+;
+
+c:long | missing_emp_no:boolean
+200    | false
+7      | true
+;
+
+nestedSubqueryWithFilterAfterUnion
+required_capability: subquery_in_from_command
+required_capability: nested_subquery_in_from_command
+
+FROM employees, (FROM employees, (FROM sample_data))
+| WHERE emp_no IS NULL OR emp_no < 10005
+| STATS c = COUNT(*)
+;
+
+c:long
+15
+;
+
+nestedSubqueryWithFilterInsideSubquery
+required_capability: subquery_in_from_command
+required_capability: nested_subquery_in_from_command
+
+FROM employees, (FROM employees, (FROM sample_data) | WHERE emp_no > 10000)
+| STATS c = COUNT(*)
+;
+
+c:long
+200
+;
+
+nestedSubqueryWithSortAndLimit
+required_capability: subquery_in_from_command
+required_capability: nested_subquery_in_from_command
+
+FROM employees, (FROM employees, (FROM sample_data))
+| WHERE emp_no IS NOT NULL
+| SORT emp_no, first_name
+| KEEP emp_no, first_name
+| LIMIT 4
+;
+
+emp_no:integer | first_name:keyword
+10001          | Georgi
+10001          | Georgi
+10002          | Bezalel
+10002          | Bezalel
+;
+
+nestedSubqueryImplicitDateNanosCast
+required_capability: subquery_in_from_command
+required_capability: subquery_in_from_command_union_types_conflict_resolution
+required_capability: nested_subquery_in_from_command
+
+FROM sample_data, (FROM sample_data_ts_nanos, (FROM sample_data))
+| WHERE event_duration == 1232382
+| KEEP @timestamp, event_duration, message
+| SORT @timestamp
+;
+
+@timestamp:date_nanos    | event_duration:long | message:keyword
+2023-10-23T13:33:34.937Z | 1232382             | Disconnected
+2023-10-23T13:33:34.937Z | 1232382             | Disconnected
+2023-10-23T13:33:34.937123456Z | 1232382       | Disconnected
+;
+
+nestedSubqueryWithMixedFromAndRow
+required_capability: subquery_in_from_command
+required_capability: nested_subquery_in_from_command
+required_capability: subquery_with_row
+
+FROM employees, (FROM (ROW emp_no=1, first_name="row"), employees)
+| STATS c = COUNT(*)
+;
+
+c:long
+201
+;
+
+nestedSubqueryWithMultipleRowsAndFrom
+required_capability: subquery_in_from_command
+required_capability: nested_subquery_in_from_command
+required_capability: subquery_with_row
+
+FROM (ROW emp_no=1, first_name="row1"),
+     (FROM (ROW emp_no=2, first_name="row2"), (FROM employees | WHERE emp_no == 10001))
+| STATS c = COUNT(*)
+;
+
+c:long
+3
+;
