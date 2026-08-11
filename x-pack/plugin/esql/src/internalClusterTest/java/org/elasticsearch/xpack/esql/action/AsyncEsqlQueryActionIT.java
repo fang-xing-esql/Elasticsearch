@@ -22,6 +22,7 @@ import org.elasticsearch.transport.TransportService;
 import org.elasticsearch.xpack.core.LocalStateCompositeXPackPlugin;
 import org.elasticsearch.xpack.core.XPackPlugin;
 import org.elasticsearch.xpack.core.async.AsyncExecutionId;
+import org.elasticsearch.xpack.core.async.AsyncStopRequest;
 import org.elasticsearch.xpack.core.async.AsyncTaskIndexService;
 import org.elasticsearch.xpack.core.async.DeleteAsyncResultRequest;
 import org.elasticsearch.xpack.core.async.GetAsyncResultRequest;
@@ -219,6 +220,43 @@ public class AsyncEsqlQueryActionIT extends AbstractPausableIntegTestCase {
             assertThat(e.getMessage(), equalTo(id));
         } finally {
             scriptPermits.drainPermits();
+        }
+    }
+
+    public void testAsyncStopNestedSubquery() throws Exception {
+        assumeTrue("requires nested subquery support", EsqlCapabilities.Cap.NESTED_SUBQUERY_IN_FROM_COMMAND.isEnabled());
+        scriptPermits.drainPermits();
+        scriptWaits.drainPermits();
+        var pragmas = new QueryPragmas(
+            Settings.builder()
+                .put("data_partitioning", "shard")
+                .put("page_size", pageSize())
+                .put(QueryPragmas.BRANCH_PARALLEL_DEGREE.getKey(), 1)
+                .build()
+        );
+        var request = asyncEsqlQueryRequest("""
+            FROM
+               ( FROM test | STATS total = SUM(pause_me) ),
+               ( FROM
+                    ( FROM test | STATS total = SUM(pause_me) ),
+                    ( FROM test | STATS total = SUM(pause_me) )
+               )
+            """).pragmas(pragmas).waitForCompletionTimeout(TimeValue.timeValueNanos(1)).keepOnCompletion(true).keepAlive(randomKeepAlive());
+
+        try (var initialResponse = client().execute(EsqlQueryAction.INSTANCE, request).actionGet(60, TimeUnit.SECONDS)) {
+            assertThat(initialResponse.isRunning(), is(true));
+            assertThat(initialResponse.asyncExecutionId(), isPresent());
+            assertTrue("a nested leaf must reach the pausable field", scriptWaits.tryAcquire(30, TimeUnit.SECONDS));
+
+            var stopFuture = client().execute(EsqlAsyncStopAction.INSTANCE, new AsyncStopRequest(initialResponse.asyncExecutionId().get()));
+            scriptPermits.release(numberOfDocs() * 3);
+            try (var stoppedResponse = stopFuture.actionGet(60, TimeUnit.SECONDS)) {
+                assertThat(stoppedResponse.isRunning(), is(false));
+                assertThat(stoppedResponse.isPartial(), is(true));
+            }
+        } finally {
+            scriptPermits.drainPermits();
+            scriptWaits.drainPermits();
         }
     }
 

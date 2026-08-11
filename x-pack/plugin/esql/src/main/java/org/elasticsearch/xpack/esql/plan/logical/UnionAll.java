@@ -57,8 +57,9 @@ public class UnionAll extends Fork implements PostOptimizationPlanVerificationAw
     /**
      * Override of {@link Fork#pruneEmptyBranches(Predicate)} that returns a {@link UnionAll}
      * (rather than letting the base implementation produce whatever {@link #replaceChildren}
-     * would). Mirrors the base behaviour otherwise: single-survivor wrappers are preserved
-     * (callers that want to collapse to the lone child do so explicitly).
+     * would). Mirrors the base behaviour otherwise: this primitive preserves single-survivor
+     * wrappers, which the logical optimizer's {@code FlattenNestedSubqueries} rule later removes
+     * for plain {@link UnionAll} nodes.
      */
     @Override
     public LogicalPlan pruneEmptyBranches(Predicate<LogicalPlan> isEmpty) {
@@ -136,13 +137,15 @@ public class UnionAll extends Fork implements PostOptimizationPlanVerificationAw
     }
 
     /**
-     * Defer the check for nested UnionAlls until after logical planner as some of the nested subqueries can be flattened
-     * by logical planner in the future.
+     * Nested {@link UnionAll}s (subqueries within subqueries) are supported; this check only rejects the shapes that remain
+     * unsupported below a {@link UnionAll}: a {@link ViewUnionAll} (a {@code FROM} pattern expanding to multiple sources) and a
+     * bare {@link Fork} ({@code FORK} inside a subquery). It runs after the logical planner because some nested subqueries will be
+     * flattened by optimizer rules and only the surviving plan shape matters.
      */
     private static void checkNestedUnionAlls(LogicalPlan logicalPlan, Failures failures) {
         if (logicalPlan instanceof UnionAll unionAll) {
             unionAll.forEachDown(Fork.class, nested -> {
-                if (unionAll == nested) {
+                if (unionAll == nested || (nested instanceof UnionAll && nested instanceof ViewUnionAll == false)) {
                     return;
                 }
                 failures.add(nestedUnionAllFailure(nested));
@@ -151,16 +154,15 @@ public class UnionAll extends Fork implements PostOptimizationPlanVerificationAw
     }
 
     /**
-     * Builds the verification {@link Failure} for a {@link Fork}/{@link UnionAll} found nested below another {@link UnionAll} at
-     * post-optimization.
+     * Builds the verification {@link Failure} for a {@link ViewUnionAll} or bare {@link Fork} found nested below another
+     * {@link UnionAll} at post-optimization.
      * <p>
      * A {@link ViewUnionAll} is never written by the user: it is added when a {@code FROM} pattern resolves, during view resolution, to
      * more than one source where at least one is a view — for example a wildcard matching a view together with a concrete index, a pattern
      * matching several views, or a view whose body references multiple sources. In every one of those cases the pattern (or view) expands
-     * to a union of multiple sources, so the generic "Nested subqueries are not supported" wording is misleading - the query the user
-     * wrote contains no nested subquery. We describe the real cause instead and quote the offending {@code FROM} clause (from
-     * {@link #sourceText()}, truncated to {@link Node#TO_STRING_MAX_WIDTH}) so the user can locate it. A plain {@link UnionAll} is a
-     * genuine user-written (or dataset-expanded) nested subquery, and a bare {@link Fork} is a {@code FORK} inside a subquery.
+     * to a union of multiple sources, so a generic nesting error would be misleading - the query the user wrote contains no nested
+     * subquery. We describe the real cause instead and quote the offending {@code FROM} clause (from {@link #sourceText()}, truncated to
+     * {@link Node#TO_STRING_MAX_WIDTH}) so the user can locate it. A bare {@link Fork} is a {@code FORK} inside a subquery.
      */
     private static Failure nestedUnionAllFailure(LogicalPlan nested) {
         if (nested instanceof ViewUnionAll) {
@@ -174,9 +176,6 @@ public class UnionAll extends Fork implements PostOptimizationPlanVerificationAw
                     + "; replace it with a single source in the FROM command",
                 source
             );
-        }
-        if (nested instanceof UnionAll) {
-            return Failure.fail(nested, "Nested subqueries are not supported");
         }
         return Failure.fail(nested, "FORK inside subquery is not supported");
     }
