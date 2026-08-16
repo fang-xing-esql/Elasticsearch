@@ -14,11 +14,13 @@ import org.elasticsearch.xpack.esql.core.expression.Attribute;
 import org.elasticsearch.xpack.esql.core.expression.Expression;
 import org.elasticsearch.xpack.esql.core.expression.Lambda;
 import org.elasticsearch.xpack.esql.core.expression.NameId;
+import org.elasticsearch.xpack.esql.core.expression.NamedExpression;
 import org.elasticsearch.xpack.esql.core.expression.Nullability;
 import org.elasticsearch.xpack.esql.core.expression.ReferenceAttribute;
 import org.elasticsearch.xpack.esql.core.tree.Source;
 import org.elasticsearch.xpack.esql.core.type.DataType;
 import org.elasticsearch.xpack.esql.expression.function.UnresolvedFunction;
+import org.elasticsearch.xpack.esql.expression.function.aggregate.FilteredExpression;
 import org.elasticsearch.xpack.esql.expression.predicate.Predicates;
 import org.elasticsearch.xpack.esql.expression.predicate.logical.And;
 import org.elasticsearch.xpack.esql.expression.predicate.logical.Not;
@@ -27,6 +29,7 @@ import org.elasticsearch.xpack.esql.expression.predicate.nulls.IsNotNull;
 import org.elasticsearch.xpack.esql.expression.predicate.nulls.IsNull;
 import org.elasticsearch.xpack.esql.expression.predicate.operator.comparison.InSubquery;
 import org.elasticsearch.xpack.esql.expression.predicate.operator.comparison.MultiColumnInSubquery;
+import org.elasticsearch.xpack.esql.plan.logical.Aggregate;
 import org.elasticsearch.xpack.esql.plan.logical.Eval;
 import org.elasticsearch.xpack.esql.plan.logical.Filter;
 import org.elasticsearch.xpack.esql.plan.logical.LogicalPlan;
@@ -62,6 +65,12 @@ import static org.elasticsearch.xpack.esql.common.Failure.fail;
  *       {@link And}/{@link Or}/{@link Not}, {@link IsNull}/{@link IsNotNull}, and {@code CASE}/
  *       {@code COALESCE}. {@code InSubquery} wrapped in any other expression is left in place for
  *       {@link #verify} to reject.</li>
+ *   <li>In an {@link Aggregate}: an {@code InSubquery} inside a per-aggregate {@code WHERE} filter
+ *       (a {@code STATS}/{@code INLINE STATS} aggregate with {@code WHERE}) is replaced with a
+ *       synthetic boolean mark attribute and a {@link MarkJoin} stacked below the aggregate's child.
+ *       MarkJoin-only: a {@link SemiJoin}/{@link AntiJoin} would filter rows feeding all aggregates
+ *       and, under {@code BY}, drop whole groups instead of producing empty-input aggregate values.
+ *       See {@link #resolveInSubqueryInAggregate}.</li>
  *   <li>An {@code InSubquery} wrapped in any other expression, or inside SORT / STATS BY / etc., is
  *       left in place; the post-resolution {@link #verify} step rejects the query with a
  *       {@link VerificationException}.</li>
@@ -77,6 +86,9 @@ import static org.elasticsearch.xpack.esql.common.Failure.fail;
  * yet resolved. The Analyzer's {@code ResolveRefs} fills them in during the Resolution batch.
  */
 public class InSubqueryResolver {
+
+    /** Name prefix shared by all synthetic boolean mark attributes created for {@link MarkJoin}. */
+    public static final String MARK_ATTRIBUTE_NAME_PREFIX = "$$in_subquery_mark$";
 
     /**
      * Resolves all {@link InSubquery} expressions in {@link Filter} conditions and {@link Eval} field
@@ -108,7 +120,7 @@ public class InSubqueryResolver {
     /**
      * Routes a plan node to the appropriate IN subquery resolver:
      * {@link #resolveInSubqueryInFilter} for {@link Filter}, {@link #resolveInSubqueryInEval} for
-     * {@link Eval}.
+     * {@link Eval}, {@link #resolveInSubqueryInAggregate} for {@link Aggregate}.
      */
     private static LogicalPlan resolveInSubquery(LogicalPlan plan) {
         if (plan instanceof Filter filter) {
@@ -116,6 +128,11 @@ public class InSubqueryResolver {
         }
         if (plan instanceof Eval eval) {
             return resolveInSubqueryInEval(eval);
+        }
+        // Note: rewriting an Aggregate must always yield an Aggregate (resolveInSubqueryInAggregate uses
+        // Aggregate#with) — an InlineStats parent rebuilds itself with a hard cast of its child to Aggregate.
+        if (plan instanceof Aggregate aggregate) {
+            return resolveInSubqueryInAggregate(aggregate);
         }
         return plan;
     }
@@ -311,6 +328,47 @@ public class InSubqueryResolver {
             }
         }
         return false;
+    }
+
+    /**
+     * Rewrites {@link InSubquery} occurrences in the per-aggregate {@code WHERE} filters of a {@code STATS} or {@code INLINE STATS}
+     * {@link Aggregate} into {@link MarkJoin}s stacked below the aggregate's child; the synthetic boolean mark attributes replace the
+     * {@link InSubquery} occurrences inside the {@link FilteredExpression} filters. MarkJoin-only: a {@link SemiJoin}/{@link AntiJoin}
+     * would filter rows feeding ALL aggregates (and, under {@code BY}, drop whole groups instead of producing empty-input aggregate
+     * values), while the inline filter belongs to a single aggregate.
+     * <p>
+     * The mark attributes are consumed by the aggregate filters and do not leak into the output — an {@link Aggregate}'s output is its
+     * aggregates plus groupings. Returns the same instance when nothing was rewritten (callers rely on identity).
+     * <p>
+     * Public so that {@link org.elasticsearch.xpack.esql.view.ViewResolver} can drive IN subquery resolution.
+     */
+    public static LogicalPlan resolveInSubqueryInAggregate(Aggregate aggregate) {
+        List<MarkJoinSpec> markJoins = new ArrayList<>();
+        List<Alias> syntheticEvals = new ArrayList<>();
+        List<NamedExpression> newAggregates = new ArrayList<>(aggregate.aggregates().size());
+        for (NamedExpression ne : aggregate.aggregates()) {
+            if (ne instanceof Alias alias && alias.child() instanceof FilteredExpression filteredExpression) {
+                Expression newFilter = rewriteInSubqueries(filteredExpression.filter(), true, markJoins, syntheticEvals);
+                if (newFilter != filteredExpression.filter()) {
+                    ne = alias.replaceChild(new FilteredExpression(filteredExpression.source(), filteredExpression.delegate(), newFilter));
+                }
+            }
+            newAggregates.add(ne);
+        }
+
+        if (markJoins.isEmpty()) {
+            return aggregate;
+        }
+
+        LogicalPlan child = aggregate.child();
+        if (syntheticEvals.isEmpty() == false) {
+            child = new Eval(aggregate.source(), child, syntheticEvals);
+        }
+        for (MarkJoinSpec mj : markJoins) {
+            child = new MarkJoin(mj.source(), child, mj.subquery(), mj.config(), mj.markAttribute());
+        }
+        // with(...) is overridden by Aggregate subclasses (e.g. TimeSeriesAggregate), preserving the node type.
+        return aggregate.with(child, aggregate.groupings(), newAggregates);
     }
 
     /**
@@ -599,6 +657,8 @@ public class InSubqueryResolver {
                 for (Alias field : eval.fields()) {
                     checkInSubqueryExpression(eval, field.child(), true, false, null, failures);
                 }
+            } else if (p instanceof Aggregate aggregate) {
+                checkInAggregate(aggregate, failures);
             } else {
                 p.forEachExpression(
                     InSubquery.class,
@@ -610,6 +670,49 @@ public class InSubqueryResolver {
                 );
             }
         });
+    }
+
+    /**
+     * Validates IN subquery usage inside a {@code STATS} or {@code INLINE STATS} {@link Aggregate}: only the
+     * {@link FilteredExpression} filters (the per-aggregate {@code WHERE} clauses) support IN subqueries — those
+     * are walked with {@link #checkInSubqueryExpression} to surface leftovers that {@link #resolveInSubqueryInAggregate}
+     * could not rewrite. {@link InSubquery} anywhere else (groupings, aggregate function arguments) keeps the blanket rejection.
+     */
+    private static void checkInAggregate(Aggregate aggregate, Failures failures) {
+        for (Expression grouping : aggregate.groupings()) {
+            grouping.forEachDown(
+                InSubquery.class,
+                inSub -> failures.add(fail(inSub, "IN subquery is not supported in [{}]", aggregate.sourceText()))
+            );
+            grouping.forEachDown(
+                MultiColumnInSubquery.class,
+                mcs -> failures.add(fail(mcs, "IN subquery is not supported in [{}]", aggregate.sourceText()))
+            );
+        }
+        for (NamedExpression ne : aggregate.aggregates()) {
+            if (ne instanceof Alias alias && alias.child() instanceof FilteredExpression filteredExpression) {
+                filteredExpression.delegate()
+                    .forEachDown(
+                        InSubquery.class,
+                        inSub -> failures.add(fail(inSub, "IN subquery is not supported in [{}]", aggregate.sourceText()))
+                    );
+                filteredExpression.delegate()
+                    .forEachDown(
+                        MultiColumnInSubquery.class,
+                        mcs -> failures.add(fail(mcs, "IN subquery is not supported in [{}]", aggregate.sourceText()))
+                    );
+                checkInSubqueryExpression(aggregate, filteredExpression.filter(), true, false, null, failures);
+            } else {
+                ne.forEachDown(
+                    InSubquery.class,
+                    inSub -> failures.add(fail(inSub, "IN subquery is not supported in [{}]", aggregate.sourceText()))
+                );
+                ne.forEachDown(
+                    MultiColumnInSubquery.class,
+                    mcs -> failures.add(fail(mcs, "IN subquery is not supported in [{}]", aggregate.sourceText()))
+                );
+            }
+        }
     }
 
     /**

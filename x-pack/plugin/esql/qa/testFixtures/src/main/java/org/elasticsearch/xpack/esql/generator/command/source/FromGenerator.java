@@ -121,7 +121,7 @@ public class FromGenerator implements CommandGenerator {
                 result.append(",");
             }
             if (canHaveSubquery && hasViewInFrom == false && randomDouble() < SUBQUERY_PROBABILITY) {
-                result.append(SubqueryGenerator.build(context, schema, executor).queryText());
+                result.append(SubqueryGenerator.build(context.withInFromSubquery(), schema, executor).queryText());
                 hasSubquery = true;
             } else {
                 String idxName = availableIndices.get(randomIntBetween(0, availableIndices.size() - 1));

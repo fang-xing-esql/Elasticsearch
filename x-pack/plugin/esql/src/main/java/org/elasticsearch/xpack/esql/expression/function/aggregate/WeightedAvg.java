@@ -159,6 +159,11 @@ public class WeightedAvg extends AggregateFunction implements SurrogateExpressio
         if (field.foldable()) {
             return new MvAvg(s, field);
         }
+        // A non-foldable null-typed (e.g. unmapped/nullified) field can't be aggregated: surrogating to Div(Sum, Count) would
+        // leave a NULL-typed operand that the arithmetic evaluator can't handle. Fold directly to a typed null instead.
+        if (field.dataType() == DataType.NULL) {
+            return new Literal(s, null, dataType());
+        }
         if (weight.foldable()) {
             return new Div(
                 s,

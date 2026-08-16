@@ -8,6 +8,7 @@
 package org.elasticsearch.xpack.esql.plan.logical.join;
 
 import org.elasticsearch.compute.data.Block;
+import org.elasticsearch.xpack.esql.analysis.InSubqueryResolver;
 import org.elasticsearch.xpack.esql.core.expression.Alias;
 import org.elasticsearch.xpack.esql.core.expression.Attribute;
 import org.elasticsearch.xpack.esql.core.expression.Expression;
@@ -215,6 +216,31 @@ public class MarkJoin extends AbstractSubqueryJoin {
      */
     private Alias markAlias(Source source, Expression value) {
         return new Alias(source, markAttribute.name(), value, markAttribute.id(), true);
+    }
+
+    /**
+     * Returns {@code true} when {@code plan} is the top node of a subtree synthesized by this join's
+     * {@link AbstractSubqueryJoin#inlineData} to materialise the mark attribute. Two shapes are possible:
+     * <ul>
+     *   <li><b>Filter / empty / short-circuit path</b> ({@link #buildFilterPathPlan}, {@link #buildEmptyRightSidePlan},
+     *       {@link #buildShortCircuitPlan}): an {@link Eval} that carries at least one alias with the
+     *       {@link InSubqueryResolver#MARK_ATTRIBUTE_NAME_PREFIX} name prefix. {@code CombineEvals} may merge the mark
+     *       {@link Eval} with an adjacent user-defined {@link Eval} from the outer query, so the boundary {@link Eval}
+     *       can legitimately contain non-mark fields as well.</li>
+     *   <li><b>Hash-join path</b> ({@link #buildHashJoinPathPlan}): a {@link Project} whose direct child is such a mark
+     *       {@link Eval}.</li>
+     * </ul>
+     * Update this method whenever any of the four {@code build*} methods above changes its top-level node type.
+     */
+    static boolean isInlinedBoundary(LogicalPlan plan) {
+        if (plan instanceof Eval eval) {
+            return eval.fields().isEmpty() == false
+                && eval.fields().stream().anyMatch(alias -> alias.name().startsWith(InSubqueryResolver.MARK_ATTRIBUTE_NAME_PREFIX));
+        }
+        if (plan instanceof Project project && project.child() instanceof Eval eval) {
+            return isInlinedBoundary(eval);
+        }
+        return false;
     }
 
     // The mark attribute is part of this node's identity (it carries the NameId that the surrounding condition references), so two
