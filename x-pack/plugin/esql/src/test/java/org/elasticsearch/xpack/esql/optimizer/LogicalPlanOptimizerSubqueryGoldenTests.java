@@ -141,6 +141,21 @@ public class LogicalPlanOptimizerSubqueryGoldenTests extends GoldenTestCase {
             """, STAGES);
     }
 
+    /**
+     * A {@code FROM} union filtered by an {@code IN} subquery that is itself a union. Both sides stay multi-branch
+     * {@code UnionAll}s, so they sit as siblings under the {@code SemiJoin} rather than one nested inside the other.
+     * <p>
+     * Execution still materializes the IN side first and substitutes a {@code LocalRelation}, so the main plan later
+     * has only one live {@code MergeExec}. The expected plan pins that both unions survive optimization - the join
+     * does not flatten either side.
+     */
+    public void testSiblingUnionAllsUnderInSubqueryJoin() {
+        runGoldenTest("""
+            FROM employees, (FROM employees | WHERE salary > 0)
+            | WHERE emp_no IN (FROM employees, (FROM employees | WHERE languages > 0) | KEEP emp_no)
+            """, STAGES);
+    }
+
     public void testNestedSubqueriesWithExternalDatasetWithAggPushdown() {
         runNestedHeavyGoldenTest("""
             FROM employees,

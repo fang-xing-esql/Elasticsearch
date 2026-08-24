@@ -13,9 +13,11 @@ import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.util.concurrent.EsRejectedExecutionException;
 import org.elasticsearch.common.util.concurrent.RunOnce;
 import org.elasticsearch.compute.operator.DriverCompletionInfo;
+import org.elasticsearch.compute.operator.IsBlockedResult;
 import org.elasticsearch.compute.operator.PlanTimeProfile;
 import org.elasticsearch.compute.operator.exchange.ExchangeService;
 import org.elasticsearch.compute.operator.exchange.ExchangeSink;
+import org.elasticsearch.compute.operator.exchange.ExchangeSource;
 import org.elasticsearch.compute.test.TestBlockFactory;
 import org.elasticsearch.tasks.CancellableTask;
 import org.elasticsearch.tasks.TaskCancelHelper;
@@ -42,6 +44,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
@@ -51,9 +54,9 @@ import java.util.function.Supplier;
 
 import static org.elasticsearch.xpack.esql.EsqlTestUtils.configuration;
 import static org.hamcrest.Matchers.anyOf;
-import static org.hamcrest.Matchers.empty;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasItem;
+import static org.hamcrest.Matchers.hasItems;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.instanceOf;
 import static org.hamcrest.Matchers.not;
@@ -67,7 +70,7 @@ import static org.mockito.Mockito.when;
 
 /**
  * Unit tests for {@code SubPlansExecutor} focused on the exception-unwind path in {@code startMerge}: when a synchronous failure occurs,
- * query cancellation must fire, all listener refs must complete exactly once, and exchange sink handlers must be deregistered.
+ * query cancellation must fire, all listener refs must complete exactly once, and both exchange sinks and sources must be deregistered.
  * <p>
  * {@code ComputeService} cannot be constructed in a unit test (it requires {@code TransportService}, {@code SearchService},
  * {@code ClusterService}, etc.), so it is mocked here with Mockito. This is documented as an AGENTS.md "last resort" use of a mock;
@@ -183,7 +186,7 @@ public class SubPlansExecutorTests extends ESTestCase {
         future.get();
 
         assertFalse("cancelQueryOnFailure must not fire on success", cancelled.get());
-        assertThat("exchange service must be empty after success", exchangeService.sinkKeys(), empty());
+        assertTrue("exchange service must be fully empty after success", exchangeFullyEmpty());
     }
 
     /**
@@ -193,7 +196,8 @@ public class SubPlansExecutorTests extends ESTestCase {
      *       injected exception — no hang (which would mean some listener ref was never completed) and no spurious success.</li>
      *   <li><b>Query cancellation fires.</b> {@code cancelQueryOnFailure} must be invoked so the root {@code CancellableTask} is
      *       cancelled and any already-dispatched data-node searches are aborted.</li>
-     *   <li><b>No residual exchange registrations.</b> The exchange service must not hold stale handlers after the query ends.</li>
+     *   <li><b>No residual exchange registrations.</b> The lazy leaf sinks were never registered, and the root source
+     *       keyed {@code "test-session"} must also be gone — {@code sinkKeys()} alone would miss a leaked root source.</li>
      * </ol>
      *
      * <p><b>How the failure propagates — step-by-step walk-through</b></p>
@@ -248,8 +252,8 @@ public class SubPlansExecutorTests extends ESTestCase {
         // cancelQueryOnFailure was invoked — the root task would be cancelled in production.
         assertTrue("cancelQueryOnFailure must have fired", cancelled.get());
 
-        // Exchange service has no residual sink handlers — the lazy leaf sinks were never registered.
-        assertThat("exchange service must be empty after failure", exchangeService.sinkKeys(), empty());
+        // Lazy leaf sinks were never registered; the root source must still be removed with them.
+        assertTrue("exchange service must be fully empty after failure", exchangeFullyEmpty());
     }
 
     /**
@@ -286,7 +290,7 @@ public class SubPlansExecutorTests extends ESTestCase {
      * <ul>
      *   <li>The future fails with the injected exception message.</li>
      *   <li>{@code cancelQueryOnFailure} fired.</li>
-     *   <li>All sink handlers are deregistered ({@code sinkKeys()} is empty).</li>
+     *   <li>The exchange service is fully empty: both leaf sinks and the root source are deregistered.</li>
      * </ul>
      */
     public void testOneMergeTwoLeafRandomLeafFailureInExecutePlan() throws Exception {
@@ -318,7 +322,7 @@ public class SubPlansExecutorTests extends ESTestCase {
         var ex = expectThrows(ExecutionException.class, future::get);
         assertEquals("injected leaf failure", ex.getCause().getMessage());
         assertTrue("cancelQueryOnFailure must have fired", cancelled.get());
-        assertThat("exchange service must be empty after leaf failure", exchangeService.sinkKeys(), empty());
+        assertTrue("exchange service must be fully empty after leaf failure", exchangeFullyEmpty());
     }
 
     /**
@@ -555,6 +559,94 @@ public class SubPlansExecutorTests extends ESTestCase {
         expectThrows(ExecutionException.class, future::get);
         // cancelQueryOnFailure must be called exactly once — not once per merge node (which would be 3).
         verify(computeService, times(1)).cancelQueryOnFailure(any());
+    }
+
+    /**
+     * Async STOP only calls {@link ExchangeService#finishSessionEarly} with the bare session id, which is the root merge
+     * source. Nested merge sources and leaf sinks are not looked up. They must finish because closing the root source
+     * closes the remotes that feed it, each nested merge stub then {@code finish()}es its own source (the real driver
+     * does the same when its parent sink is done), and that closes the nested leaves.
+     * <p>
+     * {@code runCompute}/{@code executePlan} stay parked on those exchange objects instead of completing themselves.
+     * If the cascade is broken the future never completes. All six leaves are in flight so every leaf sink is a remote
+     * of a nested source at STOP time.
+     */
+    public void testFinishSessionEarlyUnblocksParkedNestedTree() throws Exception {
+        CountDownLatch parked = new CountDownLatch(3 + 6); // root + innerA + innerB, and six leaves
+        stubParkUntilExchangeCloses(parked);
+
+        StartedQuery started = startQuery(nestedMerges(), new QueryPragmas(Settings.builder().put("branch_parallel_degree", 8).build()));
+        assertTrue("nested merges and leaves must park on the exchange before STOP", parked.await(10, TimeUnit.SECONDS));
+        assertThat(
+            exchangeService.sourceKeys(),
+            hasItems("test-session", "test-session/1/subplan-0/merge", "test-session/1/subplan-1/merge")
+        );
+
+        PlainActionFuture<Boolean> stopped = new PlainActionFuture<>();
+        exchangeService.finishSessionEarly(started.sessionId, stopped);
+        assertTrue("STOP must find the root source under the bare session id", stopped.get(10, TimeUnit.SECONDS));
+
+        started.future.get(10, TimeUnit.SECONDS);
+        assertFalse("STOP is a graceful finishEarly, not a failure", cancelled.get());
+        assertBusy(() -> assertTrue("nested sources and leaf sinks must go with the root", exchangeFullyEmpty()));
+    }
+
+    /**
+     * Same STOP cascade as {@link #testFinishSessionEarlyUnblocksParkedNestedTree}, but with {@code branch_parallel_degree=1}
+     * so five leaves are still queued (no sink handler, not a remote of any source) when {@code finishSessionEarly} runs.
+     * Those leaves are invisible to the first close. They must still complete when later {@code attach}es see
+     * {@code buffer.noMoreInputs()} on the already-finished parent source and finish the new sink immediately.
+     * Pre-fix / a broken attach would leave the query waiting on a leaf that never observes STOP.
+     */
+    public void testFinishSessionEarlyUnblocksQueuedNestedLeaves() throws Exception {
+        CountDownLatch parked = new CountDownLatch(3 + 1);
+        stubParkUntilExchangeCloses(parked);
+
+        StartedQuery started = startQuery(nestedMerges(), new QueryPragmas(Settings.builder().put("branch_parallel_degree", 1).build()));
+        assertTrue("root, both inner merges, and the one dispatched leaf must park", parked.await(10, TimeUnit.SECONDS));
+        assertThat(exchangeService.sinkKeys(), hasSize(3)); // innerA sink, innerB sink, one leaf
+        assertThat(
+            "queued leaves must not have sink handlers yet",
+            exchangeService.sinkKeys(),
+            not(hasItem("test-session/1/subplan-0.subplan-1"))
+        );
+
+        PlainActionFuture<Boolean> stopped = new PlainActionFuture<>();
+        exchangeService.finishSessionEarly(started.sessionId, stopped);
+        assertTrue(stopped.get(10, TimeUnit.SECONDS));
+
+        started.future.get(10, TimeUnit.SECONDS);
+        assertFalse("STOP is a graceful finishEarly, not a failure", cancelled.get());
+        assertBusy(() -> assertTrue("queued leaves must not leak handlers after STOP", exchangeFullyEmpty()));
+    }
+
+    /**
+     * Mid-flight cancel of a nested tree: one leaf is already in {@code executePlan}, the rest are queued.
+     * {@code executeLeaf} skips the queue via {@code notifyIfCancelled}. In-flight merge/leaf stubs complete when
+     * the task is cancelled, the same way a real driver checks {@code CancellableTask}. Pre-cancel tests never
+     * reach {@code executePlan}; this one does, then cancels.
+     */
+    public void testCancelAfterNestedLeafDispatched() throws Exception {
+        CountDownLatch parked = new CountDownLatch(3 + 1);
+        AtomicInteger leafDispatches = new AtomicInteger();
+        CancellableTask rootTask = new CancellableTask(1, "esql", "esql", "test", TaskId.EMPTY_TASK_ID, Map.of());
+        stubParkUntilExchangeClosesOrCancelled(parked, rootTask, leafDispatches);
+
+        StartedQuery started = startQuery(
+            nestedMerges(),
+            new QueryPragmas(Settings.builder().put("branch_parallel_degree", 1).build()),
+            null,
+            rootTask
+        );
+        assertTrue("root, both inner merges, and the one dispatched leaf must park", parked.await(10, TimeUnit.SECONDS));
+        assertEquals("only the first-wave leaf is dispatched before cancel", 1, leafDispatches.get());
+
+        TaskCancelHelper.cancel(rootTask, "test cancellation");
+
+        var ex = expectThrows(ExecutionException.class, () -> started.future.get(10, TimeUnit.SECONDS));
+        assertThat(ex.getCause(), instanceOf(TaskCancelledException.class));
+        assertEquals("only the already-dispatched leaf called executePlan", 1, leafDispatches.get());
+        assertBusy(() -> assertTrue("cancel must drain parked and queued work", exchangeFullyEmpty()));
     }
 
     /**
@@ -971,6 +1063,123 @@ public class SubPlansExecutorTests extends ESTestCase {
         return segmentProfiles;
     }
 
+    /**
+     * Parks {@code runCompute} and {@code executePlan} on the real exchange objects instead of completing the listeners
+     * inline. A merge with a parent sink completes when that sink is finished (STOP closed the parent source); it then
+     * {@code finish()}es its own source so nested remotes close. The root merge has no parent sink and waits until its
+     * source is {@code finishEarly}'d. Leaves complete when their sink is finished.
+     */
+    private void stubParkUntilExchangeCloses(CountDownLatch parked) {
+        stubParkUntilExchangeClosesOrCancelled(parked, null, null);
+    }
+
+    private void stubParkUntilExchangeClosesOrCancelled(CountDownLatch parked, CancellableTask rootTask, AtomicInteger leafDispatches) {
+        doAnswer(inv -> {
+            ComputeContext context = inv.getArgument(1);
+            ActionListener<DriverCompletionInfo> listener = ActionListener.notifyOnce(inv.getArgument(6));
+            ExchangeSource source = context.exchangeSourceSupplier().get();
+            Runnable succeed = new RunOnce(() -> {
+                source.finish();
+                listener.onResponse(DriverCompletionInfo.EMPTY);
+            });
+            Runnable failCancelled = new RunOnce(() -> {
+                source.finish();
+                listener.onFailure(rootTask.getTaskCancelledException());
+            });
+            if (rootTask != null) {
+                rootTask.addListener(failCancelled::run);
+            }
+            if (context.exchangeSinkSupplier() != null) {
+                context.exchangeSinkSupplier().get().addCompletionListener(ActionListener.running(succeed));
+            } else {
+                completeWhenSourceFinished(source, succeed);
+            }
+            parked.countDown();
+            return null;
+        }).when(computeService).runCompute(any(), any(), any(), any(), any(), any(), any());
+        doAnswer(inv -> {
+            if (leafDispatches != null) {
+                leafDispatches.incrementAndGet();
+            }
+            Supplier<ExchangeSink> sinkSupplier = inv.getArgument(9);
+            ActionListener<Result> listener = ActionListener.notifyOnce(inv.getArgument(8));
+            Configuration cfg = inv.getArgument(4);
+            Runnable succeed = new RunOnce(
+                () -> listener.onResponse(new Result(List.of(), List.of(), null, cfg, DriverCompletionInfo.EMPTY, null))
+            );
+            sinkSupplier.get().addCompletionListener(ActionListener.running(succeed));
+            if (rootTask != null) {
+                rootTask.addListener(() -> listener.onFailure(rootTask.getTaskCancelledException()));
+            }
+            parked.countDown();
+            return null;
+        }).when(computeService).executePlan(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    private void completeWhenSourceFinished(ExchangeSource source, Runnable onDone) {
+        try {
+            while (source.isFinished() == false) {
+                var page = source.pollPage();
+                if (page != null) {
+                    page.releaseBlocks();
+                    continue;
+                }
+                if (source.isFinished()) {
+                    break;
+                }
+                IsBlockedResult blocked = source.waitForReading();
+                if (blocked.listener().isDone() == false) {
+                    blocked.listener()
+                        .addListener(
+                            ActionListener.running(
+                                () -> threadPool.executor(ThreadPool.Names.SEARCH).execute(() -> completeWhenSourceFinished(source, onDone))
+                            )
+                        );
+                    return;
+                }
+                // Unblocked with no page and not finished: do not recurse on this thread (NOT_BLOCKED would overflow).
+                threadPool.executor(ThreadPool.Names.SEARCH).execute(() -> completeWhenSourceFinished(source, onDone));
+                return;
+            }
+        } catch (Exception e) {
+            onDone.run();
+            return;
+        }
+        onDone.run();
+    }
+
+    private record StartedQuery(PlainActionFuture<Result> future, String sessionId, CancellableTask rootTask) {}
+
+    private StartedQuery startQuery(SubPlan.Merge topology, QueryPragmas pragmas) {
+        return startQuery(topology, pragmas, null, new CancellableTask(1, "esql", "esql", "test", TaskId.EMPTY_TASK_ID, Map.of()));
+    }
+
+    private StartedQuery startQuery(
+        SubPlan.Merge topology,
+        QueryPragmas pragmas,
+        PlanTimeProfile planTimeProfile,
+        CancellableTask rootTask
+    ) {
+        String sessionId = "test-session";
+        Configuration config = configuration(pragmas);
+        EsqlExecutionInfo execInfo = new EsqlExecutionInfo(s -> false, EsqlExecutionInfo.IncludeExecutionMetadata.NEVER);
+        FoldContext foldCtx = new FoldContext(Long.MAX_VALUE);
+        var future = new PlainActionFuture<Result>();
+        new SubPlansExecutor(
+            computeService,
+            exchangeService,
+            threadPool.executor(ThreadPool.Names.SEARCH),
+            sessionId,
+            rootTask,
+            new EsqlFlags(false),
+            config,
+            foldCtx,
+            execInfo,
+            Map.of()
+        ).execute(topology, planTimeProfile, future);
+        return new StartedQuery(future, sessionId, rootTask);
+    }
+
     private void buildAndExecute(SubPlan.Merge topology, ActionListener<Result> listener) {
         buildAndExecute(topology, new QueryPragmas(Settings.EMPTY), listener);
     }
@@ -990,12 +1199,10 @@ public class SubPlansExecutorTests extends ESTestCase {
         Configuration config = configuration(pragmas);
         EsqlExecutionInfo execInfo = new EsqlExecutionInfo(s -> false, EsqlExecutionInfo.IncludeExecutionMetadata.NEVER);
         FoldContext foldCtx = new FoldContext(Long.MAX_VALUE);
-        Executor executor = threadPool.executor(ThreadPool.Names.SEARCH);
-
         new SubPlansExecutor(
             computeService,
             exchangeService,
-            executor,
+            threadPool.executor(ThreadPool.Names.SEARCH),
             sessionId,
             rootTask,
             new EsqlFlags(false),
