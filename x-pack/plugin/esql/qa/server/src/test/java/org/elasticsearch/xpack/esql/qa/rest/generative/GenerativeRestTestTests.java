@@ -99,7 +99,6 @@ public class GenerativeRestTestTests extends ESTestCase {
     public void testMatchOptionsOnNonIndexMappedNonTextFieldIsAllowed() {
         String error = "Options are not supported for [MATCH] function call on non-index-mapped, non-TEXT field [message]";
         List<Column> schema = List.of(new Column("message", "keyword", List.of(), false));
-
         assertTrue(GenerativeRestTest.isFieldFullTextError(error, schema));
     }
 

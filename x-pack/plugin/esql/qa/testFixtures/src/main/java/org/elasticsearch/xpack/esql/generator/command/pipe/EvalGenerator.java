@@ -53,11 +53,14 @@ public class EvalGenerator implements CommandGenerator {
                 }
             }
             // Occasionally generate a null field (EVAL field = null) to test NULL data type handling
-            String expression;
-            if (randomIntBetween(0, 100) < 10) {
-                expression = "null";
-            } else {
-                expression = EsqlQueryGenerator.expression(usablePrevious.values().stream().toList(), true, previousCommands);
+            List<Column> usableColumns = usablePrevious.values().stream().toList();
+            String expression = EsqlQueryGenerator.maybeInSubqueryBooleanExpression(usableColumns, schema, executor, context);
+            if (expression == null) {
+                if (randomIntBetween(0, 100) < 10) {
+                    expression = "null";
+                } else {
+                    expression = EsqlQueryGenerator.expression(usableColumns, true, previousCommands);
+                }
             }
             if (i > 0) {
                 cmd.append(",");

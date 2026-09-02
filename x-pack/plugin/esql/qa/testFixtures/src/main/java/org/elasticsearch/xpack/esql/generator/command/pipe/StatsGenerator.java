@@ -59,6 +59,7 @@ public class StatsGenerator implements CommandGenerator {
                 }
             }
             String expression = EsqlQueryGenerator.agg(nonNull, previousCommands);
+            String filter = EsqlQueryGenerator.maybeInSubqueryBooleanExpression(nonNull, schema, executor, context);
             if (i > 0) {
                 cmd.append(",");
             }
@@ -66,6 +67,10 @@ public class StatsGenerator implements CommandGenerator {
             cmd.append(name);
             cmd.append(" = ");
             cmd.append(expression);
+            if (filter != null) {
+                cmd.append(" WHERE ");
+                cmd.append(filter);
+            }
         }
         if (randomBoolean()) {
             var col = EsqlQueryGenerator.randomGroupableName(nonNull);

@@ -8,6 +8,7 @@
 package org.elasticsearch.xpack.esql.optimizer.rules;
 
 import org.apache.lucene.util.BytesRef;
+import org.elasticsearch.xpack.esql.action.EsqlCapabilities;
 import org.elasticsearch.xpack.esql.core.expression.FieldAttribute;
 import org.elasticsearch.xpack.esql.core.expression.Literal;
 import org.elasticsearch.xpack.esql.expression.function.fulltext.FullTextFunction;
@@ -83,5 +84,33 @@ public class FullTextFunctionLogicalPlanOptimizerTests extends AbstractLogicalPl
     public void testQueryStringFunctionQueryArgNotFoldable() {
         String functionName = randomFrom("qstr", "kql");
         failPlan(String.format(Locale.ROOT, "from test | where %s(last_name)", functionName), "Query must be a constant string in");
+    }
+
+    /**
+     * QSTR and KQL previously failed with "cannot be used after LANGUAGE.CODE" when OR'd with an IN subquery
+     * because the MarkJoin produced by the IN subquery was not in the allow-list.
+     * After the fix, AbstractSubqueryJoin is added to the allow-list and its right-child subtree is pruned from
+     * the traversal, so QSTR/KQL above a MarkJoin are accepted.
+     */
+    public void testQstrOrInSubqueryIsAccepted() {
+        assumeTrue("Requires IN_SUBQUERY support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY_WITHOUT_VIEW.isEnabled());
+        String functionName = randomFrom("qstr", "kql");
+        // must not throw
+        planSubquery(
+            String.format(Locale.ROOT, "FROM test | WHERE %s(\"last_name:Doe\") OR emp_no IN (FROM test | KEEP emp_no)", functionName)
+        );
+    }
+
+    public void testQstrOrInSubqueryWithAndConjunctIsAccepted() {
+        assumeTrue("Requires IN_SUBQUERY support", EsqlCapabilities.Cap.WHERE_IN_SUBQUERY_WITHOUT_VIEW.isEnabled());
+        String functionName = randomFrom("qstr", "kql");
+        // (emp_no IN (sub) AND salary > 50000) OR qstr("…") — the MarkJoin appears because of the OR
+        planSubquery(
+            String.format(
+                Locale.ROOT,
+                "FROM test | WHERE (emp_no IN (FROM test | KEEP emp_no) AND salary > 50000) OR %s(\"last_name:Doe\")",
+                functionName
+            )
+        );
     }
 }

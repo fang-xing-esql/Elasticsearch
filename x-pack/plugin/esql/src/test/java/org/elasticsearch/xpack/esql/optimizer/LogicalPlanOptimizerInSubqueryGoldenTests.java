@@ -1543,4 +1543,20 @@ public class LogicalPlanOptimizerInSubqueryGoldenTests extends GoldenTestCase {
             | INLINE STATS c = COUNT(*) WHERE (emp_no IN (ROW a = 1 | KEEP a)) IS NOT NULL
             """, STAGES);
     }
+
+    // in subquery with full text functions
+
+    public void testKqlFunctionDisjunctionWithInSubquery() {
+        runGoldenTest("""
+            FROM employees
+            | WHERE kql("first_name: Anna") OR emp_no IN (FROM employees | KEEP emp_no)
+            """, STAGES);
+    }
+
+    public void testQstrFunctionDisjunctionWithInSubquery() {
+        runGoldenTest("""
+            FROM employees
+            | WHERE qstr("first_name: Anna") OR emp_no IN (FROM employees | KEEP emp_no)
+            """, STAGES);
+    }
 }

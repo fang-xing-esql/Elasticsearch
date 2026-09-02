@@ -102,6 +102,8 @@ import static org.elasticsearch.xpack.esql.common.Failure.fail;
  */
 public class InSubqueryResolver {
 
+    public static final String SYNTHETIC_MARK_PREFIX = "$$in_subquery_mark$";
+
     /**
      * Resolves all {@link InSubquery} expressions in {@link Filter} conditions, {@link Eval} field
      * definitions, and {@code STATS} / {@code INLINE STATS} per-aggregate {@code WHERE} filters, and

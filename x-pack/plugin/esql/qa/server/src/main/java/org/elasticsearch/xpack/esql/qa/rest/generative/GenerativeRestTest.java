@@ -233,7 +233,12 @@ public abstract class GenerativeRestTest extends ESRestTestCase implements Query
         "class java\\.util\\.ArrayList cannot be cast to class java\\.lang\\.Boolean.*",
 
         // https://github.com/elastic/elasticsearch/issues/154080
-        "unexpected data type \\[NULL\\]"
+        "unexpected data type \\[NULL\\]",
+
+        // Non-date range field types (e.g. double_range, integer_range) are not fully supported in ES|QL:
+        // block loading is only implemented for date_range, and serialization is not implemented for DOUBLE_RANGE.
+        "can't convert values of type \\[DOUBLE_RANGE\\]",
+        "loading blocks is only supported for date fields"
     );
 
     /**
@@ -465,10 +470,70 @@ public abstract class GenerativeRestTest extends ESRestTestCase implements Query
                     message.append("Generative tests, error generating new command \n");
                     message.append("Previous query: \n");
                     message.append(exec.previousResult == null ? "<no previous query>" : exec.previousResult.query());
-                    fail(e, message.toString());
+                    // Use AssertionError directly: fail(Throwable, String) calls Strings.format() which
+                    // treats the message as a printf format string — query text (e.g. grok patterns
+                    // containing %{...}) would trigger UnknownFormatConversionException.
+                    throw new AssertionError(message.toString(), e);
                 }
             }
         }
+    }
+
+    /**
+     * Prefix of the synthetic boolean-mark columns inserted by {@code InSubqueryResolver} when
+     * rewriting {@code field IN (subquery)} predicates into {@code MarkJoin} plans.
+     * The full name is {@code "$$in_subquery_mark$" + value.hashCode() + "$" + subquery.hashCode()}.
+     */
+    static final String IN_SUBQUERY_MARK_COLUMN_PREFIX = "$$in_subquery_mark$";
+
+    /**
+     * Strips {@code $$in_subquery_mark$} synthetic columns from a {@link QueryExecuted}.
+     * <p>
+     * These columns are inserted by {@code InSubqueryResolver} when {@code field IN (subquery)}
+     * appears under an OR (e.g. {@code WHERE a IN (sub) OR b > 0}), which rewrites the predicate
+     * into a {@code MarkJoin} that adds a synthetic boolean mark attribute to its output.
+     * <p>
+     * The mark attribute is created with {@code synthetic=true}, and under normal circumstances
+     * {@code planWithoutSyntheticAttributes} strips it from the plan output before the response
+     * is returned, so it never reaches the REST client.  However, when {@code FORK} is combined
+     * with a {@code MarkJoin} branch <em>and</em> the query uses unmapped fields
+     * ({@code unmapped_fields="load"} or {@code "nullify"}), the {@code patchFork}/
+     * {@code refreshOutput} code path re-derives the FORK output from its children. The
+     * null-fill alias that {@code resolveFork} inserted on sibling branches (to align them with
+     * the MarkJoin branch) does not set {@code synthetic=true} (that is the {@link
+     * org.elasticsearch.xpack.esql.core.expression.Alias} default). When such a null-fill branch
+     * appears before the MarkJoin branch, {@code Fork.outputUnion} picks up the
+     * {@code synthetic=false} copy, and {@code planWithoutSyntheticAttributes} no longer strips
+     * the column, causing it to appear in the response.
+     * <p>
+     * The column names also embed {@code NameId} hash codes (a JVM-global incrementing counter),
+     * so the same query text produces different mark-column names on each parse/analysis.
+     * Tracking them in the schema would cause spurious schema-mismatch failures when consecutive
+     * probes compare schemas from two separate executions.
+     * <p>
+     * This workaround is only applied when the query contains a {@code FORK} command, since that
+     * is the only code path that can cause the mark columns to escape
+     * {@code planWithoutSyntheticAttributes}.
+     * TODO: Investigate whether it is safe to exclude synthetic columns from {@code Fork} output.
+     */
+    private static QueryExecuted stripInSubqueryMarkColumns(QueryExecuted qe) {
+        if (qe == null || qe.outputSchema() == null) {
+            return qe;
+        }
+        List<Integer> keepIndices = new ArrayList<>();
+        for (int i = 0; i < qe.outputSchema().size(); i++) {
+            if (qe.outputSchema().get(i).name().startsWith(IN_SUBQUERY_MARK_COLUMN_PREFIX) == false) {
+                keepIndices.add(i);
+            }
+        }
+        if (keepIndices.size() == qe.outputSchema().size()) {
+            return qe;
+        }
+        List<Column> schema = keepIndices.stream().map(qe.outputSchema()::get).toList();
+        List<List<Object>> rows = qe.result() == null
+            ? null
+            : qe.result().stream().map(row -> keepIndices.stream().map(row::get).toList()).toList();
+        return new QueryExecuted(qe.query(), qe.depth(), schema, rows, qe.exception());
     }
 
     /**
@@ -1015,6 +1080,9 @@ public abstract class GenerativeRestTest extends ESRestTestCase implements Query
     /**
      * Checks if the error is a full-text function/operator rejecting a field that is not from an index mapping.
      * Uses the {@link Column#indexMapped()} flag from the current schema.
+     * When the schema is null or empty (e.g. the failing command reset the schema, or we are inside an
+     * inner subquery pipeline that does not track index-mapping flags), we cannot determine the status,
+     * so we treat the error as allowed to avoid surfacing generator-internal failures as test failures.
      */
     static boolean isFieldFullTextError(String errorMessage, List<Column> currentSchema) {
         Matcher m = NOT_A_FIELD_FROM_INDEX_PATTERN.matcher(errorMessage);
@@ -1026,16 +1094,17 @@ public abstract class GenerativeRestTest extends ESRestTestCase implements Query
         }
         String fieldName = unquote(m.group(1));
 
-        if (currentSchema != null && currentSchema.isEmpty() == false) {
-            for (Column col : currentSchema) {
-                if (col.name().equals(fieldName)) {
-                    return col.indexMapped() == false;
-                }
-            }
-            // Field not found in schema — likely a pipeline artifact; allow the error
+        if (currentSchema == null || currentSchema.isEmpty()) {
+            // No schema context — cannot determine index-mapping status; treat as allowed.
             return true;
         }
-        return false;
+        for (Column col : currentSchema) {
+            if (col.name().equals(fieldName)) {
+                return col.indexMapped() == false;
+            }
+        }
+        // Field not found in schema — likely a pipeline artifact; allow the error
+        return true;
     }
 
     private static final Pattern FULL_TEXT_AFTER_SAMPLE_PATTERN = Pattern.compile(
@@ -1427,6 +1496,11 @@ public abstract class GenerativeRestTest extends ESRestTestCase implements Query
         // result validation (that expect columns added after them).
         if (result.query() != null && FromGenerator.hasApproximationSettings(result.query())) {
             result = stripApproximationColumns(result);
+        }
+        // Strip $$in_subquery_mark$ columns only when FORK is present in the query: see the Javadoc on
+        // stripInSubqueryMarkColumns for why these columns can leak to the response in that case.
+        if (FORK_COMMAND_PATTERN.matcher(query).find()) {
+            result = stripInSubqueryMarkColumns(result);
         }
         return result;
     }
