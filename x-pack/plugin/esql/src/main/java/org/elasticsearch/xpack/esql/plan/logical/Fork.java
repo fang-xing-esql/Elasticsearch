@@ -29,7 +29,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.BiConsumer;
-import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
@@ -306,26 +305,20 @@ public class Fork extends LogicalPlan implements PostAnalysisPlanVerificationAwa
         }
         Fork fork = (Fork) plan;
 
-        forEachForkSkippingSubqueries(fork, otherFork -> {
-            if (otherFork == fork) {
-                return;
-            }
-
-            failures.add(
-                Failure.fail(
-                    otherFork,
-                    otherFork instanceof UnionAll
-                        ? "FORK after subquery is not supported"
-                        : "Only a single FORK command is supported, but found multiple"
-                )
-            );
-        });
+        checkForUnseparatedFork(fork, false, failures);
 
         Map<String, DataType> outputTypes = fork.output().stream().collect(Collectors.toMap(Attribute::name, Attribute::dataType));
 
         fork.children().forEach(subPlan -> {
             for (Attribute attr : subPlan.output()) {
                 var expected = outputTypes.get(attr.name());
+
+                // Union-type resolution can introduce synthetic conversion attributes after this FORK's output was resolved. They are
+                // carried through the branch projections so the conversion can be extracted, but are intentionally absent from the
+                // user-visible FORK output and removed by the union-types cleanup rule.
+                if (expected == null && attr.synthetic()) {
+                    continue;
+                }
 
                 // If the FORK output has an UNSUPPORTED data type, we know there is no conflict.
                 // We only assign an UNSUPPORTED attribute in the FORK output when there exists no attribute with the
@@ -351,18 +344,31 @@ public class Fork extends LogicalPlan implements PostAnalysisPlanVerificationAwa
     }
 
     /**
-     * Traverses the plan tree downward, invoking {@code action} for each {@link Fork} encountered,
-     * but does not descend into the right-hand side (subquery plan) of an {@link AbstractSubqueryJoin}.
-     * The right side is a separate query scope; a FORK inside it is independent of any FORK in the
-     * enclosing query.
+     * Rejects two user-written FORKs on the same uninterrupted pipeline path. A {@link UnionAll} is a real merge boundary, whether it
+     * came from user subqueries, a view, an external dataset, or federation, so each of its branches starts a new FORK segment. The right
+     * side of an {@link AbstractSubqueryJoin} is an independently executed query scope and is verified by its own FORK node.
      */
-    static void forEachForkSkippingSubqueries(LogicalPlan plan, Consumer<Fork> action) {
-        if (plan instanceof Fork fork) {
-            action.accept(fork);
+    private static void checkForUnseparatedFork(LogicalPlan plan, boolean forkSeen, Failures failures) {
+        if (plan instanceof UnionAll unionAll) {
+            for (LogicalPlan child : unionAll.children()) {
+                checkForUnseparatedFork(child, false, failures);
+            }
+            return;
         }
-        List<LogicalPlan> children = plan instanceof AbstractSubqueryJoin join ? List.of(join.left()) : plan.children();
-        for (LogicalPlan child : children) {
-            forEachForkSkippingSubqueries(child, action);
+        if (plan instanceof AbstractSubqueryJoin join) {
+            checkForUnseparatedFork(join.left(), forkSeen, failures);
+            return;
+        }
+        boolean seen = forkSeen;
+        if (plan.getClass() == Fork.class) {
+            if (forkSeen) {
+                failures.add(Failure.fail(plan, "Only a single FORK command is supported, but found multiple"));
+                return;
+            }
+            seen = true;
+        }
+        for (LogicalPlan child : plan.children()) {
+            checkForUnseparatedFork(child, seen, failures);
         }
     }
 }

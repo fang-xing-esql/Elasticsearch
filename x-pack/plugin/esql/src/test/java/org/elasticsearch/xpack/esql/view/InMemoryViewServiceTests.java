@@ -20,7 +20,6 @@ import org.elasticsearch.xpack.esql.ConfigurationTestUtils;
 import org.elasticsearch.xpack.esql.SerializationTestUtils;
 import org.elasticsearch.xpack.esql.VerificationException;
 import org.elasticsearch.xpack.esql.action.EsqlCapabilities;
-import org.elasticsearch.xpack.esql.common.Failure;
 import org.elasticsearch.xpack.esql.common.Failures;
 import org.elasticsearch.xpack.esql.core.expression.Alias;
 import org.elasticsearch.xpack.esql.core.expression.Literal;
@@ -1229,15 +1228,10 @@ public class InMemoryViewServiceTests extends AbstractStatementParserTests {
         assertNotNull("dashboard should resolve without circular reference errors", result);
 
         // The wildcard svc-auth-* inside error_view's subquery matches the view svc-auth-failures,
-        // creating a nested ViewUnionAll inside the pipeline chain. This produces a branching-view
-        // error — which is the correct behavior (not a false circular reference).
-        Failures failures = new Failures();
-        Failures depFailures = new Failures();
-        LogicalVerifier.INSTANCE.checkPlanConsistency(result, failures, depFailures);
-        assertTrue("Expected nested branching-view failure", failures.hasFailures());
-        for (Failure failure : failures.failures()) {
-            assertThat(failure.failMessage(), containsString("cannot be combined with subqueries"));
-        }
+        // creating a nested ViewUnionAll inside the pipeline chain. Nested branching views are valid;
+        // this also confirms that the wildcard match was not mistaken for a circular reference.
+        assertTrue("Expected a nested branching view in: " + result, containsNestedViewUnionAll(result));
+        assertNoPlanConsistencyFailures(result, "dashboard");
     }
 
     /**
@@ -2084,32 +2078,52 @@ public class InMemoryViewServiceTests extends AbstractStatementParserTests {
                             e.getMessage(),
                             startsWith("The maximum allowed view depth of " + maxViewDepth + " has been exceeded")
                         );
-                    } else if (branching > Fork.MAX_BRANCHES) {
-                        // Branch-count enforcement now lives in Fork's post-analysis verification rather than
-                        // its constructor, so view resolution succeeds with a wide ViewUnionAll and the failure
-                        // surfaces only when the verifier walks the plan.
-                        LogicalPlan result = replaceViews(query(queryStr), matrixResolver);
-                        Failures forkFailures = new Failures();
-                        result.forEachUp(p -> {
-                            if (p instanceof Fork f) {
-                                f.postAnalysisPlanVerification().accept(f, forkFailures);
-                            }
-                        });
-                        assertTrue(
-                            "Expected FORK branch failures for nesting=" + nesting + ", branching=" + branching + " in plan: " + result,
-                            forkFailures.hasFailures()
-                        );
-                        assertThat(
-                            "nesting=" + nesting + ", branching=" + branching,
-                            forkFailures.failures().toString(),
-                            containsString("FORK supports up to " + Fork.MAX_BRANCHES + " branches")
-                        );
                     } else {
                         LogicalPlan result = replaceViews(query(queryStr), matrixResolver);
                         assertNotNull(
                             "Non-compactable resolution should succeed for nesting=" + nesting + ", branching=" + branching,
                             result
                         );
+
+                        // Validate max_query_branches limit
+                        Failures maxBranchFailures = new Failures();
+                        int maxQueryBranches = org.elasticsearch.xpack.esql.plugin.QueryPragmas.MAX_QUERY_BRANCHES.getDefault(
+                            Settings.EMPTY
+                        );
+                        UnionAll.checkNestedSubqueryLimits(result, maxQueryBranches, Integer.MAX_VALUE, maxBranchFailures);
+
+                        int expectedLeaves = nesting * (branching - 1) + 1;
+                        if (expectedLeaves > maxQueryBranches) {
+                            assertTrue(
+                                "Expected branch failures for nesting="
+                                    + nesting
+                                    + ", branching="
+                                    + branching
+                                    + " ("
+                                    + expectedLeaves
+                                    + " leaves)",
+                                maxBranchFailures.hasFailures()
+                            );
+                            assertThat(
+                                "nesting=" + nesting + ", branching=" + branching,
+                                maxBranchFailures.failures().toString(),
+                                containsString(
+                                    "exceeding the limit of " + maxQueryBranches + " set by the [max_query_branches] query pragma"
+                                )
+                            );
+                        } else {
+                            assertFalse(
+                                "No branch failures expected for nesting="
+                                    + nesting
+                                    + ", branching="
+                                    + branching
+                                    + " ("
+                                    + expectedLeaves
+                                    + " leaves)",
+                                maxBranchFailures.hasFailures()
+                            );
+                        }
+
                         if (branching >= 2) {
                             Failures failures = new Failures();
                             Failures depFailures = new Failures();
@@ -2119,13 +2133,15 @@ public class InMemoryViewServiceTests extends AbstractStatementParserTests {
                                     "Expected nested ViewUnionAll for nesting=" + nesting + ", branching=" + branching,
                                     containsNestedViewUnionAll(result)
                                 );
-                                assertThat("Expect failure count", failures.failures().size(), equalTo(nesting - 1));
-                                // Each nested ViewUnionAll failure should reference the view that created it.
-                                // The ViewUnionAlls at depths 2..N have view names v_2_1..v_N_1.
-                                for (Failure failure : failures.failures()) {
-                                    assertThat(failure.failMessage(), containsString("cannot be combined with subqueries"));
-                                    assertThat(failure.failMessage(), containsString("(in view [v_"));
-                                }
+                                assertFalse(
+                                    "No nested ViewUnionAll failures expected for nesting="
+                                        + nesting
+                                        + ", branching="
+                                        + branching
+                                        + ": "
+                                        + failures,
+                                    failures.hasFailures()
+                                );
                             } else {
                                 assertFalse(
                                     "No nested ViewUnionAll expected for nesting=" + nesting + ", branching=" + branching,

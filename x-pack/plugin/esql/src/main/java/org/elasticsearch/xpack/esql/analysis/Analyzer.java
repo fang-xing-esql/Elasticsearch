@@ -4753,7 +4753,7 @@ public class Analyzer extends ParameterizedRuleExecutor<LogicalPlan, AnalyzerCon
         /**
          * Update the attributes referencing the updated UnionAll output.
          * <p>
-         * Beyond updating direct attribute references (e.g. a {@code KEEP} projection that names a fork-output attribute),
+         * Beyond updating direct attribute references (e.g. a {@code KEEP} projection that names a union-output attribute),
          * this also cascades the type change through {@link Alias} nodes whose child is a direct attribute reference.
          * <p>
          * Before the expression walk, scan the plan for {@link Alias} nodes whose immediate child is an attribute already in the update
@@ -4763,15 +4763,20 @@ public class Analyzer extends ParameterizedRuleExecutor<LogicalPlan, AnalyzerCon
          * (e.g. inside a {@code ResolvingProject}) while other places in the plan (e.g. an outer {@code OrderBy}) still hold a cached
          * attribute reference, produced by {@link Alias#toAttribute()}, with the stale (pre-update) type. The subsequent
          * {@code transformExpressionsUp} then repairs every consumer of the alias output in one pass.
+         * <p>
+         * A plain {@link Fork} needs an additional step because it caches its output outside its branch expressions and assigns that
+         * output its own {@link NameId NameIds}. Consequently, neither the UnionAll output map nor the first expression walk can update
+         * it directly. After updating the branch expressions, find each changed immediate branch output by id, copy its reconciled
+         * attribute to the same-named Fork output while preserving the Fork output id, and register that id in the update map. Do this
+         * only for plain Forks: {@link UnionAll} and its subclasses have already had their outputs rebuilt by union-type resolution.
+         * Recomputing the whole Fork output with {@link Fork#refreshOutput()} is intentionally avoided because unrelated branch
+         * attributes may still be unresolved at this analyzer stage, and reading their data types would throw.
+         * <p>
+         * Finally, cascade the newly registered Fork output ids through aliases above the Fork and run a second expression walk. This
+         * updates downstream consumers, including the final projection and response metadata, to the same reconciled types seen by the
+         * Fork branches.
          */
-        private static LogicalPlan updateAttributesReferencingUpdatedUnionAllOutput(
-            LogicalPlan plan,
-            List<Attribute> updatedUnionAllOutput
-        ) {
-            Map<NameId, Attribute> idToUpdatedAttr = new HashMap<>();
-            updatedUnionAllOutput.forEach(attr -> idToUpdatedAttr.put(attr.id(), attr));
-
-            // Cascade: collect Alias nodes above the UnionAll whose child directly references a changed attribute.
+        private static void cascadeAliasTypes(LogicalPlan plan, Map<NameId, Attribute> idToUpdatedAttr) {
             plan.forEachExpressionUp(Alias.class, alias -> {
                 if (alias.child() instanceof Attribute childAttr) {
                     Attribute updatedChild = idToUpdatedAttr.get(childAttr.id());
@@ -4785,11 +4790,66 @@ public class Analyzer extends ParameterizedRuleExecutor<LogicalPlan, AnalyzerCon
                     }
                 }
             });
+        }
 
+        private static LogicalPlan updateAttributesInExpressions(LogicalPlan plan, Map<NameId, Attribute> idToUpdatedAttr) {
             return plan.transformExpressionsUp(Attribute.class, expr -> {
                 Attribute updated = idToUpdatedAttr.get(expr.id());
                 return (updated != null && expr.resolved() && expr.dataType() != updated.dataType()) ? updated : expr;
             });
+        }
+
+        private static LogicalPlan updateAttributesReferencingUpdatedUnionAllOutput(
+            LogicalPlan plan,
+            List<Attribute> updatedUnionAllOutput
+        ) {
+            Map<NameId, Attribute> idToUpdatedAttr = new HashMap<>();
+            updatedUnionAllOutput.forEach(attr -> idToUpdatedAttr.put(attr.id(), attr));
+
+            // Cascade: collect Alias nodes above the UnionAll whose child directly references a changed attribute.
+            cascadeAliasTypes(plan, idToUpdatedAttr);
+
+            LogicalPlan updatedPlan = updateAttributesInExpressions(plan, idToUpdatedAttr);
+
+            // Fork caches its output separately from the expressions in its branches, so the expression walk above cannot update it.
+            // Its output also has its own NameIds, distinct from the branch attributes whose ids are in the update map. Find the changed
+            // branch outputs by id, then transfer their new attributes to the same-named Fork outputs while retaining the Fork ids.
+            // Do not refresh the output from the children: unrelated branch attributes can still be unresolved at this point in
+            // analysis, and inspecting their data types would throw. UnionAll (including ViewUnionAll) has already had its output
+            // rebuilt by the steps above.
+            LogicalPlan planWithUpdatedForkOutputs = updatedPlan.transformUp(Fork.class, fork -> {
+                if (fork instanceof UnionAll) {
+                    return fork;
+                }
+                Map<String, Attribute> updatedBranchOutputByName = new HashMap<>();
+                for (LogicalPlan child : fork.children()) {
+                    for (Attribute attr : child.output()) {
+                        Attribute updated = idToUpdatedAttr.get(attr.id());
+                        if (updated != null) {
+                            updatedBranchOutputByName.put(attr.name(), updated);
+                        }
+                    }
+                }
+                if (updatedBranchOutputByName.isEmpty()) {
+                    return fork;
+                }
+                List<Attribute> updatedOutput = fork.output().stream().map(attr -> {
+                    Attribute updated = updatedBranchOutputByName.get(attr.name());
+                    if (updated == null) {
+                        return attr;
+                    }
+                    Attribute updatedForkOutput = updated.withId(attr.id());
+                    idToUpdatedAttr.put(updatedForkOutput.id(), updatedForkOutput);
+                    return updatedForkOutput;
+                }).toList();
+                return updatedOutput.equals(fork.output()) ? fork : fork.replaceSubPlansAndOutput(fork.children(), updatedOutput);
+            });
+
+            // The Fork output has its own ids, so consumers above it were not reachable during the first expression walk. Cascade the
+            // newly registered Fork outputs through any aliases above it, then update those consumers.
+            cascadeAliasTypes(planWithUpdatedForkOutputs, idToUpdatedAttr);
+
+            return updateAttributesInExpressions(planWithUpdatedForkOutputs, idToUpdatedAttr);
         }
     }
 
