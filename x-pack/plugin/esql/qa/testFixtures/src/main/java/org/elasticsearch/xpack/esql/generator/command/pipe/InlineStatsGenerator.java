@@ -12,6 +12,11 @@ import org.elasticsearch.xpack.esql.generator.command.CommandGenerator;
 
 import java.util.List;
 
+/**
+ * Generates {@code INLINE STATS}. Per-aggregate {@code WHERE} filters, including IN subquery,
+ * are produced by {@link StatsGenerator#generate}; this subclass only changes the command name
+ * and output-column validation.
+ */
 public class InlineStatsGenerator extends StatsGenerator {
     public static final String INLINE_STATS = "inline_stats";
     public static final CommandGenerator INSTANCE = new InlineStatsGenerator();

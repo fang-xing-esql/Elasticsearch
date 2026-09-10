@@ -76,7 +76,9 @@ public final class TypeSafeExpressionGenerator {
             if (dateField != null) {
                 String interval = randomFrom("1 day", "1 hour", "1 week", "1 month", "1 year");
                 candidates.add(() -> "date_trunc(" + interval + ", " + dateField + ")");
-                candidates.add(() -> "now()");
+                // now() is a constant expression; aggregate functions (e.g. top()) reject constants,
+                // causing an InvalidArgumentException that leaks operator resources during physical
+                // planning and can OOM the test server. Use field-based date expressions only here.
             }
         }
 

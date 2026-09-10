@@ -167,6 +167,11 @@ public class Avg extends AggregateFunction implements SurrogateExpression, Aggre
         if (field.foldable()) {
             return new MvAvg(s, field);
         }
+        // A non-foldable null-typed (e.g. unmapped/nullified) field can't be aggregated: surrogating to Div(Sum, Count) would
+        // leave a NULL-typed operand that the arithmetic evaluator can't handle. Fold directly to a typed null instead.
+        if (field.dataType() == DataType.NULL) {
+            return new Literal(s, null, dataType());
+        }
         // Cast long inputs to double up-front so the intermediate Sum cannot overflow.
         // Avg always returns double, and Sum(int) already accumulates as long (Which would require many big values to overflow),
         // so the cast is only necessary for long.

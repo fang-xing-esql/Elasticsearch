@@ -53,11 +53,14 @@ public class EvalGenerator implements CommandGenerator {
                 }
             }
             // Occasionally generate a null field (EVAL field = null) to test NULL data type handling
-            String expression;
-            if (randomIntBetween(0, 100) < 10) {
-                expression = "null";
-            } else {
-                expression = EsqlQueryGenerator.expression(usablePrevious.values().stream().toList(), true, previousCommands);
+            List<Column> usableColumns = usablePrevious.values().stream().toList();
+            String expression = EsqlQueryGenerator.maybeInSubqueryBooleanExpression(usableColumns, schema, executor, context);
+            if (expression == null) {
+                if (randomIntBetween(0, 100) < 10) {
+                    expression = "null";
+                } else {
+                    expression = EsqlQueryGenerator.expression(usableColumns, true, previousCommands);
+                }
             }
             if (i > 0) {
                 cmd.append(",");
@@ -91,16 +94,12 @@ public class EvalGenerator implements CommandGenerator {
     ) {
         List<String> expectedColumns = (List<String>) commandDescription.context().get(NEW_COLUMNS);
         List<String> resultColNames = columns.stream().map(Column::name).toList();
-        List<String> lastColumns = resultColNames.subList(resultColNames.size() - expectedColumns.size(), resultColNames.size());
-        if (isUnmappedFieldsEnabled(previousCommands) == false
-            && (columns.size() < expectedColumns.size() || lastColumns.equals(expectedColumns) == false)) {
+        // Overwriting an existing field leaves it in place; only newly introduced names are appended.
+        // Require every assigned name to be present rather than assuming a suffix of last-assigned names.
+        if (isUnmappedFieldsEnabled(previousCommands) == false && resultColNames.containsAll(expectedColumns) == false) {
             return new ValidationResult(
                 false,
-                "Expecting the following as last columns ["
-                    + String.join(", ", expectedColumns)
-                    + "] but got ["
-                    + String.join(", ", resultColNames)
-                    + "]"
+                "Expecting columns [" + String.join(", ", expectedColumns) + "] but got [" + String.join(", ", resultColNames) + "]"
             );
         }
 
